@@ -24,10 +24,13 @@ The frontend follows a page-based architecture with shared components. Pages inc
 - **Framework**: Express.js 5 with TypeScript
 - **HTTP Server**: Node.js HTTP server with potential WebSocket support
 - **API Design**: RESTful JSON API with `/api` prefix
-- **Validation**: Zod schemas for request validation (drizzle-zod integration)
-- **AI Integration**: OpenAI SDK configured via Replit AI Integrations environment variables
+- **Validation**: Comprehensive Zod schema validation on all POST/PATCH routes
+  - Insert schemas for creating resources
+  - Partial schemas for updating resources
+  - Custom schemas for AI generation endpoints with enum validation
+- **AI Integration**: OpenAI SDK (GPT-4o) configured via Replit AI Integrations environment variables
 
-The server uses a modular route registration pattern. Storage is abstracted through an `IStorage` interface supporting in-memory or database implementations.
+The server uses a modular route registration pattern. Storage is abstracted through an `IStorage` interface supporting in-memory or database implementations. All endpoints validate input with proper error messages.
 
 ### Data Storage
 - **ORM**: Drizzle ORM with PostgreSQL dialect

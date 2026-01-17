@@ -7,7 +7,31 @@ import {
   insertTestSuiteSchema,
   insertTestCaseSchema,
   insertTestAgentSchema,
+  insertTestExecutionSchema,
 } from "@shared/schema";
+
+// Partial schemas for PATCH operations
+const partialTestSuiteSchema = insertTestSuiteSchema.partial();
+const partialTestCaseSchema = insertTestCaseSchema.partial();
+const partialTestAgentSchema = insertTestAgentSchema.partial();
+
+// Custom schemas for generation endpoints
+const generateTestsSchema = z.object({
+  title: z.string().optional(),
+  description: z.string().min(1, "Description is required"),
+});
+
+const generateScriptSchema = z.object({
+  testCaseId: z.string().min(1, "Test case ID is required"),
+  framework: z.enum(["playwright", "cypress", "selenium", "puppeteer"]),
+  language: z.enum(["typescript", "javascript", "python", "java"]),
+});
+
+const createExecutionSchema = z.object({
+  suiteId: z.string().optional().nullable(),
+  agentId: z.string().optional().nullable(),
+  environment: z.enum(["development", "staging", "production"]).optional(),
+});
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -67,7 +91,11 @@ export async function registerRoutes(
 
   app.patch("/api/test-suites/:id", async (req: Request, res: Response) => {
     try {
-      const suite = await storage.updateTestSuite(req.params.id, req.body);
+      const validation = validateBody(partialTestSuiteSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const suite = await storage.updateTestSuite(req.params.id, validation.data);
       if (!suite) {
         return res.status(404).json({ error: "Test suite not found" });
       }
@@ -128,7 +156,11 @@ export async function registerRoutes(
 
   app.patch("/api/test-cases/:id", async (req: Request, res: Response) => {
     try {
-      const testCase = await storage.updateTestCase(req.params.id, req.body);
+      const validation = validateBody(partialTestCaseSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const testCase = await storage.updateTestCase(req.params.id, validation.data);
       if (!testCase) {
         return res.status(404).json({ error: "Test case not found" });
       }
@@ -189,7 +221,11 @@ export async function registerRoutes(
 
   app.patch("/api/agents/:id", async (req: Request, res: Response) => {
     try {
-      const agent = await storage.updateAgent(req.params.id, req.body);
+      const validation = validateBody(partialTestAgentSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const agent = await storage.updateAgent(req.params.id, validation.data);
       if (!agent) {
         return res.status(404).json({ error: "Agent not found" });
       }
@@ -236,7 +272,11 @@ export async function registerRoutes(
 
   app.post("/api/executions", async (req: Request, res: Response) => {
     try {
-      const { suiteId, agentId, environment } = req.body;
+      const validation = validateBody(createExecutionSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const { suiteId, agentId, environment } = validation.data;
 
       // Get test cases for the suite
       const testCases = suiteId 
@@ -244,9 +284,9 @@ export async function registerRoutes(
         : await storage.getAllTestCases();
 
       const execution = await storage.createExecution({
-        suiteId,
-        agentId,
-        environment,
+        suiteId: suiteId ?? undefined,
+        agentId: agentId ?? undefined,
+        environment: environment ?? "staging",
         status: "running",
         totalTests: testCases.length,
         passedTests: 0,
@@ -323,11 +363,11 @@ export async function registerRoutes(
   // AI Test Generation
   app.post("/api/generate-tests", async (req: Request, res: Response) => {
     try {
-      const { title, description } = req.body;
-
-      if (!description) {
-        return res.status(400).json({ error: "Description is required" });
+      const validation = validateBody(generateTestsSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
       }
+      const { title, description } = validation.data;
 
       const completion = await openai.chat.completions.create({
         model: "gpt-4o",
@@ -373,11 +413,11 @@ Generate 3-5 comprehensive test cases covering positive, negative, and edge case
   // AI Script Generation
   app.post("/api/generate-script", async (req: Request, res: Response) => {
     try {
-      const { testCaseId, framework, language } = req.body;
-
-      if (!testCaseId) {
-        return res.status(400).json({ error: "Test case ID is required" });
+      const validation = validateBody(generateScriptSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
       }
+      const { testCaseId, framework, language } = validation.data;
 
       const testCase = await storage.getTestCase(testCaseId);
       if (!testCase) {
