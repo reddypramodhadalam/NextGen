@@ -83,8 +83,8 @@ export function AppSidebar() {
             <Rocket className="h-5 w-5" />
           </div>
           <div className="flex flex-col">
-            <span className="font-semibold text-sidebar-foreground">TestComet</span>
-            <span className="text-xs text-sidebar-foreground/60">AI Test Automation</span>
+            <span className="font-semibold text-sidebar-foreground">AITAS</span>
+            <span className="text-xs text-sidebar-foreground/60">AI Test Automation System</span>
           </div>
         </Link>
       </SidebarHeader>
