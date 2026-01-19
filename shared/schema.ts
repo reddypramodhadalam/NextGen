@@ -84,13 +84,22 @@ export const insertTestAgentSchema = createInsertSchema(testAgents).omit({
 export type InsertTestAgent = z.infer<typeof insertTestAgentSchema>;
 export type TestAgent = typeof testAgents.$inferSelect;
 
+// Test Data type for parameterized testing
+export type TestDataParam = {
+  key: string;
+  value: string;
+  type: "text" | "password" | "email" | "url" | "number";
+  description?: string;
+};
+
 // Test Executions
 export const testExecutions = pgTable("test_executions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   suiteId: varchar("suite_id").references(() => testSuites.id, { onDelete: "cascade" }),
   agentId: varchar("agent_id").references(() => testAgents.id),
   targetUrl: text("target_url"), // URL being tested
-  framework: text("framework").default("playwright"), // playwright, puppeteer
+  framework: text("framework").default("playwright"), // playwright, puppeteer, selenium
+  testData: jsonb("test_data").$type<TestDataParam[]>(), // User-supplied test data parameters
   status: text("status").default("pending"), // pending, running, passed, failed, cancelled
   environment: text("environment").default("staging"), // development, staging, production
   totalTests: integer("total_tests").default(0),

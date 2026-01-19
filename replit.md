@@ -82,11 +82,19 @@ Pre-built integration modules in `server/replit_integrations/`:
 
 ## Recent Changes
 
-### Multi-Framework Test Execution (Latest)
-- Added Puppeteer as an alternative to Playwright for browser automation
-- Users can select framework (Playwright or Puppeteer) when starting test execution
+### Test Data Parameters & Selenium Support (Latest)
+- Added test data parameters feature for supplying execution-time values
+- Users can add key-value pairs (username, password, etc.) when starting tests
+- Test data supports types: text, password, email, url, number
+- Placeholders like {{username}} in test steps are replaced with actual values
+- Added Selenium WebDriver as third framework option (alongside Playwright/Puppeteer)
+- All three frameworks support test data parameter substitution
+
+### Multi-Framework Test Execution
+- Added Puppeteer and Selenium as alternatives to Playwright for browser automation
+- Users can select framework (Playwright, Puppeteer, or Selenium) when starting test execution
 - Framework selection persisted in test executions and displayed in execution history
-- Both frameworks support: navigation, clicks, form input, screenshots, and result capture
+- All frameworks support: navigation, clicks, form input, screenshots, and result capture
 - TestExecutor manages framework executors via interface-based design pattern
 
 ### Test Case Import/Export

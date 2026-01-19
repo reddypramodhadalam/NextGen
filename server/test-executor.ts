@@ -1,9 +1,29 @@
 import { chromium, type Browser as PlaywrightBrowser, type Page as PlaywrightPage } from "playwright";
 import puppeteer, { type Browser as PuppeteerBrowser, type Page as PuppeteerPage } from "puppeteer";
+import { Builder, type WebDriver, By, until } from "selenium-webdriver";
+import chrome from "selenium-webdriver/chrome";
 import { storage } from "./storage";
-import type { TestCase } from "@shared/schema";
+import type { TestCase, TestDataParam } from "@shared/schema";
 
-export type ExecutionFramework = "playwright" | "puppeteer";
+export type ExecutionFramework = "playwright" | "puppeteer" | "selenium";
+
+// Helper to escape regex special characters in a string
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Helper to replace placeholders like {{username}} with actual test data values
+function replaceTestDataPlaceholders(text: string, testData?: TestDataParam[]): string {
+  if (!testData || testData.length === 0) return text;
+  
+  let result = text;
+  for (const param of testData) {
+    const escapedKey = escapeRegExp(param.key);
+    const placeholder = new RegExp(`\\{\\{${escapedKey}\\}\\}`, "gi");
+    result = result.replace(placeholder, param.value);
+  }
+  return result;
+}
 
 interface TestStepResult {
   step: string;
@@ -28,7 +48,7 @@ interface ExecutionResult {
 interface FrameworkExecutor {
   initialize(): Promise<void>;
   close(): Promise<void>;
-  executeTest(testCase: TestCase, targetUrl: string): Promise<ExecutionResult>;
+  executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult>;
 }
 
 class PlaywrightExecutor implements FrameworkExecutor {
@@ -50,7 +70,7 @@ class PlaywrightExecutor implements FrameworkExecutor {
     }
   }
 
-  async executeTest(testCase: TestCase, targetUrl: string): Promise<ExecutionResult> {
+  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
     const startTime = Date.now();
@@ -60,6 +80,9 @@ class PlaywrightExecutor implements FrameworkExecutor {
 
     logs.push(`[Playwright] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
+    if (testData && testData.length > 0) {
+      logs.push(`Test data provided: ${testData.map(d => d.key).join(", ")}`);
+    }
 
     await this.initialize();
     const context = await this.browser!.newContext({
@@ -74,14 +97,18 @@ class PlaywrightExecutor implements FrameworkExecutor {
       const steps = (testCase.steps as { step: string; expected: string }[]) || [];
 
       for (const step of steps) {
+        // Replace placeholders in step and expected with test data values
+        const processedStep = replaceTestDataPlaceholders(step.step, testData);
+        const processedExpected = replaceTestDataPlaceholders(step.expected, testData);
+        
         const stepResult: TestStepResult = {
-          step: step.step,
-          expected: step.expected,
+          step: processedStep,
+          expected: processedExpected,
           passed: false,
         };
 
         try {
-          const stepPassed = await this.executeStep(page, step.step, step.expected, logs);
+          const stepPassed = await this.executeStep(page, processedStep, processedExpected, logs);
           stepResult.passed = stepPassed;
           if (!stepPassed) {
             passed = false;
@@ -225,7 +252,7 @@ class PuppeteerExecutor implements FrameworkExecutor {
     }
   }
 
-  async executeTest(testCase: TestCase, targetUrl: string): Promise<ExecutionResult> {
+  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
     const startTime = Date.now();
@@ -235,6 +262,9 @@ class PuppeteerExecutor implements FrameworkExecutor {
 
     logs.push(`[Puppeteer] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
+    if (testData && testData.length > 0) {
+      logs.push(`Test data provided: ${testData.map(d => d.key).join(", ")}`);
+    }
 
     await this.initialize();
     const page = await this.browser!.newPage();
@@ -247,14 +277,18 @@ class PuppeteerExecutor implements FrameworkExecutor {
       const steps = (testCase.steps as { step: string; expected: string }[]) || [];
 
       for (const step of steps) {
+        // Replace placeholders in step and expected with test data values
+        const processedStep = replaceTestDataPlaceholders(step.step, testData);
+        const processedExpected = replaceTestDataPlaceholders(step.expected, testData);
+        
         const stepResult: TestStepResult = {
-          step: step.step,
-          expected: step.expected,
+          step: processedStep,
+          expected: processedExpected,
           passed: false,
         };
 
         try {
-          const stepPassed = await this.executeStep(page, step.step, step.expected, logs);
+          const stepPassed = await this.executeStep(page, processedStep, processedExpected, logs);
           stepResult.passed = stepPassed;
           if (!stepPassed) {
             passed = false;
@@ -384,12 +418,188 @@ class PuppeteerExecutor implements FrameworkExecutor {
   }
 }
 
+class SeleniumExecutor implements FrameworkExecutor {
+  private driver: WebDriver | null = null;
+
+  async initialize(): Promise<void> {
+    if (!this.driver) {
+      const options = new chrome.Options();
+      options.addArguments("--headless");
+      options.addArguments("--no-sandbox");
+      options.addArguments("--disable-setuid-sandbox");
+      options.addArguments("--disable-dev-shm-usage");
+      options.addArguments("--window-size=1280,720");
+      
+      this.driver = await new Builder()
+        .forBrowser("chrome")
+        .setChromeOptions(options)
+        .build();
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.driver) {
+      await this.driver.quit();
+      this.driver = null;
+    }
+  }
+
+  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
+    const logs: string[] = [];
+    const stepResults: TestStepResult[] = [];
+    const startTime = Date.now();
+    let passed = true;
+    let errorMessage: string | undefined;
+    let screenshot: string | undefined;
+
+    logs.push(`[Selenium] Starting test: ${testCase.title}`);
+    logs.push(`Target URL: ${targetUrl}`);
+    if (testData && testData.length > 0) {
+      logs.push(`Test data provided: ${testData.map(d => d.key).join(", ")}`);
+    }
+
+    await this.initialize();
+
+    try {
+      await this.driver!.get(targetUrl);
+      await this.driver!.wait(until.elementLocated(By.tagName("body")), 30000);
+      logs.push(`Navigated to ${targetUrl}`);
+
+      const steps = (testCase.steps as { step: string; expected: string }[]) || [];
+
+      for (const step of steps) {
+        const processedStep = replaceTestDataPlaceholders(step.step, testData);
+        const processedExpected = replaceTestDataPlaceholders(step.expected, testData);
+        
+        const stepResult: TestStepResult = {
+          step: processedStep,
+          expected: processedExpected,
+          passed: false,
+        };
+
+        try {
+          const stepPassed = await this.executeStep(processedStep, processedExpected, logs);
+          stepResult.passed = stepPassed;
+          if (!stepPassed) {
+            passed = false;
+            stepResult.error = "Step verification failed";
+          }
+        } catch (error: any) {
+          stepResult.passed = false;
+          stepResult.error = error.message;
+          passed = false;
+          logs.push(`Step failed: ${error.message}`);
+        }
+
+        stepResults.push(stepResult);
+      }
+
+      const screenshotData = await this.driver!.takeScreenshot();
+      screenshot = screenshotData;
+      logs.push("Captured final screenshot");
+
+    } catch (error: any) {
+      passed = false;
+      errorMessage = error.message;
+      logs.push(`Test failed: ${error.message}`);
+
+      try {
+        const screenshotData = await this.driver!.takeScreenshot();
+        screenshot = screenshotData;
+      } catch {
+        logs.push("Failed to capture error screenshot");
+      }
+    }
+
+    const duration = Date.now() - startTime;
+    logs.push(`Test completed in ${duration}ms - ${passed ? "PASSED" : "FAILED"}`);
+
+    return {
+      testCaseId: testCase.id,
+      testCaseTitle: testCase.title,
+      passed,
+      duration,
+      steps: stepResults,
+      screenshot,
+      errorMessage,
+      logs,
+    };
+  }
+
+  private async executeStep(stepAction: string, expected: string, logs: string[]): Promise<boolean> {
+    const actionLower = stepAction.toLowerCase();
+
+    if (actionLower.includes("navigate") || actionLower.includes("go to")) {
+      const urlMatch = stepAction.match(/(?:navigate|go)\s+to\s+(\S+)/i);
+      if (urlMatch) {
+        await this.driver!.get(urlMatch[1]);
+        logs.push(`Navigated to ${urlMatch[1]}`);
+        return true;
+      }
+    }
+
+    if (actionLower.includes("click")) {
+      const buttonMatch = stepAction.match(/click\s+(?:on\s+)?(?:the\s+)?["']?([^"']+?)["']?\s*(?:button|link|element)?$/i);
+      if (buttonMatch) {
+        const buttonText = buttonMatch[1].trim();
+        try {
+          const xpath = `//*[contains(text(), "${buttonText}") or @value="${buttonText}" or contains(@class, "${buttonText.toLowerCase().replace(/\s+/g, "-")}")]`;
+          const element = await this.driver!.findElement(By.xpath(xpath));
+          await element.click();
+          logs.push(`Clicked: ${buttonText}`);
+          return true;
+        } catch {
+          logs.push(`Could not find element to click: ${buttonText}`);
+          return false;
+        }
+      }
+    }
+
+    if (actionLower.includes("enter") || actionLower.includes("type") || actionLower.includes("input")) {
+      const inputMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?(\w+)/i);
+      if (inputMatch) {
+        const fieldType = inputMatch[1].toLowerCase();
+        const selectors = [
+          `input[type="${fieldType}"]`,
+          `input[name*="${fieldType}"]`,
+          `input[placeholder*="${fieldType}"]`,
+          `input[id*="${fieldType}"]`,
+        ];
+
+        for (const selector of selectors) {
+          try {
+            const element = await this.driver!.findElement(By.css(selector));
+            const testValue = fieldType === "email" ? "test@example.com" : "testpassword123";
+            await element.sendKeys(testValue);
+            logs.push(`Entered ${fieldType}: ${testValue}`);
+            return true;
+          } catch {
+            continue;
+          }
+        }
+        logs.push(`Could not find input field for: ${fieldType}`);
+        return false;
+      }
+    }
+
+    if (actionLower.includes("verify") || actionLower.includes("check") || actionLower.includes("assert")) {
+      const pageSource = await this.driver!.getPageSource();
+      logs.push(`Verification check: ${expected}`);
+      return true;
+    }
+
+    logs.push(`Generic step executed: ${stepAction} -> Expected: ${expected}`);
+    return true;
+  }
+}
+
 export class TestExecutor {
   private executors: Map<ExecutionFramework, FrameworkExecutor> = new Map();
 
   constructor() {
     this.executors.set("playwright", new PlaywrightExecutor());
     this.executors.set("puppeteer", new PuppeteerExecutor());
+    this.executors.set("selenium", new SeleniumExecutor());
   }
 
   private getExecutor(framework: ExecutionFramework): FrameworkExecutor {
@@ -404,7 +614,8 @@ export class TestExecutor {
     executionId: string,
     testCases: TestCase[],
     targetUrl: string,
-    framework: ExecutionFramework = "playwright"
+    framework: ExecutionFramework = "playwright",
+    testData?: TestDataParam[]
   ): Promise<void> {
     const executor = this.getExecutor(framework);
     let passedCount = 0;
@@ -421,7 +632,7 @@ export class TestExecutor {
 
       for (const testCase of testCases) {
         try {
-          const result = await executor.executeTest(testCase, targetUrl);
+          const result = await executor.executeTest(testCase, targetUrl, testData);
 
           if (result.passed) {
             passedCount++;

@@ -355,6 +355,7 @@ export class MemStorage implements IStorage {
       agentId: execution.agentId || null,
       targetUrl: execution.targetUrl || null,
       framework: execution.framework || "playwright",
+      testData: execution.testData || null,
       status: execution.status || "pending",
       environment: execution.environment || "staging",
       totalTests: execution.totalTests || 0,

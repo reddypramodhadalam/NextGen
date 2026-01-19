@@ -21,6 +21,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -34,8 +35,11 @@ import {
   RefreshCw,
   Eye,
   Globe,
+  Plus,
+  Trash2,
+  Key,
 } from "lucide-react";
-import type { TestSuite, TestAgent, TestExecution } from "@shared/schema";
+import type { TestSuite, TestAgent, TestExecution, TestDataParam } from "@shared/schema";
 
 export default function Executions() {
   const { toast } = useToast();
@@ -45,6 +49,21 @@ export default function Executions() {
   const [selectedFramework, setSelectedFramework] = useState<string>("playwright");
   const [targetUrl, setTargetUrl] = useState<string>("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [testData, setTestData] = useState<TestDataParam[]>([]);
+
+  const addTestDataParam = () => {
+    setTestData([...testData, { key: "", value: "", type: "text" }]);
+  };
+
+  const removeTestDataParam = (index: number) => {
+    setTestData(testData.filter((_, i) => i !== index));
+  };
+
+  const updateTestDataParam = (index: number, field: keyof TestDataParam, value: string) => {
+    const updated = [...testData];
+    updated[index] = { ...updated[index], [field]: value };
+    setTestData(updated);
+  };
 
   const { data: suites = [] } = useQuery<TestSuite[]>({
     queryKey: ["/api/test-suites"],
@@ -59,7 +78,7 @@ export default function Executions() {
   });
 
   const runMutation = useMutation({
-    mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string; framework: string }) => {
+    mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string; framework: string; testData?: TestDataParam[] }) => {
       const res = await apiRequest("POST", "/api/executions", data);
       return res.json();
     },
@@ -71,6 +90,7 @@ export default function Executions() {
       setSelectedAgent("");
       setTargetUrl("");
       setSelectedFramework("playwright");
+      setTestData([]);
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to start execution.", variant: "destructive" });
@@ -116,12 +136,16 @@ export default function Executions() {
       });
       return;
     }
+    // Filter out empty test data entries
+    const validTestData = testData.filter(d => d.key.trim() !== "");
+    
     runMutation.mutate({
       suiteId: selectedSuite,
       agentId: selectedAgent,
       environment: selectedEnvironment,
       targetUrl,
       framework: selectedFramework,
+      testData: validTestData.length > 0 ? validTestData : undefined,
     });
   };
 
@@ -253,11 +277,83 @@ export default function Executions() {
                   <SelectContent>
                     <SelectItem value="playwright">Playwright</SelectItem>
                     <SelectItem value="puppeteer">Puppeteer</SelectItem>
+                    <SelectItem value="selenium">Selenium</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   Choose the browser automation framework to execute tests
                 </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="flex items-center gap-2">
+                    <Key className="h-4 w-4" />
+                    Test Data (Optional)
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={addTestDataParam}
+                    data-testid="button-add-test-data"
+                  >
+                    <Plus className="h-3 w-3 mr-1" />
+                    Add
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Add test data parameters like login credentials. Use {"{{key}}"} in test steps to reference values.
+                </p>
+                {testData.length > 0 && (
+                  <ScrollArea className="max-h-40">
+                    <div className="space-y-2">
+                      {testData.map((param, index) => (
+                        <div key={index} className="flex items-center gap-2" data-testid={`test-data-row-${index}`}>
+                          <Input
+                            placeholder="Key (e.g., username)"
+                            value={param.key}
+                            onChange={(e) => updateTestDataParam(index, "key", e.target.value)}
+                            className="flex-1"
+                            data-testid={`input-test-data-key-${index}`}
+                          />
+                          <Input
+                            placeholder="Value"
+                            type={param.type === "password" ? "password" : "text"}
+                            value={param.value}
+                            onChange={(e) => updateTestDataParam(index, "value", e.target.value)}
+                            className="flex-1"
+                            data-testid={`input-test-data-value-${index}`}
+                          />
+                          <Select
+                            value={param.type}
+                            onValueChange={(v) => updateTestDataParam(index, "type", v)}
+                          >
+                            <SelectTrigger className="w-24" data-testid={`select-test-data-type-${index}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="text">Text</SelectItem>
+                              <SelectItem value="password">Password</SelectItem>
+                              <SelectItem value="email">Email</SelectItem>
+                              <SelectItem value="url">URL</SelectItem>
+                              <SelectItem value="number">Number</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removeTestDataParam(index)}
+                            data-testid={`button-remove-test-data-${index}`}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                )}
               </div>
 
               <Button

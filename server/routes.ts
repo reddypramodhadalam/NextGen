@@ -28,11 +28,19 @@ const generateScriptSchema = z.object({
   language: z.enum(["typescript", "javascript", "python", "java"]),
 });
 
+const testDataParamSchema = z.object({
+  key: z.string().min(1),
+  value: z.string(),
+  type: z.enum(["text", "password", "email", "url", "number"]),
+  description: z.string().optional(),
+});
+
 const createExecutionSchema = z.object({
   suiteId: z.string().optional().nullable(),
   agentId: z.string().optional().nullable(),
   targetUrl: z.string().url("Valid URL is required"),
-  framework: z.enum(["playwright", "puppeteer"]).optional().default("playwright"),
+  framework: z.enum(["playwright", "puppeteer", "selenium"]).optional().default("playwright"),
+  testData: z.array(testDataParamSchema).optional(),
   environment: z.enum(["development", "staging", "production"]).optional(),
 });
 
@@ -295,7 +303,7 @@ export async function registerRoutes(
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const { suiteId, agentId, environment, targetUrl, framework } = validation.data;
+      const { suiteId, agentId, environment, targetUrl, framework, testData } = validation.data;
 
       // Get test cases for the suite
       const testCases = suiteId 
@@ -311,6 +319,7 @@ export async function registerRoutes(
         agentId: agentId ?? undefined,
         targetUrl,
         framework: framework ?? "playwright",
+        testData: testData ?? undefined,
         environment: environment ?? "staging",
         status: "pending",
         totalTests: testCases.length,
@@ -320,7 +329,7 @@ export async function registerRoutes(
       });
 
       // Run real test execution asynchronously with selected framework
-      testExecutor.runExecution(execution.id, testCases, targetUrl, framework ?? "playwright").catch((error) => {
+      testExecutor.runExecution(execution.id, testCases, targetUrl, framework ?? "playwright", testData).catch((error) => {
         console.error("Execution error:", error);
         storage.updateExecution(execution.id, {
           status: "failed",
