@@ -11,6 +11,16 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useAuth } from "@/hooks/use-auth";
 import {
   LayoutDashboard,
   Sparkles,
@@ -22,6 +32,9 @@ import {
   Settings,
   Rocket,
   Server,
+  LogOut,
+  ChevronUp,
+  FolderKanban,
 } from "lucide-react";
 
 const mainNavItems = [
@@ -72,6 +85,11 @@ const configNavItems = [
     icon: Server,
   },
   {
+    title: "Projects",
+    url: "/projects",
+    icon: FolderKanban,
+  },
+  {
     title: "Settings",
     url: "/settings",
     icon: Settings,
@@ -80,6 +98,11 @@ const configNavItems = [
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { user, logout, isLoggingOut } = useAuth();
+
+  const userInitials = user?.firstName && user?.lastName
+    ? `${user.firstName[0]}${user.lastName[0]}`
+    : user?.email?.substring(0, 2).toUpperCase() || "U";
 
   return (
     <Sidebar>
@@ -167,11 +190,50 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="p-4 border-t border-sidebar-border">
-        <div className="flex items-center gap-2 text-sidebar-foreground/60 text-xs">
-          <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse-status" />
-          <span>System Online</span>
-        </div>
+      <SidebarFooter className="p-2 border-t border-sidebar-border">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="w-full justify-start gap-2"
+              data-testid="button-user-menu"
+            >
+              <Avatar className="h-7 w-7">
+                <AvatarImage src={user?.profileImageUrl || undefined} />
+                <AvatarFallback className="text-xs">{userInitials}</AvatarFallback>
+              </Avatar>
+              <div className="flex flex-col items-start text-left overflow-hidden flex-1">
+                <span className="text-sm font-medium truncate w-full">
+                  {user?.firstName && user?.lastName
+                    ? `${user.firstName} ${user.lastName}`
+                    : user?.email || "User"}
+                </span>
+                <span className="text-xs text-muted-foreground truncate w-full">
+                  {user?.isSuperAdmin ? "Super Admin" : "Member"}
+                </span>
+              </div>
+              <ChevronUp className="h-4 w-4 text-muted-foreground shrink-0" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <div className="px-2 py-1.5">
+              <p className="text-sm font-medium">{user?.email}</p>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+                <span>System Online</span>
+              </div>
+            </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => logout()}
+              disabled={isLoggingOut}
+              data-testid="button-logout"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              {isLoggingOut ? "Signing out..." : "Sign out"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </SidebarFooter>
     </Sidebar>
   );
