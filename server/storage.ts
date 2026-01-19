@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto";
 import type {
   User,
-  InsertUser,
   TestSuite,
   InsertTestSuite,
   TestCase,
@@ -40,13 +39,15 @@ import type {
   InsertUserRole,
   MobileDevice,
   InsertMobileDevice,
+  Project,
+  InsertProject,
+  TeamMembership,
+  InsertTeamMembership,
 } from "@shared/schema";
 
 export interface IStorage {
-  // Users
+  // Users (managed by Replit Auth)
   getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
 
   // Test Suites
   getAllTestSuites(): Promise<TestSuite[]>;
@@ -169,6 +170,21 @@ export interface IStorage {
   createMobileDevice(device: InsertMobileDevice): Promise<MobileDevice>;
   updateMobileDevice(id: string, device: Partial<InsertMobileDevice>): Promise<MobileDevice | undefined>;
   deleteMobileDevice(id: string): Promise<void>;
+
+  // Projects
+  getAllProjects(): Promise<Project[]>;
+  getProject(id: string): Promise<Project | undefined>;
+  getProjectsForUser(userId: string): Promise<Project[]>;
+  createProject(project: InsertProject): Promise<Project>;
+  updateProject(id: string, project: Partial<InsertProject>): Promise<Project | undefined>;
+  deleteProject(id: string): Promise<void>;
+
+  // Team Memberships
+  getProjectMembers(projectId: string): Promise<TeamMembership[]>;
+  getUserProjectMembership(userId: string, projectId: string): Promise<TeamMembership | undefined>;
+  createTeamMembership(membership: InsertTeamMembership): Promise<TeamMembership>;
+  updateTeamMembership(id: string, membership: Partial<InsertTeamMembership>): Promise<TeamMembership | undefined>;
+  deleteTeamMembership(id: string): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -192,6 +208,8 @@ export class MemStorage implements IStorage {
   private roles: Map<string, Role> = new Map();
   private userRoles: Map<string, UserRole> = new Map();
   private mobileDevices: Map<string, MobileDevice> = new Map();
+  private projects: Map<string, Project> = new Map();
+  private teamMemberships: Map<string, TeamMembership> = new Map();
 
   constructor() {
     // Seed with sample agents for demo
@@ -392,20 +410,9 @@ export class MemStorage implements IStorage {
     this.testCases.set(tc2.id, tc2);
   }
 
-  // Users
+  // Users (managed by Replit Auth - only read access)
   async getUser(id: string): Promise<User | undefined> {
     return this.users.get(id);
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find((user) => user.username === username);
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
   }
 
   // Test Suites
@@ -1169,6 +1176,112 @@ export class MemStorage implements IStorage {
 
   async deleteMobileDevice(id: string): Promise<void> {
     this.mobileDevices.delete(id);
+  }
+
+  // Projects
+  async getAllProjects(): Promise<Project[]> {
+    return Array.from(this.projects.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async getProject(id: string): Promise<Project | undefined> {
+    return this.projects.get(id);
+  }
+
+  async getProjectsForUser(userId: string): Promise<Project[]> {
+    // Get projects where user is a member
+    const memberProjectIds = new Set(
+      Array.from(this.teamMemberships.values())
+        .filter(tm => tm.userId === userId)
+        .map(tm => tm.projectId)
+    );
+    
+    // Check if user is super admin (can see all projects)
+    const user = this.users.get(userId);
+    if (user?.isSuperAdmin) {
+      return this.getAllProjects();
+    }
+    
+    return Array.from(this.projects.values())
+      .filter(p => memberProjectIds.has(p.id) || p.ownerId === userId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async createProject(project: InsertProject): Promise<Project> {
+    const id = randomUUID();
+    const now = new Date();
+    const p: Project = {
+      id,
+      name: project.name,
+      description: project.description || null,
+      slug: project.slug,
+      ownerId: project.ownerId || null,
+      isActive: project.isActive ?? true,
+      settings: project.settings || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.projects.set(id, p);
+    return p;
+  }
+
+  async updateProject(id: string, project: Partial<InsertProject>): Promise<Project | undefined> {
+    const existing = this.projects.get(id);
+    if (!existing) return undefined;
+    const updated: Project = { ...existing, ...project, updatedAt: new Date() };
+    this.projects.set(id, updated);
+    return updated;
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    this.projects.delete(id);
+    // Also delete all memberships for this project
+    for (const [tmId, tm] of this.teamMemberships) {
+      if (tm.projectId === id) {
+        this.teamMemberships.delete(tmId);
+      }
+    }
+  }
+
+  // Team Memberships
+  async getProjectMembers(projectId: string): Promise<TeamMembership[]> {
+    return Array.from(this.teamMemberships.values())
+      .filter(tm => tm.projectId === projectId)
+      .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+  }
+
+  async getUserProjectMembership(userId: string, projectId: string): Promise<TeamMembership | undefined> {
+    return Array.from(this.teamMemberships.values()).find(
+      tm => tm.userId === userId && tm.projectId === projectId
+    );
+  }
+
+  async createTeamMembership(membership: InsertTeamMembership): Promise<TeamMembership> {
+    const id = randomUUID();
+    const now = new Date();
+    const tm: TeamMembership = {
+      id,
+      userId: membership.userId,
+      projectId: membership.projectId,
+      roleId: membership.roleId || null,
+      isOwner: membership.isOwner ?? false,
+      joinedAt: now,
+    };
+    this.teamMemberships.set(id, tm);
+    return tm;
+  }
+
+  async updateTeamMembership(id: string, membership: Partial<InsertTeamMembership>): Promise<TeamMembership | undefined> {
+    const existing = this.teamMemberships.get(id);
+    if (!existing) return undefined;
+    const updated: TeamMembership = { ...existing, ...membership };
+    this.teamMemberships.set(id, updated);
+    return updated;
+  }
+
+  async deleteTeamMembership(id: string): Promise<void> {
+    this.teamMemberships.delete(id);
   }
 }
 

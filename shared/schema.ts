@@ -3,20 +3,10 @@ import { pgTable, text, varchar, integer, timestamp, boolean, jsonb } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Users table
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
-});
-
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
-});
-
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+// Import and re-export auth schema (users and sessions tables)
+import { users, sessions } from "./models/auth";
+export { users, sessions };
+export type { User, UpsertUser } from "./models/auth";
 
 // Test Suites
 export const testSuites = pgTable("test_suites", {
@@ -477,3 +467,47 @@ export const insertMobileDeviceSchema = createInsertSchema(mobileDevices).omit({
 
 export type InsertMobileDevice = z.infer<typeof insertMobileDeviceSchema>;
 export type MobileDevice = typeof mobileDevices.$inferSelect;
+
+// ========================================
+// MULTI-PROJECT & TEAM SUPPORT
+// ========================================
+
+// Projects (multi-project support)
+export const projects = pgTable("projects", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  slug: text("slug").notNull().unique(), // URL-friendly identifier
+  ownerId: varchar("owner_id").references(() => users.id, { onDelete: "set null" }), // Project owner
+  isActive: boolean("is_active").default(true),
+  settings: jsonb("settings").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertProjectSchema = createInsertSchema(projects).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertProject = z.infer<typeof insertProjectSchema>;
+export type Project = typeof projects.$inferSelect;
+
+// Team Memberships (linking users to projects with roles)
+export const teamMemberships = pgTable("team_memberships", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  projectId: varchar("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
+  roleId: varchar("role_id").references(() => roles.id, { onDelete: "set null" }), // Per-project role
+  isOwner: boolean("is_owner").default(false), // Project owner flag
+  joinedAt: timestamp("joined_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertTeamMembershipSchema = createInsertSchema(teamMemberships).omit({
+  id: true,
+  joinedAt: true,
+});
+
+export type InsertTeamMembership = z.infer<typeof insertTeamMembershipSchema>;
+export type TeamMembership = typeof teamMemberships.$inferSelect;

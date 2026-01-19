@@ -16,8 +16,11 @@ import {
   insertCicdWebhookSchema,
   insertRoleSchema,
   insertMobileDeviceSchema,
+  insertProjectSchema,
+  insertTeamMembershipSchema,
 } from "@shared/schema";
 import { testExecutor } from "./test-executor";
+import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 
 // Partial schemas for PATCH operations
 const partialTestSuiteSchema = insertTestSuiteSchema.partial();
@@ -86,6 +89,10 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Setup authentication before other routes
+  await setupAuth(app);
+  registerAuthRoutes(app);
+
   // Test Suites
   app.get("/api/test-suites", async (req: Request, res: Response) => {
     try {
@@ -1122,7 +1129,7 @@ aitas_tests:
                 sh '''
                     curl -X POST ${webhookUrl} \\
                         -H "Content-Type: application/json" \\
-                        -d '{"targetUrl": "${env.TARGET_URL}"}'
+                        -d '{"targetUrl": "'\$TARGET_URL'"}'
                 '''
             }
         }
@@ -1247,6 +1254,150 @@ aitas_tests:
     } catch (error) {
       console.error("Error deleting mobile device:", error);
       res.status(500).json({ error: "Failed to delete mobile device" });
+    }
+  });
+
+  // ========================================
+  // PROJECTS & TEAM MEMBERSHIPS
+  // ========================================
+
+  // Projects
+  app.get("/api/projects", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.claims?.sub;
+      // Get all projects user has access to
+      const projects = await storage.getProjectsForUser(userId);
+      res.json(projects);
+    } catch (error) {
+      console.error("Error fetching projects:", error);
+      res.status(500).json({ error: "Failed to fetch projects" });
+    }
+  });
+
+  app.get("/api/projects/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const project = await storage.getProject(req.params.id as string);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      res.json(project);
+    } catch (error) {
+      console.error("Error fetching project:", error);
+      res.status(500).json({ error: "Failed to fetch project" });
+    }
+  });
+
+  app.post("/api/projects", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.claims?.sub;
+      const validation = validateBody(insertProjectSchema, { ...req.body, ownerId: userId });
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const project = await storage.createProject(validation.data);
+      // Add creator as owner in team memberships
+      const adminRole = await storage.getRoleByName("admin");
+      if (adminRole) {
+        await storage.createTeamMembership({
+          userId,
+          projectId: project.id,
+          roleId: adminRole.id,
+          isOwner: true,
+        });
+      }
+      res.status(201).json(project);
+    } catch (error) {
+      console.error("Error creating project:", error);
+      res.status(500).json({ error: "Failed to create project" });
+    }
+  });
+
+  app.patch("/api/projects/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const project = await storage.updateProject(req.params.id as string, req.body);
+      if (!project) {
+        return res.status(404).json({ error: "Project not found" });
+      }
+      res.json(project);
+    } catch (error) {
+      console.error("Error updating project:", error);
+      res.status(500).json({ error: "Failed to update project" });
+    }
+  });
+
+  app.delete("/api/projects/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      await storage.deleteProject(req.params.id as string);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting project:", error);
+      res.status(500).json({ error: "Failed to delete project" });
+    }
+  });
+
+  // Team Memberships
+  app.get("/api/projects/:projectId/members", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const members = await storage.getProjectMembers(req.params.projectId as string);
+      res.json(members);
+    } catch (error) {
+      console.error("Error fetching project members:", error);
+      res.status(500).json({ error: "Failed to fetch project members" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/members", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertTeamMembershipSchema, {
+        ...req.body,
+        projectId: req.params.projectId,
+      });
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const membership = await storage.createTeamMembership(validation.data);
+      res.status(201).json(membership);
+    } catch (error) {
+      console.error("Error adding project member:", error);
+      res.status(500).json({ error: "Failed to add project member" });
+    }
+  });
+
+  app.patch("/api/team-memberships/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const membership = await storage.updateTeamMembership(req.params.id as string, req.body);
+      if (!membership) {
+        return res.status(404).json({ error: "Team membership not found" });
+      }
+      res.json(membership);
+    } catch (error) {
+      console.error("Error updating team membership:", error);
+      res.status(500).json({ error: "Failed to update team membership" });
+    }
+  });
+
+  app.delete("/api/team-memberships/:id", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      await storage.deleteTeamMembership(req.params.id as string);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error removing team member:", error);
+      res.status(500).json({ error: "Failed to remove team member" });
+    }
+  });
+
+  // Get current user's role in a project
+  app.get("/api/projects/:projectId/my-role", isAuthenticated, async (req: Request, res: Response) => {
+    try {
+      const userId = (req.user as any)?.claims?.sub;
+      const membership = await storage.getUserProjectMembership(userId, req.params.projectId as string);
+      if (!membership) {
+        return res.status(404).json({ error: "Not a member of this project" });
+      }
+      res.json(membership);
+    } catch (error) {
+      console.error("Error fetching user role:", error);
+      res.status(500).json({ error: "Failed to fetch user role" });
     }
   });
 
