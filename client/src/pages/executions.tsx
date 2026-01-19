@@ -39,7 +39,38 @@ import {
   Trash2,
   Key,
 } from "lucide-react";
-import type { TestSuite, TestAgent, TestExecution, TestDataParam } from "@shared/schema";
+import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
+
+// Helper to extract {{placeholder}} keys from test case steps
+function extractPlaceholders(testCases: TestCase[]): string[] {
+  const placeholders = new Set<string>();
+  const regex = /\{\{([^}]+)\}\}/g;
+  
+  for (const tc of testCases) {
+    const steps = (tc.steps as { step: string; expected: string }[]) || [];
+    for (const step of steps) {
+      let match;
+      while ((match = regex.exec(step.step)) !== null) {
+        placeholders.add(match[1].trim());
+      }
+      while ((match = regex.exec(step.expected)) !== null) {
+        placeholders.add(match[1].trim());
+      }
+    }
+  }
+  
+  return Array.from(placeholders);
+}
+
+// Helper to guess input type from placeholder key name
+function guessInputType(key: string): "text" | "password" | "email" | "url" | "number" {
+  const keyLower = key.toLowerCase();
+  if (keyLower.includes("password") || keyLower.includes("secret") || keyLower.includes("pin")) return "password";
+  if (keyLower.includes("email") || keyLower.includes("mail")) return "email";
+  if (keyLower.includes("url") || keyLower.includes("link") || keyLower.includes("website")) return "url";
+  if (keyLower.includes("count") || keyLower.includes("amount") || keyLower.includes("quantity") || keyLower.includes("number") || keyLower.includes("age") || keyLower.includes("price")) return "number";
+  return "text";
+}
 
 export default function Executions() {
   const { toast } = useToast();
@@ -50,6 +81,7 @@ export default function Executions() {
   const [targetUrl, setTargetUrl] = useState<string>("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [testData, setTestData] = useState<TestDataParam[]>([]);
+  const [detectedPlaceholders, setDetectedPlaceholders] = useState<string[]>([]);
 
   const addTestDataParam = () => {
     setTestData([...testData, { key: "", value: "", type: "text" }]);
@@ -73,9 +105,34 @@ export default function Executions() {
     queryKey: ["/api/agents"],
   });
 
+  const { data: allTestCases = [] } = useQuery<TestCase[]>({
+    queryKey: ["/api/test-cases"],
+  });
+
   const { data: executions = [], isLoading } = useQuery<TestExecution[]>({
     queryKey: ["/api/executions"],
   });
+
+  // Auto-detect placeholders when suite is selected
+  useEffect(() => {
+    if (selectedSuite) {
+      const suiteTestCases = allTestCases.filter(tc => tc.suiteId?.toString() === selectedSuite);
+      const placeholders = extractPlaceholders(suiteTestCases);
+      setDetectedPlaceholders(placeholders);
+      
+      // Auto-populate test data with detected placeholders (only if testData is empty)
+      if (placeholders.length > 0 && testData.length === 0) {
+        const autoParams: TestDataParam[] = placeholders.map(key => ({
+          key,
+          value: "",
+          type: guessInputType(key),
+        }));
+        setTestData(autoParams);
+      }
+    } else {
+      setDetectedPlaceholders([]);
+    }
+  }, [selectedSuite, allTestCases]);
 
   const runMutation = useMutation({
     mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string; framework: string; testData?: TestDataParam[] }) => {
@@ -289,7 +346,12 @@ export default function Executions() {
                 <div className="flex items-center justify-between">
                   <Label className="flex items-center gap-2">
                     <Key className="h-4 w-4" />
-                    Test Data (Optional)
+                    Test Data Parameters
+                    {detectedPlaceholders.length > 0 && (
+                      <Badge variant="secondary" className="text-xs">
+                        {detectedPlaceholders.length} detected
+                      </Badge>
+                    )}
                   </Label>
                   <Button
                     type="button"
@@ -302,9 +364,15 @@ export default function Executions() {
                     Add
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Add test data parameters like login credentials. Use {"{{key}}"} in test steps to reference values.
-                </p>
+                {detectedPlaceholders.length > 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Placeholders detected in test cases. Please provide values for each parameter below.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Add test data parameters like login credentials. Use {"{{key}}"} in test steps to reference values.
+                  </p>
+                )}
                 {testData.length > 0 && (
                   <ScrollArea className="max-h-40">
                     <div className="space-y-2">
