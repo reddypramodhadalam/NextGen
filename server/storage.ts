@@ -201,6 +201,79 @@ export class MemStorage implements IStorage {
   private seedData() {
     const now = new Date();
 
+    // Default Environments
+    const envDev: Environment = {
+      id: randomUUID(),
+      name: "development",
+      displayName: "Development",
+      baseUrl: "http://localhost:3000",
+      variables: { API_URL: "http://localhost:3000/api", DEBUG: "true" },
+      headers: {},
+      isDefault: false,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const envStaging: Environment = {
+      id: randomUUID(),
+      name: "staging",
+      displayName: "Staging",
+      baseUrl: "https://staging.example.com",
+      variables: { API_URL: "https://staging.example.com/api" },
+      headers: {},
+      isDefault: true,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const envProd: Environment = {
+      id: randomUUID(),
+      name: "production",
+      displayName: "Production",
+      baseUrl: "https://example.com",
+      variables: { API_URL: "https://example.com/api" },
+      headers: {},
+      isDefault: false,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.environments.set(envDev.id, envDev);
+    this.environments.set(envStaging.id, envStaging);
+    this.environments.set(envProd.id, envProd);
+
+    // Default RBAC Roles
+    const adminRole: Role = {
+      id: randomUUID(),
+      name: "admin",
+      displayName: "Administrator",
+      description: "Full access to all features",
+      permissions: ["view", "create", "edit", "delete", "execute", "admin"],
+      isSystem: true,
+      createdAt: now,
+    };
+    const testerRole: Role = {
+      id: randomUUID(),
+      name: "tester",
+      displayName: "Tester",
+      description: "Can view, create, and execute tests",
+      permissions: ["view", "create", "execute"],
+      isSystem: true,
+      createdAt: now,
+    };
+    const viewerRole: Role = {
+      id: randomUUID(),
+      name: "viewer",
+      displayName: "Viewer",
+      description: "Read-only access to tests and reports",
+      permissions: ["view"],
+      isSystem: true,
+      createdAt: now,
+    };
+    this.roles.set(adminRole.id, adminRole);
+    this.roles.set(testerRole.id, testerRole);
+    this.roles.set(viewerRole.id, viewerRole);
+
     // Sample agents
     const agent1: TestAgent = {
       id: randomUUID(),
@@ -866,7 +939,7 @@ export class MemStorage implements IStorage {
 
   // API Mocks
   async getAllApiMocks(): Promise<ApiMock[]> {
-    return Array.from(this.apiMocks.values()).sort((a, b) => b.priority - a.priority);
+    return Array.from(this.apiMocks.values()).sort((a, b) => (b.priority || 0) - (a.priority || 0));
   }
 
   async getApiMock(id: string): Promise<ApiMock | undefined> {
@@ -876,7 +949,7 @@ export class MemStorage implements IStorage {
   async getActiveApiMocks(): Promise<ApiMock[]> {
     return Array.from(this.apiMocks.values())
       .filter(m => m.isActive)
-      .sort((a, b) => b.priority - a.priority);
+      .sort((a, b) => (b.priority || 0) - (a.priority || 0));
   }
 
   async createApiMock(mock: InsertApiMock): Promise<ApiMock> {

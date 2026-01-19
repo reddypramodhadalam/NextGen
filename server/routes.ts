@@ -8,6 +8,14 @@ import {
   insertTestCaseSchema,
   insertTestAgentSchema,
   insertTestExecutionSchema,
+  insertPlatformSettingSchema,
+  insertEnvironmentSchema,
+  insertTestDataPoolSchema,
+  insertVisualBaselineSchema,
+  insertApiMockSchema,
+  insertCicdWebhookSchema,
+  insertRoleSchema,
+  insertMobileDeviceSchema,
 } from "@shared/schema";
 import { testExecutor } from "./test-executor";
 
@@ -625,6 +633,620 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
     } catch (error) {
       console.error("Error generating script:", error);
       res.status(500).json({ error: "Failed to generate script" });
+    }
+  });
+
+  // ========================================
+  // ENTERPRISE FEATURES API ROUTES
+  // ========================================
+
+  // Platform Settings
+  app.get("/api/settings", async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getAllSettings();
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.get("/api/settings/:category", async (req: Request, res: Response) => {
+    try {
+      const settings = await storage.getSettingsByCategory(req.params.category);
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.post("/api/settings", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertPlatformSettingSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const setting = await storage.upsertSetting(validation.data);
+      res.json(setting);
+    } catch (error) {
+      console.error("Error saving setting:", error);
+      res.status(500).json({ error: "Failed to save setting" });
+    }
+  });
+
+  app.post("/api/settings/bulk", async (req: Request, res: Response) => {
+    try {
+      const settings = req.body.settings as any[];
+      if (!Array.isArray(settings)) {
+        return res.status(400).json({ error: "Settings must be an array" });
+      }
+      const results = await Promise.all(
+        settings.map((s) => storage.upsertSetting(s))
+      );
+      res.json(results);
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  // Environments
+  app.get("/api/environments", async (req: Request, res: Response) => {
+    try {
+      const environments = await storage.getAllEnvironments();
+      res.json(environments);
+    } catch (error) {
+      console.error("Error fetching environments:", error);
+      res.status(500).json({ error: "Failed to fetch environments" });
+    }
+  });
+
+  app.get("/api/environments/:id", async (req: Request, res: Response) => {
+    try {
+      const environment = await storage.getEnvironment(req.params.id);
+      if (!environment) {
+        return res.status(404).json({ error: "Environment not found" });
+      }
+      res.json(environment);
+    } catch (error) {
+      console.error("Error fetching environment:", error);
+      res.status(500).json({ error: "Failed to fetch environment" });
+    }
+  });
+
+  app.post("/api/environments", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertEnvironmentSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const environment = await storage.createEnvironment(validation.data);
+      res.status(201).json(environment);
+    } catch (error) {
+      console.error("Error creating environment:", error);
+      res.status(500).json({ error: "Failed to create environment" });
+    }
+  });
+
+  app.patch("/api/environments/:id", async (req: Request, res: Response) => {
+    try {
+      const environment = await storage.updateEnvironment(req.params.id, req.body);
+      if (!environment) {
+        return res.status(404).json({ error: "Environment not found" });
+      }
+      res.json(environment);
+    } catch (error) {
+      console.error("Error updating environment:", error);
+      res.status(500).json({ error: "Failed to update environment" });
+    }
+  });
+
+  app.delete("/api/environments/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteEnvironment(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting environment:", error);
+      res.status(500).json({ error: "Failed to delete environment" });
+    }
+  });
+
+  // Test Data Pools
+  app.get("/api/test-data-pools", async (req: Request, res: Response) => {
+    try {
+      const pools = await storage.getAllTestDataPools();
+      res.json(pools);
+    } catch (error) {
+      console.error("Error fetching test data pools:", error);
+      res.status(500).json({ error: "Failed to fetch test data pools" });
+    }
+  });
+
+  app.get("/api/test-data-pools/:id", async (req: Request, res: Response) => {
+    try {
+      const pool = await storage.getTestDataPool(req.params.id);
+      if (!pool) {
+        return res.status(404).json({ error: "Test data pool not found" });
+      }
+      res.json(pool);
+    } catch (error) {
+      console.error("Error fetching test data pool:", error);
+      res.status(500).json({ error: "Failed to fetch test data pool" });
+    }
+  });
+
+  app.post("/api/test-data-pools", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertTestDataPoolSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const pool = await storage.createTestDataPool(validation.data);
+      res.status(201).json(pool);
+    } catch (error) {
+      console.error("Error creating test data pool:", error);
+      res.status(500).json({ error: "Failed to create test data pool" });
+    }
+  });
+
+  app.patch("/api/test-data-pools/:id", async (req: Request, res: Response) => {
+    try {
+      const pool = await storage.updateTestDataPool(req.params.id, req.body);
+      if (!pool) {
+        return res.status(404).json({ error: "Test data pool not found" });
+      }
+      res.json(pool);
+    } catch (error) {
+      console.error("Error updating test data pool:", error);
+      res.status(500).json({ error: "Failed to update test data pool" });
+    }
+  });
+
+  app.delete("/api/test-data-pools/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteTestDataPool(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting test data pool:", error);
+      res.status(500).json({ error: "Failed to delete test data pool" });
+    }
+  });
+
+  // Visual Baselines
+  app.get("/api/visual-baselines", async (req: Request, res: Response) => {
+    try {
+      const baselines = await storage.getAllVisualBaselines();
+      res.json(baselines);
+    } catch (error) {
+      console.error("Error fetching visual baselines:", error);
+      res.status(500).json({ error: "Failed to fetch visual baselines" });
+    }
+  });
+
+  app.get("/api/visual-baselines/:id", async (req: Request, res: Response) => {
+    try {
+      const baseline = await storage.getVisualBaseline(req.params.id);
+      if (!baseline) {
+        return res.status(404).json({ error: "Visual baseline not found" });
+      }
+      res.json(baseline);
+    } catch (error) {
+      console.error("Error fetching visual baseline:", error);
+      res.status(500).json({ error: "Failed to fetch visual baseline" });
+    }
+  });
+
+  app.post("/api/visual-baselines", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertVisualBaselineSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const baseline = await storage.createVisualBaseline(validation.data);
+      res.status(201).json(baseline);
+    } catch (error) {
+      console.error("Error creating visual baseline:", error);
+      res.status(500).json({ error: "Failed to create visual baseline" });
+    }
+  });
+
+  app.patch("/api/visual-baselines/:id", async (req: Request, res: Response) => {
+    try {
+      const baseline = await storage.updateVisualBaseline(req.params.id, req.body);
+      if (!baseline) {
+        return res.status(404).json({ error: "Visual baseline not found" });
+      }
+      res.json(baseline);
+    } catch (error) {
+      console.error("Error updating visual baseline:", error);
+      res.status(500).json({ error: "Failed to update visual baseline" });
+    }
+  });
+
+  app.delete("/api/visual-baselines/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteVisualBaseline(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting visual baseline:", error);
+      res.status(500).json({ error: "Failed to delete visual baseline" });
+    }
+  });
+
+  // Visual Comparisons
+  app.get("/api/executions/:executionId/visual-comparisons", async (req: Request, res: Response) => {
+    try {
+      const comparisons = await storage.getVisualComparisonsByExecution(req.params.executionId);
+      res.json(comparisons);
+    } catch (error) {
+      console.error("Error fetching visual comparisons:", error);
+      res.status(500).json({ error: "Failed to fetch visual comparisons" });
+    }
+  });
+
+  // Performance Metrics
+  app.get("/api/executions/:executionId/performance", async (req: Request, res: Response) => {
+    try {
+      const metrics = await storage.getPerformanceMetricsByExecution(req.params.executionId);
+      res.json(metrics);
+    } catch (error) {
+      console.error("Error fetching performance metrics:", error);
+      res.status(500).json({ error: "Failed to fetch performance metrics" });
+    }
+  });
+
+  // API Mocks
+  app.get("/api/mocks", async (req: Request, res: Response) => {
+    try {
+      const mocks = await storage.getAllApiMocks();
+      res.json(mocks);
+    } catch (error) {
+      console.error("Error fetching API mocks:", error);
+      res.status(500).json({ error: "Failed to fetch API mocks" });
+    }
+  });
+
+  app.get("/api/mocks/:id", async (req: Request, res: Response) => {
+    try {
+      const mock = await storage.getApiMock(req.params.id);
+      if (!mock) {
+        return res.status(404).json({ error: "API mock not found" });
+      }
+      res.json(mock);
+    } catch (error) {
+      console.error("Error fetching API mock:", error);
+      res.status(500).json({ error: "Failed to fetch API mock" });
+    }
+  });
+
+  app.post("/api/mocks", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertApiMockSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const mock = await storage.createApiMock(validation.data);
+      res.status(201).json(mock);
+    } catch (error) {
+      console.error("Error creating API mock:", error);
+      res.status(500).json({ error: "Failed to create API mock" });
+    }
+  });
+
+  app.patch("/api/mocks/:id", async (req: Request, res: Response) => {
+    try {
+      const mock = await storage.updateApiMock(req.params.id, req.body);
+      if (!mock) {
+        return res.status(404).json({ error: "API mock not found" });
+      }
+      res.json(mock);
+    } catch (error) {
+      console.error("Error updating API mock:", error);
+      res.status(500).json({ error: "Failed to update API mock" });
+    }
+  });
+
+  app.delete("/api/mocks/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteApiMock(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting API mock:", error);
+      res.status(500).json({ error: "Failed to delete API mock" });
+    }
+  });
+
+  // CI/CD Webhooks
+  app.get("/api/webhooks", async (req: Request, res: Response) => {
+    try {
+      const webhooks = await storage.getAllCicdWebhooks();
+      res.json(webhooks);
+    } catch (error) {
+      console.error("Error fetching webhooks:", error);
+      res.status(500).json({ error: "Failed to fetch webhooks" });
+    }
+  });
+
+  app.get("/api/webhooks/:id", async (req: Request, res: Response) => {
+    try {
+      const webhook = await storage.getCicdWebhook(req.params.id);
+      if (!webhook) {
+        return res.status(404).json({ error: "Webhook not found" });
+      }
+      res.json(webhook);
+    } catch (error) {
+      console.error("Error fetching webhook:", error);
+      res.status(500).json({ error: "Failed to fetch webhook" });
+    }
+  });
+
+  app.post("/api/webhooks", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertCicdWebhookSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const webhook = await storage.createCicdWebhook(validation.data);
+      res.status(201).json(webhook);
+    } catch (error) {
+      console.error("Error creating webhook:", error);
+      res.status(500).json({ error: "Failed to create webhook" });
+    }
+  });
+
+  app.patch("/api/webhooks/:id", async (req: Request, res: Response) => {
+    try {
+      const webhook = await storage.updateCicdWebhook(req.params.id, req.body);
+      if (!webhook) {
+        return res.status(404).json({ error: "Webhook not found" });
+      }
+      res.json(webhook);
+    } catch (error) {
+      console.error("Error updating webhook:", error);
+      res.status(500).json({ error: "Failed to update webhook" });
+    }
+  });
+
+  app.delete("/api/webhooks/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteCicdWebhook(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting webhook:", error);
+      res.status(500).json({ error: "Failed to delete webhook" });
+    }
+  });
+
+  // Webhook trigger endpoint (for CI/CD systems to call)
+  app.post("/api/webhooks/:id/trigger", async (req: Request, res: Response) => {
+    try {
+      const webhook = await storage.getCicdWebhook(req.params.id);
+      if (!webhook) {
+        return res.status(404).json({ error: "Webhook not found" });
+      }
+      if (!webhook.isActive) {
+        return res.status(400).json({ error: "Webhook is not active" });
+      }
+      if (!webhook.suiteId) {
+        return res.status(400).json({ error: "Webhook has no associated test suite" });
+      }
+
+      // Get environment config
+      let targetUrl = req.body.targetUrl;
+      if (!targetUrl && webhook.environmentId) {
+        const env = await storage.getEnvironment(webhook.environmentId);
+        if (env) {
+          targetUrl = env.baseUrl;
+        }
+      }
+
+      if (!targetUrl) {
+        return res.status(400).json({ error: "Target URL is required" });
+      }
+
+      // Create execution
+      const execution = await storage.createExecution({
+        suiteId: webhook.suiteId,
+        targetUrl,
+        framework: "playwright",
+        environment: "production",
+        status: "pending",
+      });
+
+      // Update webhook last triggered
+      await storage.updateCicdWebhook(webhook.id, { lastTriggered: new Date() });
+
+      // Start execution
+      const testCases = await storage.getTestCasesBySuite(webhook.suiteId);
+      testExecutor.runExecution(execution.id, testCases, targetUrl, "playwright");
+
+      res.json({ executionId: execution.id, message: "Execution started" });
+    } catch (error) {
+      console.error("Error triggering webhook:", error);
+      res.status(500).json({ error: "Failed to trigger webhook" });
+    }
+  });
+
+  // Generate CI/CD config files
+  app.get("/api/webhooks/:id/config/:provider", async (req: Request, res: Response) => {
+    try {
+      const webhook = await storage.getCicdWebhook(req.params.id);
+      if (!webhook) {
+        return res.status(404).json({ error: "Webhook not found" });
+      }
+
+      const { provider } = req.params;
+      const webhookUrl = `${req.protocol}://${req.get("host")}/api/webhooks/${webhook.id}/trigger`;
+
+      let config = "";
+      switch (provider) {
+        case "github":
+          config = `name: AITAS Test Automation
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger AITAS Tests
+        run: |
+          curl -X POST ${webhookUrl} \\
+            -H "Content-Type: application/json" \\
+            -d '{"targetUrl": "\${{ secrets.TARGET_URL }}"}'
+`;
+          break;
+        case "gitlab":
+          config = `stages:
+  - test
+
+aitas_tests:
+  stage: test
+  script:
+    - curl -X POST ${webhookUrl} -H "Content-Type: application/json" -d '{"targetUrl": "$TARGET_URL"}'
+  only:
+    - main
+    - merge_requests
+`;
+          break;
+        case "jenkins":
+          config = `pipeline {
+    agent any
+    stages {
+        stage('Test') {
+            steps {
+                sh '''
+                    curl -X POST ${webhookUrl} \\
+                        -H "Content-Type: application/json" \\
+                        -d '{"targetUrl": "${env.TARGET_URL}"}'
+                '''
+            }
+        }
+    }
+}
+`;
+          break;
+        default:
+          return res.status(400).json({ error: "Unsupported provider" });
+      }
+
+      res.json({ provider, config });
+    } catch (error) {
+      console.error("Error generating config:", error);
+      res.status(500).json({ error: "Failed to generate config" });
+    }
+  });
+
+  // Roles (RBAC)
+  app.get("/api/roles", async (req: Request, res: Response) => {
+    try {
+      const roles = await storage.getAllRoles();
+      res.json(roles);
+    } catch (error) {
+      console.error("Error fetching roles:", error);
+      res.status(500).json({ error: "Failed to fetch roles" });
+    }
+  });
+
+  app.post("/api/roles", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertRoleSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const role = await storage.createRole(validation.data);
+      res.status(201).json(role);
+    } catch (error) {
+      console.error("Error creating role:", error);
+      res.status(500).json({ error: "Failed to create role" });
+    }
+  });
+
+  app.patch("/api/roles/:id", async (req: Request, res: Response) => {
+    try {
+      const role = await storage.updateRole(req.params.id, req.body);
+      if (!role) {
+        return res.status(404).json({ error: "Role not found or is a system role" });
+      }
+      res.json(role);
+    } catch (error) {
+      console.error("Error updating role:", error);
+      res.status(500).json({ error: "Failed to update role" });
+    }
+  });
+
+  app.delete("/api/roles/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteRole(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting role:", error);
+      res.status(500).json({ error: "Failed to delete role" });
+    }
+  });
+
+  // Mobile Devices
+  app.get("/api/mobile-devices", async (req: Request, res: Response) => {
+    try {
+      const devices = await storage.getAllMobileDevices();
+      res.json(devices);
+    } catch (error) {
+      console.error("Error fetching mobile devices:", error);
+      res.status(500).json({ error: "Failed to fetch mobile devices" });
+    }
+  });
+
+  app.get("/api/mobile-devices/:id", async (req: Request, res: Response) => {
+    try {
+      const device = await storage.getMobileDevice(req.params.id);
+      if (!device) {
+        return res.status(404).json({ error: "Mobile device not found" });
+      }
+      res.json(device);
+    } catch (error) {
+      console.error("Error fetching mobile device:", error);
+      res.status(500).json({ error: "Failed to fetch mobile device" });
+    }
+  });
+
+  app.post("/api/mobile-devices", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(insertMobileDeviceSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const device = await storage.createMobileDevice(validation.data);
+      res.status(201).json(device);
+    } catch (error) {
+      console.error("Error creating mobile device:", error);
+      res.status(500).json({ error: "Failed to create mobile device" });
+    }
+  });
+
+  app.patch("/api/mobile-devices/:id", async (req: Request, res: Response) => {
+    try {
+      const device = await storage.updateMobileDevice(req.params.id, req.body);
+      if (!device) {
+        return res.status(404).json({ error: "Mobile device not found" });
+      }
+      res.json(device);
+    } catch (error) {
+      console.error("Error updating mobile device:", error);
+      res.status(500).json({ error: "Failed to update mobile device" });
+    }
+  });
+
+  app.delete("/api/mobile-devices/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteMobileDevice(req.params.id);
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting mobile device:", error);
+      res.status(500).json({ error: "Failed to delete mobile device" });
     }
   });
 
