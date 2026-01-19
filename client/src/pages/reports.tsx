@@ -1,8 +1,17 @@
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { useQuery } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   FileText,
   Download,
@@ -14,10 +23,15 @@ import {
   Calendar,
   Loader2,
   BarChart3,
+  FileJson,
+  FileCode,
 } from "lucide-react";
 import type { TestReport, TestExecution } from "@shared/schema";
 
 export default function Reports() {
+  const { toast } = useToast();
+  const [exportFormat, setExportFormat] = useState("html");
+
   const { data: reports = [], isLoading: reportsLoading } = useQuery<TestReport[]>({
     queryKey: ["/api/reports"],
   });
@@ -27,6 +41,146 @@ export default function Reports() {
   });
 
   const isLoading = reportsLoading || executionsLoading;
+
+  const handleExport = () => {
+    const completedExecs = executions.filter((e) => e.status === "passed" || e.status === "failed");
+    const totalTests = completedExecs.reduce((acc, e) => acc + (e.totalTests || 0), 0);
+    const totalPassed = completedExecs.reduce((acc, e) => acc + (e.passedTests || 0), 0);
+    const totalFailed = completedExecs.reduce((acc, e) => acc + (e.failedTests || 0), 0);
+    const passRate = totalTests > 0 ? Math.round((totalPassed / totalTests) * 100) : 0;
+
+    const reportData = {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        totalExecutions: completedExecs.length,
+        totalTests,
+        passed: totalPassed,
+        failed: totalFailed,
+        passRate,
+      },
+      executions: completedExecs.map((e) => ({
+        id: e.id,
+        status: e.status,
+        totalTests: e.totalTests,
+        passedTests: e.passedTests,
+        failedTests: e.failedTests,
+        duration: e.duration,
+        startedAt: e.startedAt,
+        completedAt: e.completedAt,
+        framework: e.framework,
+      })),
+    };
+
+    let content: string;
+    let filename: string;
+    let mimeType: string;
+
+    if (exportFormat === "json") {
+      content = JSON.stringify(reportData, null, 2);
+      filename = `test-report-${Date.now()}.json`;
+      mimeType = "application/json";
+    } else if (exportFormat === "html") {
+      content = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Test Report - ${new Date().toLocaleDateString()}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 40px; border-radius: 12px; margin-bottom: 30px; }
+    .header h1 { margin: 0 0 10px 0; }
+    .header p { margin: 0; opacity: 0.8; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px; }
+    .stat-card { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .stat-value { font-size: 36px; font-weight: bold; }
+    .stat-label { color: #666; margin-top: 4px; }
+    .passed { color: #10b981; }
+    .failed { color: #ef4444; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    th, td { padding: 16px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f9fafb; font-weight: 600; }
+    .badge { padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+    .badge-passed { background: #d1fae5; color: #059669; }
+    .badge-failed { background: #fee2e2; color: #dc2626; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Test Execution Report</h1>
+    <p>Generated: ${new Date().toLocaleString()}</p>
+  </div>
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-value">${reportData.summary.passRate}%</div>
+      <div class="stat-label">Pass Rate</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">${reportData.summary.totalTests}</div>
+      <div class="stat-label">Total Tests</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value passed">${reportData.summary.passed}</div>
+      <div class="stat-label">Passed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value failed">${reportData.summary.failed}</div>
+      <div class="stat-label">Failed</div>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Execution ID</th>
+        <th>Status</th>
+        <th>Framework</th>
+        <th>Tests</th>
+        <th>Passed</th>
+        <th>Failed</th>
+        <th>Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${reportData.executions.map((e) => `
+        <tr>
+          <td>${e.id.slice(0, 8)}...</td>
+          <td><span class="badge badge-${e.status}">${e.status}</span></td>
+          <td>${e.framework || "playwright"}</td>
+          <td>${e.totalTests || 0}</td>
+          <td>${e.passedTests || 0}</td>
+          <td>${e.failedTests || 0}</td>
+          <td>${e.duration ? Math.round(e.duration / 1000) + "s" : "-"}</td>
+        </tr>
+      `).join("")}
+    </tbody>
+  </table>
+</body>
+</html>`;
+      filename = `test-report-${Date.now()}.html`;
+      mimeType = "text/html";
+    } else {
+      content = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Test Report" tests="${reportData.summary.totalTests}" failures="${reportData.summary.failed}" time="0">
+${reportData.executions.map((e) => `  <testsuite name="Execution ${e.id.slice(0, 8)}" tests="${e.totalTests || 0}" failures="${e.failedTests || 0}" />`).join("\n")}
+</testsuites>`;
+      filename = `test-report-${Date.now()}.xml`;
+      mimeType = "application/xml";
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    toast({
+      title: "Report Exported",
+      description: `Report saved as ${filename}`,
+    });
+  };
 
   // Calculate metrics
   const completedExecutions = executions.filter((e) => e.status === "passed" || e.status === "failed");
@@ -77,6 +231,37 @@ export default function Reports() {
           <p className="text-muted-foreground">
             Analyze test results and track quality metrics
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={exportFormat} onValueChange={setExportFormat}>
+            <SelectTrigger className="w-32" data-testid="select-export-format">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="html">
+                <span className="flex items-center gap-2">
+                  <FileCode className="h-4 w-4" />
+                  HTML
+                </span>
+              </SelectItem>
+              <SelectItem value="json">
+                <span className="flex items-center gap-2">
+                  <FileJson className="h-4 w-4" />
+                  JSON
+                </span>
+              </SelectItem>
+              <SelectItem value="junit">
+                <span className="flex items-center gap-2">
+                  <FileText className="h-4 w-4" />
+                  JUnit XML
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={handleExport} data-testid="button-export-report">
+            <Download className="h-4 w-4 mr-2" />
+            Export Report
+          </Button>
         </div>
       </div>
 

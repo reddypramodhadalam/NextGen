@@ -15,6 +15,7 @@ import Executions from "@/pages/executions";
 import Reports from "@/pages/reports";
 import Agents from "@/pages/agents";
 import Settings from "@/pages/settings";
+import Environments from "@/pages/environments";
 
 function Router() {
   return (
@@ -26,6 +27,7 @@ function Router() {
       <Route path="/executions" component={Executions} />
       <Route path="/reports" component={Reports} />
       <Route path="/agents" component={Agents} />
+      <Route path="/environments" component={Environments} />
       <Route path="/settings" component={Settings} />
       <Route component={NotFound} />
     </Switch>

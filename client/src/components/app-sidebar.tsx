@@ -21,6 +21,7 @@ import {
   Bot,
   Settings,
   Rocket,
+  Server,
 } from "lucide-react";
 
 const mainNavItems = [
@@ -64,6 +65,11 @@ const configNavItems = [
     title: "Agent Setup",
     url: "/agents",
     icon: Bot,
+  },
+  {
+    title: "Environments",
+    url: "/environments",
+    icon: Server,
   },
   {
     title: "Settings",
