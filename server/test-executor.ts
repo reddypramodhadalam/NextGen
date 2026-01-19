@@ -14,14 +14,30 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
 
+// Runtime variables store - shared across steps and tests
+const runtimeVariables: Map<string, string> = new Map();
+
+// Helper to replace runtime variables like $variableName$ in text
+function replaceRuntimeVariables(text: string): string {
+  let result = text;
+  runtimeVariables.forEach((value, key) => {
+    const pattern = new RegExp(`\\$${escapeRegExp(key)}\\$`, "gi");
+    result = result.replace(pattern, value);
+  });
+  return result;
+}
+
 // AI-powered step interpreter - converts natural language to browser commands
 interface BrowserCommand {
   action: "click" | "type" | "select" | "hover" | "doubleClick" | "rightClick" | 
           "scroll" | "wait" | "pressKey" | "check" | "uncheck" | "clear" | 
-          "dragDrop" | "focus" | "acceptDialog" | "dismissDialog" | "navigate" | "verify";
+          "dragDrop" | "focus" | "acceptDialog" | "dismissDialog" | "navigate" | "verify" |
+          "capture" | "captureAttribute" | "captureCount";
   selector?: string;
   value?: string;
   targetSelector?: string;
+  variableName?: string;  // For capture actions - store result in this variable
+  attributeName?: string; // For captureAttribute - which attribute to get
   description: string;
 }
 
@@ -35,21 +51,29 @@ async function interpretStepWithAI(step: string, expected: string, pageContext: 
           content: `You are a test automation expert. Convert natural language test steps into browser commands.
           
 Return a JSON array of commands. Each command has:
-- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify
-- selector: CSS selector or text content to find element (use descriptive text like "Login" for buttons)
-- value: value to type, option to select, key to press, or scroll direction (top/bottom)
+- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount
+- selector: CSS selector or text content to find element
+- value: value to type, option to select, key to press, or scroll direction (top/bottom). Can include $variableName$ to use captured values.
 - targetSelector: for dragDrop, the drop target
-- description: brief description of what this does
+- variableName: for capture actions, the name to store the captured value (use for later with $variableName$)
+- attributeName: for captureAttribute, which HTML attribute to get (href, src, data-id, etc.)
+- description: brief description
+
+CAPTURE ACTIONS (for getting data from page):
+- capture: Get text content of element, store in variableName
+- captureAttribute: Get an attribute value, store in variableName
+- captureCount: Count matching elements, store count in variableName
 
 Examples:
-Step: "Click on the Login button" → [{"action":"click","selector":"Login","description":"Click Login button"}]
-Step: "Enter john@email.com in email field" → [{"action":"type","selector":"email","value":"john@email.com","description":"Type email"}]
-Step: "Select USA from country dropdown" → [{"action":"select","selector":"country","value":"USA","description":"Select country"}]
-Step: "Hover over the menu" → [{"action":"hover","selector":"menu","description":"Hover on menu"}]
-Step: "Accept the confirmation popup" → [{"action":"acceptDialog","description":"Accept dialog"}]
-Step: "Drag item to cart" → [{"action":"dragDrop","selector":"item","targetSelector":"cart","description":"Drag to cart"}]
-Step: "Scroll to the bottom" → [{"action":"scroll","value":"bottom","description":"Scroll down"}]
-Step: "Check the terms checkbox" → [{"action":"check","selector":"terms","description":"Check terms"}]
+Step: "Click Login button" → [{"action":"click","selector":"Login","description":"Click Login"}]
+Step: "Enter john@email.com in email" → [{"action":"type","selector":"email","value":"john@email.com","description":"Type email"}]
+Step: "Select USA from country" → [{"action":"select","selector":"country","value":"USA","description":"Select country"}]
+Step: "Save the order number as orderNum" → [{"action":"capture","selector":"order-number","variableName":"orderNum","description":"Capture order number"}]
+Step: "Get the confirmation code and save it" → [{"action":"capture","selector":"confirmation-code","variableName":"confirmCode","description":"Capture confirmation"}]
+Step: "Remember the product link as productUrl" → [{"action":"captureAttribute","selector":"product-link","attributeName":"href","variableName":"productUrl","description":"Capture product URL"}]
+Step: "Count the items in cart as itemCount" → [{"action":"captureCount","selector":"cart-item","variableName":"itemCount","description":"Count cart items"}]
+Step: "Enter the saved order number in search" → [{"action":"type","selector":"search","value":"$orderNum$","description":"Type saved order number"}]
+Step: "Verify the confirmation code matches" → [{"action":"verify","selector":"$confirmCode$","description":"Verify confirmation code"}]
 
 Only return the JSON array, no explanation.`
         },
@@ -280,6 +304,8 @@ class PlaywrightExecutor implements FrameworkExecutor {
             
           case "type":
             if (cmd.selector && cmd.value) {
+              // Replace runtime variables in the value
+              const valueToType = replaceRuntimeVariables(cmd.value);
               const selectors = [
                 `input[name*="${cmd.selector}" i]`,
                 `input[placeholder*="${cmd.selector}" i]`,
@@ -293,8 +319,8 @@ class PlaywrightExecutor implements FrameworkExecutor {
                 try {
                   const el = await page.$(sel);
                   if (el) {
-                    await el.fill(cmd.value);
-                    logs.push(`Typed "${cmd.value}" in ${cmd.selector}`);
+                    await el.fill(valueToType);
+                    logs.push(`Typed "${valueToType}" in ${cmd.selector}`);
                     typed = true;
                     break;
                   }
@@ -410,14 +436,69 @@ class PlaywrightExecutor implements FrameworkExecutor {
             
           case "verify":
             if (cmd.selector) {
+              const selectorValue = replaceRuntimeVariables(cmd.selector);
               try {
-                await page.waitForSelector(`text=${cmd.selector}`, { state: "visible", timeout: 5000 });
-                logs.push(`Verified visible: ${cmd.selector}`);
+                await page.waitForSelector(`text=${selectorValue}`, { state: "visible", timeout: 5000 });
+                logs.push(`Verified visible: ${selectorValue}`);
               } catch {
                 logs.push(`Verification: ${cmd.description}`);
               }
             } else {
               logs.push(`Verification: ${expected}`);
+            }
+            break;
+            
+          case "capture":
+            if (cmd.selector && cmd.variableName) {
+              try {
+                const element = await page.$(`text=${cmd.selector}`) || 
+                                await page.$(`[data-testid*="${cmd.selector}" i]`) ||
+                                await page.$(`#${cmd.selector}`) ||
+                                await page.$(`.${cmd.selector}`);
+                if (element) {
+                  const text = await element.textContent() || "";
+                  runtimeVariables.set(cmd.variableName, text.trim());
+                  logs.push(`Captured "${text.trim()}" as $${cmd.variableName}$`);
+                } else {
+                  logs.push(`Could not find element to capture: ${cmd.selector}`);
+                }
+              } catch (e: any) {
+                logs.push(`Capture failed: ${e.message}`);
+              }
+            }
+            break;
+            
+          case "captureAttribute":
+            if (cmd.selector && cmd.variableName && cmd.attributeName) {
+              try {
+                const element = await page.$(`[${cmd.attributeName}]`) ||
+                                await page.$(`text=${cmd.selector}`) ||
+                                await page.$(`a:has-text("${cmd.selector}")`);
+                if (element) {
+                  const attrValue = await element.getAttribute(cmd.attributeName) || "";
+                  runtimeVariables.set(cmd.variableName, attrValue);
+                  logs.push(`Captured attribute ${cmd.attributeName}="${attrValue}" as $${cmd.variableName}$`);
+                } else {
+                  logs.push(`Could not find element for attribute capture: ${cmd.selector}`);
+                }
+              } catch (e: any) {
+                logs.push(`Capture attribute failed: ${e.message}`);
+              }
+            }
+            break;
+            
+          case "captureCount":
+            if (cmd.selector && cmd.variableName) {
+              try {
+                const elements = await page.$$(`text=${cmd.selector}`) ||
+                                 await page.$$(`[data-testid*="${cmd.selector}" i]`) ||
+                                 await page.$$(`.${cmd.selector}`);
+                const count = elements.length.toString();
+                runtimeVariables.set(cmd.variableName, count);
+                logs.push(`Captured count ${count} as $${cmd.variableName}$`);
+              } catch (e: any) {
+                logs.push(`Capture count failed: ${e.message}`);
+              }
             }
             break;
             
