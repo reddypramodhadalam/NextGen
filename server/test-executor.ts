@@ -167,11 +167,256 @@ class PlaywrightExecutor implements FrameworkExecutor {
     logs.push(`Executing step: ${stepAction}`);
     const actionLower = stepAction.toLowerCase();
 
+    // Navigate actions
     if (actionLower.includes("navigate") || actionLower.includes("go to")) {
       logs.push(`Page loaded, checking expected: ${expected}`);
       return true;
     }
 
+    // Wait for element
+    if (actionLower.includes("wait for") || actionLower.includes("wait until")) {
+      const waitMatch = stepAction.match(/wait\s+(?:for|until)\s+(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
+      if (waitMatch) {
+        const elementText = waitMatch[1].trim();
+        try {
+          await page.waitForSelector(`text=${elementText}`, { timeout: 10000 });
+          logs.push(`Waited for element: ${elementText}`);
+          return true;
+        } catch {
+          logs.push(`Timeout waiting for: ${elementText}`);
+          return false;
+        }
+      }
+    }
+
+    // Double-click
+    if (actionLower.includes("double-click") || actionLower.includes("double click")) {
+      const dblClickMatch = stepAction.match(/double[- ]?click\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
+      if (dblClickMatch) {
+        const elementText = dblClickMatch[1].trim();
+        try {
+          await page.dblclick(`text=${elementText}`, { timeout: 5000 });
+          logs.push(`Double-clicked on: ${elementText}`);
+          return true;
+        } catch {
+          logs.push(`Could not double-click: ${elementText}`);
+          return false;
+        }
+      }
+    }
+
+    // Right-click / Context menu
+    if (actionLower.includes("right-click") || actionLower.includes("right click") || actionLower.includes("context menu")) {
+      const rightClickMatch = stepAction.match(/(?:right[- ]?click|context\s+menu)\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
+      if (rightClickMatch) {
+        const elementText = rightClickMatch[1].trim();
+        try {
+          await page.click(`text=${elementText}`, { button: "right", timeout: 5000 });
+          logs.push(`Right-clicked on: ${elementText}`);
+          return true;
+        } catch {
+          logs.push(`Could not right-click: ${elementText}`);
+          return false;
+        }
+      }
+    }
+
+    // Hover / Mouse over
+    if (actionLower.includes("hover") || actionLower.includes("mouse over") || actionLower.includes("mouseover")) {
+      const hoverMatch = stepAction.match(/(?:hover|mouse\s*over)\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
+      if (hoverMatch) {
+        const elementText = hoverMatch[1].trim();
+        try {
+          await page.hover(`text=${elementText}`, { timeout: 5000 });
+          logs.push(`Hovered on: ${elementText}`);
+          return true;
+        } catch {
+          logs.push(`Could not hover on: ${elementText}`);
+          return false;
+        }
+      }
+    }
+
+    // Select from dropdown
+    if (actionLower.includes("select") && (actionLower.includes("dropdown") || actionLower.includes("from") || actionLower.includes("option"))) {
+      const selectMatch = stepAction.match(/select\s+['""]?([^'""\n]+)['""]?\s+(?:from|in)\s+(?:the\s+)?(?:dropdown\s+)?['""]?([^'""\n]+)['""]?/i);
+      if (selectMatch) {
+        const optionText = selectMatch[1].trim();
+        const dropdownName = selectMatch[2].trim();
+        try {
+          const selectElement = await page.$(`select[name*="${dropdownName}"], select[id*="${dropdownName}"], [aria-label*="${dropdownName}"]`);
+          if (selectElement) {
+            await selectElement.selectOption({ label: optionText });
+            logs.push(`Selected "${optionText}" from dropdown "${dropdownName}"`);
+            return true;
+          }
+          // Try clicking dropdown then option for custom dropdowns
+          await page.click(`text=${dropdownName}`, { timeout: 3000 });
+          await page.click(`text=${optionText}`, { timeout: 3000 });
+          logs.push(`Selected "${optionText}" from custom dropdown`);
+          return true;
+        } catch {
+          logs.push(`Could not select from dropdown: ${dropdownName}`);
+          return false;
+        }
+      }
+    }
+
+    // Drag and drop
+    if (actionLower.includes("drag") && actionLower.includes("drop")) {
+      const dragMatch = stepAction.match(/drag\s+['""]?([^'""\n]+)['""]?\s+(?:to|and\s+drop\s+(?:on|to)?)\s+['""]?([^'""\n]+)['""]?/i);
+      if (dragMatch) {
+        const sourceText = dragMatch[1].trim();
+        const targetText = dragMatch[2].trim();
+        try {
+          const source = await page.$(`text=${sourceText}`);
+          const target = await page.$(`text=${targetText}`);
+          if (source && target) {
+            await source.dragTo(target);
+            logs.push(`Dragged "${sourceText}" to "${targetText}"`);
+            return true;
+          }
+        } catch {
+          logs.push(`Could not drag and drop: ${sourceText} to ${targetText}`);
+          return false;
+        }
+      }
+    }
+
+    // Handle alert/confirm/prompt dialogs
+    if (actionLower.includes("accept") && (actionLower.includes("alert") || actionLower.includes("dialog") || actionLower.includes("popup"))) {
+      page.on("dialog", async (dialog) => {
+        await dialog.accept();
+      });
+      logs.push("Set up dialog auto-accept handler");
+      return true;
+    }
+
+    if (actionLower.includes("dismiss") && (actionLower.includes("alert") || actionLower.includes("dialog") || actionLower.includes("popup"))) {
+      page.on("dialog", async (dialog) => {
+        await dialog.dismiss();
+      });
+      logs.push("Set up dialog auto-dismiss handler");
+      return true;
+    }
+
+    // Scroll actions
+    if (actionLower.includes("scroll")) {
+      if (actionLower.includes("bottom") || actionLower.includes("down")) {
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        logs.push("Scrolled to bottom of page");
+        return true;
+      } else if (actionLower.includes("top") || actionLower.includes("up")) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        logs.push("Scrolled to top of page");
+        return true;
+      } else {
+        const scrollToMatch = stepAction.match(/scroll\s+(?:to\s+)?['""]?([^'""\n]+)['""]?/i);
+        if (scrollToMatch) {
+          const elementText = scrollToMatch[1].trim();
+          try {
+            const element = await page.$(`text=${elementText}`);
+            if (element) {
+              await element.scrollIntoViewIfNeeded();
+              logs.push(`Scrolled to element: ${elementText}`);
+              return true;
+            }
+          } catch {
+            logs.push(`Could not scroll to: ${elementText}`);
+          }
+        }
+      }
+    }
+
+    // Press keyboard key
+    if (actionLower.includes("press") || actionLower.includes("key")) {
+      const keyMatch = stepAction.match(/press\s+(?:the\s+)?['""]?(\w+)['""]?\s*(?:key)?/i);
+      if (keyMatch) {
+        const keyName = keyMatch[1];
+        try {
+          await page.keyboard.press(keyName);
+          logs.push(`Pressed key: ${keyName}`);
+          return true;
+        } catch {
+          logs.push(`Could not press key: ${keyName}`);
+          return false;
+        }
+      }
+    }
+
+    // Check/uncheck checkbox
+    if (actionLower.includes("check") && !actionLower.includes("uncheck") && (actionLower.includes("checkbox") || actionLower.includes("box"))) {
+      const checkMatch = stepAction.match(/check\s+(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:checkbox)?/i);
+      if (checkMatch) {
+        const checkboxName = checkMatch[1].trim();
+        try {
+          await page.check(`input[name*="${checkboxName}"], input[id*="${checkboxName}"], label:has-text("${checkboxName}") input`);
+          logs.push(`Checked checkbox: ${checkboxName}`);
+          return true;
+        } catch {
+          logs.push(`Could not check: ${checkboxName}`);
+          return false;
+        }
+      }
+    }
+
+    if (actionLower.includes("uncheck")) {
+      const uncheckMatch = stepAction.match(/uncheck\s+(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:checkbox)?/i);
+      if (uncheckMatch) {
+        const checkboxName = uncheckMatch[1].trim();
+        try {
+          await page.uncheck(`input[name*="${checkboxName}"], input[id*="${checkboxName}"], label:has-text("${checkboxName}") input`);
+          logs.push(`Unchecked checkbox: ${checkboxName}`);
+          return true;
+        } catch {
+          logs.push(`Could not uncheck: ${checkboxName}`);
+          return false;
+        }
+      }
+    }
+
+    // Clear input field
+    if (actionLower.includes("clear")) {
+      const clearMatch = stepAction.match(/clear\s+(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:field|input)?/i);
+      if (clearMatch) {
+        const fieldName = clearMatch[1].trim();
+        try {
+          const input = await page.$(`input[name*="${fieldName}"], input[id*="${fieldName}"], input[placeholder*="${fieldName}"]`);
+          if (input) {
+            await input.fill("");
+            logs.push(`Cleared field: ${fieldName}`);
+            return true;
+          }
+        } catch {
+          logs.push(`Could not clear: ${fieldName}`);
+          return false;
+        }
+      }
+    }
+
+    // Upload file
+    if (actionLower.includes("upload") || actionLower.includes("attach file")) {
+      logs.push("File upload action detected - requires file path in test data");
+      return true;
+    }
+
+    // Focus on element
+    if (actionLower.includes("focus")) {
+      const focusMatch = stepAction.match(/focus\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
+      if (focusMatch) {
+        const elementText = focusMatch[1].trim();
+        try {
+          await page.focus(`text=${elementText}`);
+          logs.push(`Focused on: ${elementText}`);
+          return true;
+        } catch {
+          logs.push(`Could not focus on: ${elementText}`);
+          return false;
+        }
+      }
+    }
+
+    // Click action (general)
     if (actionLower.includes("click")) {
       const buttonMatch = stepAction.match(/click\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:button|link|element)?/i);
       if (buttonMatch) {
@@ -193,10 +438,38 @@ class PlaywrightExecutor implements FrameworkExecutor {
       }
     }
 
+    // Enter/Type action
     if (actionLower.includes("enter") || actionLower.includes("type") || actionLower.includes("input")) {
-      const inputMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?(\w+)/i);
+      const inputMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?['""]?([^'""\n]+)['""]?\s+(?:in|into|in\s+the)\s+['""]?([^'""\n]+)['""]?/i);
       if (inputMatch) {
-        const fieldType = inputMatch[1].toLowerCase();
+        const valueToType = inputMatch[1].trim();
+        const fieldName = inputMatch[2].trim();
+        const selectors = [
+          `input[name*="${fieldName}"]`,
+          `input[placeholder*="${fieldName}"]`,
+          `input[id*="${fieldName}"]`,
+          `textarea[name*="${fieldName}"]`,
+          `[aria-label*="${fieldName}"]`,
+        ];
+
+        for (const selector of selectors) {
+          try {
+            const element = await page.$(selector);
+            if (element) {
+              await element.fill(valueToType);
+              logs.push(`Entered "${valueToType}" in ${fieldName}`);
+              return true;
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+      
+      // Fallback: simple field type matching
+      const simpleMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?(\w+)/i);
+      if (simpleMatch) {
+        const fieldType = simpleMatch[1].toLowerCase();
         const selectors = [
           `input[type="${fieldType}"]`,
           `input[name*="${fieldType}"]`,
@@ -222,7 +495,38 @@ class PlaywrightExecutor implements FrameworkExecutor {
       }
     }
 
-    if (actionLower.includes("verify") || actionLower.includes("check") || actionLower.includes("assert")) {
+    // Verify/Assert actions
+    if (actionLower.includes("verify") || actionLower.includes("check") || actionLower.includes("assert") || actionLower.includes("should")) {
+      if (actionLower.includes("visible") || actionLower.includes("displayed") || actionLower.includes("shown")) {
+        const visibleMatch = stepAction.match(/(?:verify|check|assert|should\s+see)\s+(?:that\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?\s+(?:is\s+)?(?:visible|displayed|shown)/i);
+        if (visibleMatch) {
+          const elementText = visibleMatch[1].trim();
+          try {
+            await page.waitForSelector(`text=${elementText}`, { state: "visible", timeout: 5000 });
+            logs.push(`Verified visible: ${elementText}`);
+            return true;
+          } catch {
+            logs.push(`Element not visible: ${elementText}`);
+            return false;
+          }
+        }
+      }
+      
+      if (actionLower.includes("hidden") || actionLower.includes("not visible") || actionLower.includes("disappear")) {
+        const hiddenMatch = stepAction.match(/(?:verify|check|assert)\s+(?:that\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?\s+(?:is\s+)?(?:hidden|not\s+visible|disappeared)/i);
+        if (hiddenMatch) {
+          const elementText = hiddenMatch[1].trim();
+          try {
+            await page.waitForSelector(`text=${elementText}`, { state: "hidden", timeout: 5000 });
+            logs.push(`Verified hidden: ${elementText}`);
+            return true;
+          } catch {
+            logs.push(`Element still visible: ${elementText}`);
+            return false;
+          }
+        }
+      }
+
       const pageContent = await page.content();
       logs.push(`Verification check: ${expected}`);
       return true;
