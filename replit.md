@@ -82,16 +82,23 @@ Pre-built integration modules in `server/replit_integrations/`:
 
 ## Recent Changes
 
-### Test Case Import/Export (Latest)
+### Multi-Framework Test Execution (Latest)
+- Added Puppeteer as an alternative to Playwright for browser automation
+- Users can select framework (Playwright or Puppeteer) when starting test execution
+- Framework selection persisted in test executions and displayed in execution history
+- Both frameworks support: navigation, clicks, form input, screenshots, and result capture
+- TestExecutor manages framework executors via interface-based design pattern
+
+### Test Case Import/Export
 - Added JSON import functionality: POST /api/test-cases/import
 - Added JSON export functionality: GET /api/test-cases/export  
 - Repository page has Import/Export buttons with dialog UI
 - Supports importing to specific test suites or unassigned
 
 ### Real Browser Test Execution
-- Integrated Playwright for real browser automation
+- Integrated Playwright and Puppeteer for real browser automation
 - Test executions require target URL where tests will run
-- TestExecutor service interprets test steps and executes them in Chromium
+- TestExecutor service interprets test steps and executes them in headless browser
 - Captures screenshots, logs, and actual pass/fail results
 - Real-time execution monitoring with 3-second auto-refresh
 
