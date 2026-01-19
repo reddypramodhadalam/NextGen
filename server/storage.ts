@@ -18,6 +18,28 @@ import type {
   InsertTestReport,
   Requirement,
   InsertRequirement,
+  PlatformSetting,
+  InsertPlatformSetting,
+  Environment,
+  InsertEnvironment,
+  TestDataPool,
+  InsertTestDataPool,
+  VisualBaseline,
+  InsertVisualBaseline,
+  VisualComparison,
+  InsertVisualComparison,
+  PerformanceMetric,
+  InsertPerformanceMetric,
+  ApiMock,
+  InsertApiMock,
+  CicdWebhook,
+  InsertCicdWebhook,
+  Role,
+  InsertRole,
+  UserRole,
+  InsertUserRole,
+  MobileDevice,
+  InsertMobileDevice,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -74,6 +96,79 @@ export interface IStorage {
   getRequirement(id: string): Promise<Requirement | undefined>;
   createRequirement(requirement: InsertRequirement): Promise<Requirement>;
   updateRequirement(id: string, requirement: Partial<Requirement>): Promise<Requirement | undefined>;
+
+  // Platform Settings
+  getAllSettings(): Promise<PlatformSetting[]>;
+  getSettingsByCategory(category: string): Promise<PlatformSetting[]>;
+  getSetting(category: string, key: string): Promise<PlatformSetting | undefined>;
+  upsertSetting(setting: InsertPlatformSetting): Promise<PlatformSetting>;
+  deleteSetting(id: string): Promise<void>;
+
+  // Environments
+  getAllEnvironments(): Promise<Environment[]>;
+  getEnvironment(id: string): Promise<Environment | undefined>;
+  getEnvironmentByName(name: string): Promise<Environment | undefined>;
+  createEnvironment(env: InsertEnvironment): Promise<Environment>;
+  updateEnvironment(id: string, env: Partial<InsertEnvironment>): Promise<Environment | undefined>;
+  deleteEnvironment(id: string): Promise<void>;
+
+  // Test Data Pools
+  getAllTestDataPools(): Promise<TestDataPool[]>;
+  getTestDataPool(id: string): Promise<TestDataPool | undefined>;
+  createTestDataPool(pool: InsertTestDataPool): Promise<TestDataPool>;
+  updateTestDataPool(id: string, pool: Partial<InsertTestDataPool>): Promise<TestDataPool | undefined>;
+  deleteTestDataPool(id: string): Promise<void>;
+
+  // Visual Baselines
+  getAllVisualBaselines(): Promise<VisualBaseline[]>;
+  getVisualBaseline(id: string): Promise<VisualBaseline | undefined>;
+  getVisualBaselinesByTestCase(testCaseId: string): Promise<VisualBaseline[]>;
+  createVisualBaseline(baseline: InsertVisualBaseline): Promise<VisualBaseline>;
+  updateVisualBaseline(id: string, baseline: Partial<InsertVisualBaseline>): Promise<VisualBaseline | undefined>;
+  deleteVisualBaseline(id: string): Promise<void>;
+
+  // Visual Comparisons
+  getVisualComparisonsByExecution(executionId: string): Promise<VisualComparison[]>;
+  createVisualComparison(comparison: InsertVisualComparison): Promise<VisualComparison>;
+
+  // Performance Metrics
+  getPerformanceMetricsByExecution(executionId: string): Promise<PerformanceMetric[]>;
+  createPerformanceMetric(metric: InsertPerformanceMetric): Promise<PerformanceMetric>;
+
+  // API Mocks
+  getAllApiMocks(): Promise<ApiMock[]>;
+  getApiMock(id: string): Promise<ApiMock | undefined>;
+  getActiveApiMocks(): Promise<ApiMock[]>;
+  createApiMock(mock: InsertApiMock): Promise<ApiMock>;
+  updateApiMock(id: string, mock: Partial<InsertApiMock>): Promise<ApiMock | undefined>;
+  deleteApiMock(id: string): Promise<void>;
+
+  // CI/CD Webhooks
+  getAllCicdWebhooks(): Promise<CicdWebhook[]>;
+  getCicdWebhook(id: string): Promise<CicdWebhook | undefined>;
+  createCicdWebhook(webhook: InsertCicdWebhook): Promise<CicdWebhook>;
+  updateCicdWebhook(id: string, webhook: Partial<CicdWebhook>): Promise<CicdWebhook | undefined>;
+  deleteCicdWebhook(id: string): Promise<void>;
+
+  // Roles (RBAC)
+  getAllRoles(): Promise<Role[]>;
+  getRole(id: string): Promise<Role | undefined>;
+  getRoleByName(name: string): Promise<Role | undefined>;
+  createRole(role: InsertRole): Promise<Role>;
+  updateRole(id: string, role: Partial<InsertRole>): Promise<Role | undefined>;
+  deleteRole(id: string): Promise<void>;
+
+  // User Roles
+  getUserRoles(userId: string): Promise<UserRole[]>;
+  assignUserRole(userRole: InsertUserRole): Promise<UserRole>;
+  removeUserRole(userId: string, roleId: string): Promise<void>;
+
+  // Mobile Devices
+  getAllMobileDevices(): Promise<MobileDevice[]>;
+  getMobileDevice(id: string): Promise<MobileDevice | undefined>;
+  createMobileDevice(device: InsertMobileDevice): Promise<MobileDevice>;
+  updateMobileDevice(id: string, device: Partial<InsertMobileDevice>): Promise<MobileDevice | undefined>;
+  deleteMobileDevice(id: string): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -86,6 +181,17 @@ export class MemStorage implements IStorage {
   private scripts: Map<string, GeneratedScript> = new Map();
   private reports: Map<string, TestReport> = new Map();
   private requirements: Map<string, Requirement> = new Map();
+  private settings: Map<string, PlatformSetting> = new Map();
+  private environments: Map<string, Environment> = new Map();
+  private testDataPools: Map<string, TestDataPool> = new Map();
+  private visualBaselines: Map<string, VisualBaseline> = new Map();
+  private visualComparisons: Map<string, VisualComparison> = new Map();
+  private performanceMetrics: Map<string, PerformanceMetric> = new Map();
+  private apiMocks: Map<string, ApiMock> = new Map();
+  private cicdWebhooks: Map<string, CicdWebhook> = new Map();
+  private roles: Map<string, Role> = new Map();
+  private userRoles: Map<string, UserRole> = new Map();
+  private mobileDevices: Map<string, MobileDevice> = new Map();
 
   constructor() {
     // Seed with sample agents for demo
@@ -531,6 +637,443 @@ export class MemStorage implements IStorage {
     const updated: Requirement = { ...existing, ...requirement };
     this.requirements.set(id, updated);
     return updated;
+  }
+
+  // Platform Settings
+  async getAllSettings(): Promise<PlatformSetting[]> {
+    return Array.from(this.settings.values());
+  }
+
+  async getSettingsByCategory(category: string): Promise<PlatformSetting[]> {
+    return Array.from(this.settings.values()).filter(s => s.category === category);
+  }
+
+  async getSetting(category: string, key: string): Promise<PlatformSetting | undefined> {
+    return Array.from(this.settings.values()).find(s => s.category === category && s.key === key);
+  }
+
+  async upsertSetting(setting: InsertPlatformSetting): Promise<PlatformSetting> {
+    const existing = await this.getSetting(setting.category, setting.key);
+    const now = new Date();
+    if (existing) {
+      const updated: PlatformSetting = { ...existing, ...setting, updatedAt: now };
+      this.settings.set(existing.id, updated);
+      return updated;
+    }
+    const id = randomUUID();
+    const newSetting: PlatformSetting = {
+      id,
+      category: setting.category,
+      key: setting.key,
+      value: setting.value || null,
+      valueJson: setting.valueJson || null,
+      description: setting.description || null,
+      updatedAt: now,
+    };
+    this.settings.set(id, newSetting);
+    return newSetting;
+  }
+
+  async deleteSetting(id: string): Promise<void> {
+    this.settings.delete(id);
+  }
+
+  // Environments
+  async getAllEnvironments(): Promise<Environment[]> {
+    return Array.from(this.environments.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async getEnvironment(id: string): Promise<Environment | undefined> {
+    return this.environments.get(id);
+  }
+
+  async getEnvironmentByName(name: string): Promise<Environment | undefined> {
+    return Array.from(this.environments.values()).find(e => e.name === name);
+  }
+
+  async createEnvironment(env: InsertEnvironment): Promise<Environment> {
+    const id = randomUUID();
+    const now = new Date();
+    const environment: Environment = {
+      id,
+      name: env.name,
+      displayName: env.displayName,
+      baseUrl: env.baseUrl,
+      variables: env.variables || null,
+      headers: env.headers || null,
+      isDefault: env.isDefault || false,
+      isActive: env.isActive ?? true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.environments.set(id, environment);
+    return environment;
+  }
+
+  async updateEnvironment(id: string, env: Partial<InsertEnvironment>): Promise<Environment | undefined> {
+    const existing = this.environments.get(id);
+    if (!existing) return undefined;
+    const updated: Environment = { ...existing, ...env, updatedAt: new Date() };
+    this.environments.set(id, updated);
+    return updated;
+  }
+
+  async deleteEnvironment(id: string): Promise<void> {
+    this.environments.delete(id);
+  }
+
+  // Test Data Pools
+  async getAllTestDataPools(): Promise<TestDataPool[]> {
+    return Array.from(this.testDataPools.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async getTestDataPool(id: string): Promise<TestDataPool | undefined> {
+    return this.testDataPools.get(id);
+  }
+
+  async createTestDataPool(pool: InsertTestDataPool): Promise<TestDataPool> {
+    const id = randomUUID();
+    const now = new Date();
+    const dataPool: TestDataPool = {
+      id,
+      name: pool.name,
+      description: pool.description || null,
+      dataType: pool.dataType,
+      data: pool.data,
+      isShared: pool.isShared ?? true,
+      autoCleanup: pool.autoCleanup ?? false,
+      usageCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.testDataPools.set(id, dataPool);
+    return dataPool;
+  }
+
+  async updateTestDataPool(id: string, pool: Partial<InsertTestDataPool>): Promise<TestDataPool | undefined> {
+    const existing = this.testDataPools.get(id);
+    if (!existing) return undefined;
+    const updated: TestDataPool = { ...existing, ...pool, updatedAt: new Date() };
+    this.testDataPools.set(id, updated);
+    return updated;
+  }
+
+  async deleteTestDataPool(id: string): Promise<void> {
+    this.testDataPools.delete(id);
+  }
+
+  // Visual Baselines
+  async getAllVisualBaselines(): Promise<VisualBaseline[]> {
+    return Array.from(this.visualBaselines.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async getVisualBaseline(id: string): Promise<VisualBaseline | undefined> {
+    return this.visualBaselines.get(id);
+  }
+
+  async getVisualBaselinesByTestCase(testCaseId: string): Promise<VisualBaseline[]> {
+    return Array.from(this.visualBaselines.values()).filter(b => b.testCaseId === testCaseId);
+  }
+
+  async createVisualBaseline(baseline: InsertVisualBaseline): Promise<VisualBaseline> {
+    const id = randomUUID();
+    const now = new Date();
+    const vb: VisualBaseline = {
+      id,
+      testCaseId: baseline.testCaseId || null,
+      name: baseline.name,
+      selector: baseline.selector || null,
+      fullPage: baseline.fullPage ?? true,
+      baselineImage: baseline.baselineImage,
+      threshold: baseline.threshold ?? 5,
+      environmentId: baseline.environmentId || null,
+      viewport: baseline.viewport || null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.visualBaselines.set(id, vb);
+    return vb;
+  }
+
+  async updateVisualBaseline(id: string, baseline: Partial<InsertVisualBaseline>): Promise<VisualBaseline | undefined> {
+    const existing = this.visualBaselines.get(id);
+    if (!existing) return undefined;
+    const updated: VisualBaseline = { ...existing, ...baseline, updatedAt: new Date() };
+    this.visualBaselines.set(id, updated);
+    return updated;
+  }
+
+  async deleteVisualBaseline(id: string): Promise<void> {
+    this.visualBaselines.delete(id);
+  }
+
+  // Visual Comparisons
+  async getVisualComparisonsByExecution(executionId: string): Promise<VisualComparison[]> {
+    return Array.from(this.visualComparisons.values()).filter(c => c.executionId === executionId);
+  }
+
+  async createVisualComparison(comparison: InsertVisualComparison): Promise<VisualComparison> {
+    const id = randomUUID();
+    const now = new Date();
+    const vc: VisualComparison = {
+      id,
+      baselineId: comparison.baselineId || null,
+      executionId: comparison.executionId || null,
+      actualImage: comparison.actualImage,
+      diffImage: comparison.diffImage || null,
+      diffPercentage: comparison.diffPercentage ?? 0,
+      passed: comparison.passed ?? true,
+      createdAt: now,
+    };
+    this.visualComparisons.set(id, vc);
+    return vc;
+  }
+
+  // Performance Metrics
+  async getPerformanceMetricsByExecution(executionId: string): Promise<PerformanceMetric[]> {
+    return Array.from(this.performanceMetrics.values()).filter(m => m.executionId === executionId);
+  }
+
+  async createPerformanceMetric(metric: InsertPerformanceMetric): Promise<PerformanceMetric> {
+    const id = randomUUID();
+    const now = new Date();
+    const pm: PerformanceMetric = {
+      id,
+      executionId: metric.executionId || null,
+      testCaseId: metric.testCaseId || null,
+      url: metric.url || null,
+      lcp: metric.lcp || null,
+      fid: metric.fid || null,
+      cls: metric.cls || null,
+      fcp: metric.fcp || null,
+      ttfb: metric.ttfb || null,
+      domLoadTime: metric.domLoadTime || null,
+      pageLoadTime: metric.pageLoadTime || null,
+      resourceCount: metric.resourceCount || null,
+      totalResourceSize: metric.totalResourceSize || null,
+      jsHeapSize: metric.jsHeapSize || null,
+      requestCount: metric.requestCount || null,
+      transferSize: metric.transferSize || null,
+      createdAt: now,
+    };
+    this.performanceMetrics.set(id, pm);
+    return pm;
+  }
+
+  // API Mocks
+  async getAllApiMocks(): Promise<ApiMock[]> {
+    return Array.from(this.apiMocks.values()).sort((a, b) => b.priority - a.priority);
+  }
+
+  async getApiMock(id: string): Promise<ApiMock | undefined> {
+    return this.apiMocks.get(id);
+  }
+
+  async getActiveApiMocks(): Promise<ApiMock[]> {
+    return Array.from(this.apiMocks.values())
+      .filter(m => m.isActive)
+      .sort((a, b) => b.priority - a.priority);
+  }
+
+  async createApiMock(mock: InsertApiMock): Promise<ApiMock> {
+    const id = randomUUID();
+    const now = new Date();
+    const am: ApiMock = {
+      id,
+      name: mock.name,
+      description: mock.description || null,
+      method: mock.method,
+      urlPattern: mock.urlPattern,
+      requestHeaders: mock.requestHeaders || null,
+      requestBody: mock.requestBody || null,
+      responseStatus: mock.responseStatus ?? 200,
+      responseHeaders: mock.responseHeaders || null,
+      responseBody: mock.responseBody || null,
+      delay: mock.delay ?? 0,
+      isActive: mock.isActive ?? true,
+      priority: mock.priority ?? 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.apiMocks.set(id, am);
+    return am;
+  }
+
+  async updateApiMock(id: string, mock: Partial<InsertApiMock>): Promise<ApiMock | undefined> {
+    const existing = this.apiMocks.get(id);
+    if (!existing) return undefined;
+    const updated: ApiMock = { ...existing, ...mock, updatedAt: new Date() };
+    this.apiMocks.set(id, updated);
+    return updated;
+  }
+
+  async deleteApiMock(id: string): Promise<void> {
+    this.apiMocks.delete(id);
+  }
+
+  // CI/CD Webhooks
+  async getAllCicdWebhooks(): Promise<CicdWebhook[]> {
+    return Array.from(this.cicdWebhooks.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async getCicdWebhook(id: string): Promise<CicdWebhook | undefined> {
+    return this.cicdWebhooks.get(id);
+  }
+
+  async createCicdWebhook(webhook: InsertCicdWebhook): Promise<CicdWebhook> {
+    const id = randomUUID();
+    const now = new Date();
+    const wh: CicdWebhook = {
+      id,
+      name: webhook.name,
+      provider: webhook.provider,
+      webhookUrl: webhook.webhookUrl || null,
+      secretToken: webhook.secretToken || null,
+      suiteId: webhook.suiteId || null,
+      environmentId: webhook.environmentId || null,
+      triggerOn: webhook.triggerOn || null,
+      isActive: webhook.isActive ?? true,
+      lastTriggered: null,
+      createdAt: now,
+    };
+    this.cicdWebhooks.set(id, wh);
+    return wh;
+  }
+
+  async updateCicdWebhook(id: string, webhook: Partial<CicdWebhook>): Promise<CicdWebhook | undefined> {
+    const existing = this.cicdWebhooks.get(id);
+    if (!existing) return undefined;
+    const updated: CicdWebhook = { ...existing, ...webhook };
+    this.cicdWebhooks.set(id, updated);
+    return updated;
+  }
+
+  async deleteCicdWebhook(id: string): Promise<void> {
+    this.cicdWebhooks.delete(id);
+  }
+
+  // Roles (RBAC)
+  async getAllRoles(): Promise<Role[]> {
+    return Array.from(this.roles.values());
+  }
+
+  async getRole(id: string): Promise<Role | undefined> {
+    return this.roles.get(id);
+  }
+
+  async getRoleByName(name: string): Promise<Role | undefined> {
+    return Array.from(this.roles.values()).find(r => r.name === name);
+  }
+
+  async createRole(role: InsertRole): Promise<Role> {
+    const id = randomUUID();
+    const now = new Date();
+    const r: Role = {
+      id,
+      name: role.name,
+      displayName: role.displayName,
+      description: role.description || null,
+      permissions: role.permissions,
+      isSystem: false,
+      createdAt: now,
+    };
+    this.roles.set(id, r);
+    return r;
+  }
+
+  async updateRole(id: string, role: Partial<InsertRole>): Promise<Role | undefined> {
+    const existing = this.roles.get(id);
+    if (!existing || existing.isSystem) return undefined;
+    const updated: Role = { ...existing, ...role };
+    this.roles.set(id, updated);
+    return updated;
+  }
+
+  async deleteRole(id: string): Promise<void> {
+    const role = this.roles.get(id);
+    if (role && !role.isSystem) {
+      this.roles.delete(id);
+    }
+  }
+
+  // User Roles
+  async getUserRoles(userId: string): Promise<UserRole[]> {
+    return Array.from(this.userRoles.values()).filter(ur => ur.userId === userId);
+  }
+
+  async assignUserRole(userRole: InsertUserRole): Promise<UserRole> {
+    const id = randomUUID();
+    const now = new Date();
+    const ur: UserRole = {
+      id,
+      userId: userRole.userId,
+      roleId: userRole.roleId,
+      assignedAt: now,
+    };
+    this.userRoles.set(id, ur);
+    return ur;
+  }
+
+  async removeUserRole(userId: string, roleId: string): Promise<void> {
+    for (const [id, ur] of this.userRoles) {
+      if (ur.userId === userId && ur.roleId === roleId) {
+        this.userRoles.delete(id);
+        break;
+      }
+    }
+  }
+
+  // Mobile Devices
+  async getAllMobileDevices(): Promise<MobileDevice[]> {
+    return Array.from(this.mobileDevices.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async getMobileDevice(id: string): Promise<MobileDevice | undefined> {
+    return this.mobileDevices.get(id);
+  }
+
+  async createMobileDevice(device: InsertMobileDevice): Promise<MobileDevice> {
+    const id = randomUUID();
+    const now = new Date();
+    const md: MobileDevice = {
+      id,
+      name: device.name,
+      platform: device.platform,
+      platformVersion: device.platformVersion || null,
+      deviceName: device.deviceName,
+      udid: device.udid || null,
+      appPath: device.appPath || null,
+      appPackage: device.appPackage || null,
+      appActivity: device.appActivity || null,
+      bundleId: device.bundleId || null,
+      automationName: device.automationName || "XCUITest",
+      isReal: device.isReal ?? false,
+      isAvailable: device.isAvailable ?? true,
+      capabilities: device.capabilities || null,
+      createdAt: now,
+    };
+    this.mobileDevices.set(id, md);
+    return md;
+  }
+
+  async updateMobileDevice(id: string, device: Partial<InsertMobileDevice>): Promise<MobileDevice | undefined> {
+    const existing = this.mobileDevices.get(id);
+    if (!existing) return undefined;
+    const updated: MobileDevice = { ...existing, ...device };
+    this.mobileDevices.set(id, updated);
+    return updated;
+  }
+
+  async deleteMobileDevice(id: string): Promise<void> {
+    this.mobileDevices.delete(id);
   }
 }
 

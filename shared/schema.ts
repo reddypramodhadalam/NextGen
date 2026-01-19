@@ -215,3 +215,265 @@ export const insertRequirementSchema = createInsertSchema(requirements).omit({
 
 export type InsertRequirement = z.infer<typeof insertRequirementSchema>;
 export type Requirement = typeof requirements.$inferSelect;
+
+// ========================================
+// REAL-WORLD ENTERPRISE ENHANCEMENTS
+// ========================================
+
+// Platform Settings (persisted)
+export const platformSettings = pgTable("platform_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  category: text("category").notNull(), // notifications, execution, reporting, security
+  key: text("key").notNull(),
+  value: text("value"),
+  valueJson: jsonb("value_json"),
+  description: text("description"),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertPlatformSettingSchema = createInsertSchema(platformSettings).omit({
+  id: true,
+  updatedAt: true,
+});
+
+export type InsertPlatformSetting = z.infer<typeof insertPlatformSettingSchema>;
+export type PlatformSetting = typeof platformSettings.$inferSelect;
+
+// Environments (multi-environment support)
+export const environments = pgTable("environments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(), // development, staging, production
+  displayName: text("display_name").notNull(),
+  baseUrl: text("base_url").notNull(),
+  variables: jsonb("variables").$type<Record<string, string>>(),
+  headers: jsonb("headers").$type<Record<string, string>>(),
+  isDefault: boolean("is_default").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertEnvironmentSchema = createInsertSchema(environments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertEnvironment = z.infer<typeof insertEnvironmentSchema>;
+export type Environment = typeof environments.$inferSelect;
+
+// Test Data Pools (reusable test data management)
+export const testDataPools = pgTable("test_data_pools", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  dataType: text("data_type").notNull(), // user, product, payment, address, custom
+  data: jsonb("data").$type<Record<string, any>[]>().notNull(),
+  isShared: boolean("is_shared").default(true),
+  autoCleanup: boolean("auto_cleanup").default(false),
+  usageCount: integer("usage_count").default(0),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertTestDataPoolSchema = createInsertSchema(testDataPools).omit({
+  id: true,
+  usageCount: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertTestDataPool = z.infer<typeof insertTestDataPoolSchema>;
+export type TestDataPool = typeof testDataPools.$inferSelect;
+
+// Visual Baselines (visual regression testing)
+export const visualBaselines = pgTable("visual_baselines", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  testCaseId: varchar("test_case_id").references(() => testCases.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  selector: text("selector"), // CSS selector for element comparison
+  fullPage: boolean("full_page").default(true),
+  baselineImage: text("baseline_image").notNull(), // base64 encoded
+  threshold: integer("threshold").default(5), // percentage difference allowed
+  environmentId: varchar("environment_id").references(() => environments.id),
+  viewport: jsonb("viewport").$type<{ width: number; height: number }>(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertVisualBaselineSchema = createInsertSchema(visualBaselines).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertVisualBaseline = z.infer<typeof insertVisualBaselineSchema>;
+export type VisualBaseline = typeof visualBaselines.$inferSelect;
+
+// Visual Comparison Results
+export const visualComparisons = pgTable("visual_comparisons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  baselineId: varchar("baseline_id").references(() => visualBaselines.id, { onDelete: "cascade" }),
+  executionId: varchar("execution_id").references(() => testExecutions.id, { onDelete: "cascade" }),
+  actualImage: text("actual_image").notNull(), // base64 encoded
+  diffImage: text("diff_image"), // base64 encoded difference
+  diffPercentage: integer("diff_percentage").default(0),
+  passed: boolean("passed").default(true),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertVisualComparisonSchema = createInsertSchema(visualComparisons).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertVisualComparison = z.infer<typeof insertVisualComparisonSchema>;
+export type VisualComparison = typeof visualComparisons.$inferSelect;
+
+// Performance Metrics
+export const performanceMetrics = pgTable("performance_metrics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  executionId: varchar("execution_id").references(() => testExecutions.id, { onDelete: "cascade" }),
+  testCaseId: varchar("test_case_id").references(() => testCases.id, { onDelete: "cascade" }),
+  url: text("url"),
+  // Core Web Vitals
+  lcp: integer("lcp"), // Largest Contentful Paint (ms)
+  fid: integer("fid"), // First Input Delay (ms)
+  cls: integer("cls"), // Cumulative Layout Shift (x1000 for precision)
+  fcp: integer("fcp"), // First Contentful Paint (ms)
+  ttfb: integer("ttfb"), // Time to First Byte (ms)
+  // Resource metrics
+  domLoadTime: integer("dom_load_time"),
+  pageLoadTime: integer("page_load_time"),
+  resourceCount: integer("resource_count"),
+  totalResourceSize: integer("total_resource_size"), // bytes
+  // Memory
+  jsHeapSize: integer("js_heap_size"), // bytes
+  // Network
+  requestCount: integer("request_count"),
+  transferSize: integer("transfer_size"), // bytes
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertPerformanceMetricSchema = createInsertSchema(performanceMetrics).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertPerformanceMetric = z.infer<typeof insertPerformanceMetricSchema>;
+export type PerformanceMetric = typeof performanceMetrics.$inferSelect;
+
+// API Mocks (service virtualization)
+export const apiMocks = pgTable("api_mocks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  method: text("method").notNull(), // GET, POST, PUT, DELETE, PATCH
+  urlPattern: text("url_pattern").notNull(), // regex pattern to match
+  requestHeaders: jsonb("request_headers").$type<Record<string, string>>(),
+  requestBody: jsonb("request_body"),
+  responseStatus: integer("response_status").default(200),
+  responseHeaders: jsonb("response_headers").$type<Record<string, string>>(),
+  responseBody: jsonb("response_body"),
+  delay: integer("delay").default(0), // simulated delay in ms
+  isActive: boolean("is_active").default(true),
+  priority: integer("priority").default(0), // higher priority mocks matched first
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertApiMockSchema = createInsertSchema(apiMocks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertApiMock = z.infer<typeof insertApiMockSchema>;
+export type ApiMock = typeof apiMocks.$inferSelect;
+
+// CI/CD Webhooks
+export const cicdWebhooks = pgTable("cicd_webhooks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  provider: text("provider").notNull(), // github, gitlab, jenkins, azure-devops, custom
+  webhookUrl: text("webhook_url"),
+  secretToken: text("secret_token"),
+  suiteId: varchar("suite_id").references(() => testSuites.id, { onDelete: "cascade" }),
+  environmentId: varchar("environment_id").references(() => environments.id),
+  triggerOn: text("trigger_on").array(), // push, pull_request, tag, manual
+  isActive: boolean("is_active").default(true),
+  lastTriggered: timestamp("last_triggered"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertCicdWebhookSchema = createInsertSchema(cicdWebhooks).omit({
+  id: true,
+  lastTriggered: true,
+  createdAt: true,
+});
+
+export type InsertCicdWebhook = z.infer<typeof insertCicdWebhookSchema>;
+export type CicdWebhook = typeof cicdWebhooks.$inferSelect;
+
+// Roles (RBAC)
+export const roles = pgTable("roles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  permissions: text("permissions").array().notNull(), // view, create, edit, delete, execute, admin
+  isSystem: boolean("is_system").default(false), // system roles cannot be deleted
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertRoleSchema = createInsertSchema(roles).omit({
+  id: true,
+  isSystem: true,
+  createdAt: true,
+});
+
+export type InsertRole = z.infer<typeof insertRoleSchema>;
+export type Role = typeof roles.$inferSelect;
+
+// User Roles (many-to-many)
+export const userRoles = pgTable("user_roles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+  roleId: varchar("role_id").references(() => roles.id, { onDelete: "cascade" }).notNull(),
+  assignedAt: timestamp("assigned_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertUserRoleSchema = createInsertSchema(userRoles).omit({
+  id: true,
+  assignedAt: true,
+});
+
+export type InsertUserRole = z.infer<typeof insertUserRoleSchema>;
+export type UserRole = typeof userRoles.$inferSelect;
+
+// Mobile Device Configurations (Appium)
+export const mobileDevices = pgTable("mobile_devices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  platform: text("platform").notNull(), // ios, android
+  platformVersion: text("platform_version"),
+  deviceName: text("device_name").notNull(),
+  udid: text("udid"), // Unique device identifier
+  appPath: text("app_path"), // Path to .app or .apk
+  appPackage: text("app_package"), // Android package name
+  appActivity: text("app_activity"), // Android activity
+  bundleId: text("bundle_id"), // iOS bundle ID
+  automationName: text("automation_name").default("XCUITest"), // XCUITest, UiAutomator2
+  isReal: boolean("is_real").default(false), // real device vs simulator
+  isAvailable: boolean("is_available").default(true),
+  capabilities: jsonb("capabilities").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertMobileDeviceSchema = createInsertSchema(mobileDevices).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertMobileDevice = z.infer<typeof insertMobileDeviceSchema>;
+export type MobileDevice = typeof mobileDevices.$inferSelect;
