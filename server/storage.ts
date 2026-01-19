@@ -767,6 +767,16 @@ export class MemStorage implements IStorage {
   async createEnvironment(env: InsertEnvironment): Promise<Environment> {
     const id = randomUUID();
     const now = new Date();
+    
+    // If setting this as default, clear other defaults
+    if (env.isDefault) {
+      for (const [existingId, existingEnv] of this.environments) {
+        if (existingEnv.isDefault) {
+          this.environments.set(existingId, { ...existingEnv, isDefault: false, updatedAt: now });
+        }
+      }
+    }
+    
     const environment: Environment = {
       id,
       name: env.name,
@@ -786,7 +796,19 @@ export class MemStorage implements IStorage {
   async updateEnvironment(id: string, env: Partial<InsertEnvironment>): Promise<Environment | undefined> {
     const existing = this.environments.get(id);
     if (!existing) return undefined;
-    const updated: Environment = { ...existing, ...env, updatedAt: new Date() };
+    
+    const now = new Date();
+    
+    // If setting this as default, clear other defaults
+    if (env.isDefault) {
+      for (const [existingId, existingEnv] of this.environments) {
+        if (existingId !== id && existingEnv.isDefault) {
+          this.environments.set(existingId, { ...existingEnv, isDefault: false, updatedAt: now });
+        }
+      }
+    }
+    
+    const updated: Environment = { ...existing, ...env, updatedAt: now };
     this.environments.set(id, updated);
     return updated;
   }

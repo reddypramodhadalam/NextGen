@@ -124,9 +124,55 @@ Pre-built integration modules in `server/replit_integrations/`:
 - Captures screenshots, logs, and actual pass/fail results
 - Real-time execution monitoring with 3-second auto-refresh
 
+### Enterprise Features (Latest)
+
+#### Multi-Environment Support
+- Environments page at /environments with full CRUD operations
+- Pre-seeded environments: development, staging (default), production
+- Each environment has: name, displayName, baseUrl, variables, headers
+- Single default environment enforced at storage level
+- Environment variables can be configured per environment
+- API: GET/POST /api/environments, GET/PATCH/DELETE /api/environments/:id
+
+#### Platform Settings with Database Persistence
+- Settings page at /settings with real-time persistence
+- Settings organized by category: notifications, execution, reporting
+- Category/key/value structure with optional JSON for complex values
+- Settings applied to all test executions
+- Unsaved changes indicator and save confirmation
+- API: GET /api/settings, POST /api/settings/bulk
+
+#### Report Export
+- Export reports in HTML, JSON, or JUnit XML formats
+- HTML reports have professional styling with pass rate visualization
+- JSON exports include execution summaries and detailed data
+- JUnit XML for CI/CD integration
+
+#### Role-Based Access Control (RBAC)
+- Pre-seeded roles: admin (full access), tester (view/create/execute), viewer (read-only)
+- Roles have permissions array: view, create, edit, delete, execute, admin
+- System roles marked as isSystem=true
+- API: GET/POST /api/roles, GET/PATCH/DELETE /api/roles/:id
+
+#### CI/CD Integration
+- Webhook endpoints for triggering test runs
+- Configuration generators for GitHub Actions, GitLab CI, Jenkins
+- API: GET /api/cicd/config/:provider, POST /api/webhooks/trigger
+
+#### Additional Enterprise Schemas
+- Test Data Pools: Reusable data sets for parameterized testing
+- Visual Baselines/Comparisons: Screenshot comparison for visual regression
+- Performance Metrics: Load time, memory, network metrics tracking
+- API Mocks: Service virtualization with request/response patterns
+- Mobile Devices: Appium device configuration management
+
 ### API Endpoints
 Key endpoints include:
 - POST /api/generate-tests - AI test case generation from requirements
 - POST /api/generate-script - AI script generation for Playwright/Cypress/Selenium/Puppeteer
 - POST /api/executions - Start test execution with target URL
 - GET /api/executions/:id/results - Get individual test results
+- GET/POST /api/environments - Multi-environment management
+- POST /api/settings/bulk - Bulk save platform settings
+- GET/POST /api/roles - RBAC role management
+- GET /api/cicd/config/:provider - CI/CD config generation

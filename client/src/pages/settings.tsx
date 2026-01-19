@@ -82,7 +82,7 @@ const defaultSettings: SettingsState = {
 };
 
 function parseSettingsFromApi(apiSettings: PlatformSetting[]): SettingsState {
-  const result = { ...defaultSettings };
+  const result = structuredClone(defaultSettings);
   
   for (const setting of apiSettings) {
     const { category, key, value, valueJson } = setting;
