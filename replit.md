@@ -82,7 +82,21 @@ Pre-built integration modules in `server/replit_integrations/`:
 
 ## Recent Changes
 
-### Test Data Parameters & Selenium Support (Latest)
+### Autonomous Agentic AI Testing (Latest)
+- Added autonomous agent mode for continuous background testing
+- Agents can be configured with:
+  - Target URL for testing
+  - Test Suite to execute
+  - Schedule interval (1, 5, 15, 30, 60 minutes)
+  - Self-healing capability using GPT-4o
+  - Max retries for self-healing attempts
+- Start/Stop controls in agent cards for running autonomous agents
+- Agents run in background and execute tests on schedule
+- Self-healing uses AI to suggest alternative steps when tests fail
+- API endpoints: POST /api/agents/:id/start, POST /api/agents/:id/stop, GET /api/agents/:id/status
+- New schema fields: isAutonomous, targetUrl, suiteId, scheduleInterval, maxRetries, selfHealingEnabled
+
+### Test Data Parameters & Selenium Support
 - Added test data parameters feature for supplying execution-time values
 - Users can add key-value pairs (username, password, etc.) when starting tests
 - Test data supports types: text, password, email, url, number

@@ -273,6 +273,46 @@ export async function registerRoutes(
     }
   });
 
+  // Autonomous Agent Control
+  app.post("/api/agents/:id/start", async (req: Request, res: Response) => {
+    try {
+      const { autonomousRunner } = await import("./autonomous-agent");
+      await autonomousRunner.startAgent(req.params.id);
+      res.json({ success: true, message: "Agent started" });
+    } catch (error) {
+      console.error("Error starting agent:", error);
+      res.status(500).json({ error: "Failed to start agent" });
+    }
+  });
+
+  app.post("/api/agents/:id/stop", async (req: Request, res: Response) => {
+    try {
+      const { autonomousRunner } = await import("./autonomous-agent");
+      await autonomousRunner.stopAgent(req.params.id);
+      res.json({ success: true, message: "Agent stopped" });
+    } catch (error) {
+      console.error("Error stopping agent:", error);
+      res.status(500).json({ error: "Failed to stop agent" });
+    }
+  });
+
+  app.get("/api/agents/:id/status", async (req: Request, res: Response) => {
+    try {
+      const { autonomousRunner } = await import("./autonomous-agent");
+      const isRunning = autonomousRunner.isAgentRunning(req.params.id);
+      const agent = await storage.getAgent(req.params.id);
+      res.json({ 
+        isRunning, 
+        status: agent?.status,
+        lastHeartbeat: agent?.lastHeartbeat,
+        isAutonomous: agent?.isAutonomous
+      });
+    } catch (error) {
+      console.error("Error getting agent status:", error);
+      res.status(500).json({ error: "Failed to get agent status" });
+    }
+  });
+
   // Test Executions
   app.get("/api/executions", async (req: Request, res: Response) => {
     try {

@@ -69,8 +69,18 @@ export const testAgents = pgTable("test_agents", {
   name: text("name").notNull(),
   description: text("description"),
   type: text("type").notNull(), // browser, api, mobile
-  status: text("status").default("offline"), // online, offline, busy
+  status: text("status").default("offline"), // online, offline, busy, running
   capabilities: text("capabilities").array(),
+  // Autonomous agent settings
+  isAutonomous: boolean("is_autonomous").default(false), // Enable autonomous mode
+  targetUrl: text("target_url"), // Default URL to test
+  suiteId: varchar("suite_id").references(() => testSuites.id), // Suite to run
+  scheduleInterval: integer("schedule_interval"), // Run every N minutes (null = continuous)
+  maxRetries: integer("max_retries").default(3), // Self-healing retries
+  selfHealingEnabled: boolean("self_healing_enabled").default(true), // AI self-healing
+  notifyOnFailure: boolean("notify_on_failure").default(true),
+  lastRunAt: timestamp("last_run_at"),
+  nextRunAt: timestamp("next_run_at"),
   lastHeartbeat: timestamp("last_heartbeat"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -78,6 +88,8 @@ export const testAgents = pgTable("test_agents", {
 export const insertTestAgentSchema = createInsertSchema(testAgents).omit({
   id: true,
   lastHeartbeat: true,
+  lastRunAt: true,
+  nextRunAt: true,
   createdAt: true,
 });
 

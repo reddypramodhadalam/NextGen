@@ -103,6 +103,15 @@ export class MemStorage implements IStorage {
       type: "browser",
       status: "online",
       capabilities: ["screenshot", "video", "network-logging"],
+      isAutonomous: false,
+      targetUrl: null,
+      suiteId: null,
+      scheduleInterval: null,
+      maxRetries: 3,
+      selfHealingEnabled: true,
+      notifyOnFailure: true,
+      lastRunAt: null,
+      nextRunAt: null,
       lastHeartbeat: now,
       createdAt: now,
     };
@@ -113,6 +122,15 @@ export class MemStorage implements IStorage {
       type: "api",
       status: "online",
       capabilities: ["performance-metrics", "network-logging"],
+      isAutonomous: false,
+      targetUrl: null,
+      suiteId: null,
+      scheduleInterval: null,
+      maxRetries: 3,
+      selfHealingEnabled: true,
+      notifyOnFailure: true,
+      lastRunAt: null,
+      nextRunAt: null,
       lastHeartbeat: now,
       createdAt: now,
     };
@@ -123,6 +141,15 @@ export class MemStorage implements IStorage {
       type: "mobile",
       status: "offline",
       capabilities: ["screenshot", "video"],
+      isAutonomous: false,
+      targetUrl: null,
+      suiteId: null,
+      scheduleInterval: null,
+      maxRetries: 3,
+      selfHealingEnabled: true,
+      notifyOnFailure: true,
+      lastRunAt: null,
+      nextRunAt: null,
       lastHeartbeat: null,
       createdAt: now,
     };
@@ -316,6 +343,15 @@ export class MemStorage implements IStorage {
       type: agent.type,
       status: agent.status || "offline",
       capabilities: agent.capabilities || null,
+      isAutonomous: agent.isAutonomous || false,
+      targetUrl: agent.targetUrl || null,
+      suiteId: agent.suiteId || null,
+      scheduleInterval: agent.scheduleInterval || null,
+      maxRetries: agent.maxRetries ?? 3,
+      selfHealingEnabled: agent.selfHealingEnabled ?? true,
+      notifyOnFailure: agent.notifyOnFailure ?? true,
+      lastRunAt: null,
+      nextRunAt: null,
       lastHeartbeat: null,
       createdAt: now,
     };
@@ -323,7 +359,7 @@ export class MemStorage implements IStorage {
     return testAgent;
   }
 
-  async updateAgent(id: string, agent: Partial<InsertTestAgent>): Promise<TestAgent | undefined> {
+  async updateAgent(id: string, agent: Partial<TestAgent>): Promise<TestAgent | undefined> {
     const existing = this.agents.get(id);
     if (!existing) return undefined;
     const updated: TestAgent = { ...existing, ...agent };
