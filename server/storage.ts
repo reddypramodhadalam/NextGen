@@ -148,6 +148,7 @@ export class MemStorage implements IStorage {
       title: "User can log in with valid credentials",
       description: "Verify that users can log in with correct email and password",
       preconditions: "User account exists in the system",
+      targetUrl: null,
       steps: [
         { step: "Navigate to login page", expected: "Login form is displayed" },
         { step: "Enter valid email", expected: "Email field accepts input" },
@@ -167,6 +168,7 @@ export class MemStorage implements IStorage {
       title: "Error message shown for invalid credentials",
       description: "Verify error handling for incorrect login attempts",
       preconditions: null,
+      targetUrl: null,
       steps: [
         { step: "Navigate to login page", expected: "Login form is displayed" },
         { step: "Enter invalid email", expected: "Email field accepts input" },
@@ -268,6 +270,7 @@ export class MemStorage implements IStorage {
       title: testCase.title,
       description: testCase.description || null,
       preconditions: testCase.preconditions || null,
+      targetUrl: testCase.targetUrl || null,
       steps: testCase.steps || null,
       priority: testCase.priority || "medium",
       status: testCase.status || "active",
@@ -350,6 +353,7 @@ export class MemStorage implements IStorage {
       id,
       suiteId: execution.suiteId || null,
       agentId: execution.agentId || null,
+      targetUrl: execution.targetUrl || null,
       status: execution.status || "pending",
       environment: execution.environment || "staging",
       totalTests: execution.totalTests || 0,

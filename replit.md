@@ -76,5 +76,28 @@ Pre-built integration modules in `server/replit_integrations/`:
 - `@tanstack/react-query`: Data fetching and caching
 - `zod`: Schema validation
 - `wouter`: Client-side routing
+- `playwright`: Real browser automation for test execution
 - Radix UI primitives: Accessible UI components
 - `lucide-react`: Icon library
+
+## Recent Changes
+
+### Test Case Import/Export (Latest)
+- Added JSON import functionality: POST /api/test-cases/import
+- Added JSON export functionality: GET /api/test-cases/export  
+- Repository page has Import/Export buttons with dialog UI
+- Supports importing to specific test suites or unassigned
+
+### Real Browser Test Execution
+- Integrated Playwright for real browser automation
+- Test executions require target URL where tests will run
+- TestExecutor service interprets test steps and executes them in Chromium
+- Captures screenshots, logs, and actual pass/fail results
+- Real-time execution monitoring with 3-second auto-refresh
+
+### API Endpoints
+Key endpoints include:
+- POST /api/generate-tests - AI test case generation from requirements
+- POST /api/generate-script - AI script generation for Playwright/Cypress/Selenium/Puppeteer
+- POST /api/executions - Start test execution with target URL
+- GET /api/executions/:id/results - Get individual test results

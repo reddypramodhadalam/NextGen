@@ -34,6 +34,9 @@ import {
   MoreVertical,
   Trash2,
   Loader2,
+  Upload,
+  Download,
+  FileJson,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -49,6 +52,9 @@ export default function Repository() {
   const [newSuiteName, setNewSuiteName] = useState("");
   const [newSuiteDescription, setNewSuiteDescription] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importJson, setImportJson] = useState("");
+  const [selectedImportSuite, setSelectedImportSuite] = useState("");
   const [expandedSuites, setExpandedSuites] = useState<string[]>([]);
 
   const { data: suites = [], isLoading: suitesLoading } = useQuery<TestSuite[]>({
@@ -103,6 +109,57 @@ export default function Repository() {
     },
   });
 
+  const importMutation = useMutation({
+    mutationFn: async (data: { suiteId: string | null; testCases: any[] }) => {
+      const res = await apiRequest("POST", "/api/test-cases/import", data);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/test-cases"] });
+      toast({ title: "Import Successful", description: data.message });
+      setImportDialogOpen(false);
+      setImportJson("");
+      setSelectedImportSuite("");
+    },
+    onError: (error: any) => {
+      toast({ title: "Import Failed", description: error.message || "Failed to import test cases.", variant: "destructive" });
+    },
+  });
+
+  const handleImport = () => {
+    try {
+      const parsed = JSON.parse(importJson);
+      const testCasesToImport = Array.isArray(parsed) ? parsed : parsed.testCases || [parsed];
+      if (testCasesToImport.length === 0) {
+        toast({ title: "Invalid Format", description: "No test cases found in JSON.", variant: "destructive" });
+        return;
+      }
+      importMutation.mutate({
+        suiteId: selectedImportSuite || null,
+        testCases: testCasesToImport,
+      });
+    } catch {
+      toast({ title: "Invalid JSON", description: "Please check your JSON format.", variant: "destructive" });
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const res = await fetch("/api/test-cases/export");
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "test-cases-export.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Export Complete", description: `Exported ${data.length} test cases.` });
+    } catch {
+      toast({ title: "Export Failed", description: "Failed to export test cases.", variant: "destructive" });
+    }
+  };
+
   const getTestCasesForSuite = (suiteId: string) =>
     testCases.filter((tc) => tc.suiteId === suiteId);
 
@@ -142,13 +199,92 @@ export default function Repository() {
             Organize and manage your test suites and cases
           </p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-create-suite">
-              <Plus className="h-4 w-4 mr-2" />
-              New Suite
-            </Button>
-          </DialogTrigger>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" onClick={handleExport} data-testid="button-export-tests">
+            <Download className="h-4 w-4 mr-2" />
+            Export
+          </Button>
+          <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" data-testid="button-import-tests">
+                <Upload className="h-4 w-4 mr-2" />
+                Import
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <FileJson className="h-5 w-5" />
+                  Import Test Cases
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 pt-4">
+                <div className="space-y-2">
+                  <Label>Target Suite (optional)</Label>
+                  <select
+                    className="w-full border rounded-md p-2 bg-background"
+                    value={selectedImportSuite}
+                    onChange={(e) => setSelectedImportSuite(e.target.value)}
+                    data-testid="select-import-suite"
+                  >
+                    <option value="">Unassigned</option>
+                    {suites.map((suite) => (
+                      <option key={suite.id} value={suite.id}>{suite.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label>JSON Data</Label>
+                  <Textarea
+                    placeholder={`Paste your JSON test cases here...
+
+Example format:
+[
+  {
+    "title": "Test login functionality",
+    "description": "Verify user can log in",
+    "steps": [
+      { "step": "Navigate to login page", "expected": "Login form is displayed" },
+      { "step": "Enter credentials", "expected": "Credentials are accepted" }
+    ],
+    "priority": "high",
+    "tags": ["login", "auth"]
+  }
+]`}
+                    value={importJson}
+                    onChange={(e) => setImportJson(e.target.value)}
+                    className="min-h-[200px] font-mono text-sm"
+                    data-testid="textarea-import-json"
+                  />
+                </div>
+                <Button
+                  onClick={handleImport}
+                  disabled={!importJson.trim() || importMutation.isPending}
+                  className="w-full"
+                  data-testid="button-confirm-import"
+                >
+                  {importMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Importing...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Import Test Cases
+                    </>
+                  )}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-create-suite">
+                <Plus className="h-4 w-4 mr-2" />
+                New Suite
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create Test Suite</DialogTitle>
@@ -192,6 +328,7 @@ export default function Repository() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <div className="relative">

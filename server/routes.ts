@@ -9,6 +9,7 @@ import {
   insertTestAgentSchema,
   insertTestExecutionSchema,
 } from "@shared/schema";
+import { testExecutor } from "./test-executor";
 
 // Partial schemas for PATCH operations
 const partialTestSuiteSchema = insertTestSuiteSchema.partial();
@@ -30,7 +31,24 @@ const generateScriptSchema = z.object({
 const createExecutionSchema = z.object({
   suiteId: z.string().optional().nullable(),
   agentId: z.string().optional().nullable(),
+  targetUrl: z.string().url("Valid URL is required"),
   environment: z.enum(["development", "staging", "production"]).optional(),
+});
+
+const importTestCasesSchema = z.object({
+  suiteId: z.string().optional().nullable(),
+  testCases: z.array(z.object({
+    title: z.string().min(1),
+    description: z.string().optional(),
+    preconditions: z.string().optional(),
+    targetUrl: z.string().optional(),
+    steps: z.array(z.object({
+      step: z.string(),
+      expected: z.string(),
+    })).optional(),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+    tags: z.array(z.string()).optional(),
+  })),
 });
 
 const openai = new OpenAI({
@@ -276,31 +294,37 @@ export async function registerRoutes(
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const { suiteId, agentId, environment } = validation.data;
+      const { suiteId, agentId, environment, targetUrl } = validation.data;
 
       // Get test cases for the suite
       const testCases = suiteId 
         ? await storage.getTestCasesBySuite(suiteId)
         : await storage.getAllTestCases();
 
+      if (testCases.length === 0) {
+        return res.status(400).json({ error: "No test cases found to execute" });
+      }
+
       const execution = await storage.createExecution({
         suiteId: suiteId ?? undefined,
         agentId: agentId ?? undefined,
+        targetUrl,
         environment: environment ?? "staging",
-        status: "running",
+        status: "pending",
         totalTests: testCases.length,
         passedTests: 0,
         failedTests: 0,
         skippedTests: 0,
       });
 
-      // Update execution with started time
-      await storage.updateExecution(execution.id, {
-        startedAt: new Date(),
+      // Run real test execution asynchronously
+      testExecutor.runExecution(execution.id, testCases, targetUrl).catch((error) => {
+        console.error("Execution error:", error);
+        storage.updateExecution(execution.id, {
+          status: "failed",
+          completedAt: new Date(),
+        });
       });
-
-      // Simulate test execution (in a real app, this would be async)
-      simulateExecution(execution.id, testCases.length);
 
       res.status(201).json(execution);
     } catch (error) {
@@ -322,6 +346,78 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error cancelling execution:", error);
       res.status(500).json({ error: "Failed to cancel execution" });
+    }
+  });
+
+  // Test Results
+  app.get("/api/executions/:id/results", async (req: Request, res: Response) => {
+    try {
+      const results = await storage.getResultsByExecution(req.params.id);
+      res.json(results);
+    } catch (error) {
+      console.error("Error fetching results:", error);
+      res.status(500).json({ error: "Failed to fetch results" });
+    }
+  });
+
+  // Import Test Cases
+  app.post("/api/test-cases/import", async (req: Request, res: Response) => {
+    try {
+      const validation = validateBody(importTestCasesSchema, req.body);
+      if (!validation.success) {
+        return res.status(400).json({ error: validation.error });
+      }
+      const { suiteId, testCases } = validation.data;
+
+      const importedCases = [];
+      for (const tc of testCases) {
+        const created = await storage.createTestCase({
+          suiteId: suiteId ?? undefined,
+          title: tc.title,
+          description: tc.description,
+          preconditions: tc.preconditions,
+          targetUrl: tc.targetUrl,
+          steps: tc.steps,
+          priority: tc.priority,
+          tags: tc.tags,
+          status: "active",
+          generatedByAI: false,
+        });
+        importedCases.push(created);
+      }
+
+      res.status(201).json({ 
+        message: `Successfully imported ${importedCases.length} test cases`,
+        testCases: importedCases 
+      });
+    } catch (error) {
+      console.error("Error importing test cases:", error);
+      res.status(500).json({ error: "Failed to import test cases" });
+    }
+  });
+
+  // Export Test Cases
+  app.get("/api/test-cases/export", async (req: Request, res: Response) => {
+    try {
+      const { suiteId } = req.query;
+      const testCases = suiteId 
+        ? await storage.getTestCasesBySuite(suiteId as string)
+        : await storage.getAllTestCases();
+
+      const exportData = testCases.map(tc => ({
+        title: tc.title,
+        description: tc.description,
+        preconditions: tc.preconditions,
+        targetUrl: tc.targetUrl,
+        steps: tc.steps,
+        priority: tc.priority,
+        tags: tc.tags,
+      }));
+
+      res.json(exportData);
+    } catch (error) {
+      console.error("Error exporting test cases:", error);
+      res.status(500).json({ error: "Failed to export test cases" });
     }
   });
 
@@ -482,53 +578,4 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
   });
 
   return httpServer;
-}
-
-// Simulate test execution (for demo purposes)
-async function simulateExecution(executionId: string, totalTests: number) {
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  let passed = 0;
-  let failed = 0;
-  const startTime = Date.now();
-
-  for (let i = 0; i < totalTests; i++) {
-    await delay(1000 + Math.random() * 2000); // Random delay 1-3 seconds
-
-    // Random pass/fail (80% pass rate)
-    if (Math.random() > 0.2) {
-      passed++;
-    } else {
-      failed++;
-    }
-
-    await storage.updateExecution(executionId, {
-      passedTests: passed,
-      failedTests: failed,
-    });
-  }
-
-  const duration = Date.now() - startTime;
-  const finalStatus = failed === 0 ? "passed" : "failed";
-
-  await storage.updateExecution(executionId, {
-    status: finalStatus,
-    duration,
-    completedAt: new Date(),
-  });
-
-  // Create a report
-  await storage.createReport({
-    executionId,
-    name: `Execution Report - ${new Date().toISOString().split("T")[0]}`,
-    summary: `Completed ${totalTests} tests with ${passed} passed and ${failed} failed.`,
-    passRate: Math.round((passed / totalTests) * 100),
-    totalDuration: duration,
-    insights: [
-      { type: "info", message: `Average test duration: ${Math.round(duration / totalTests / 1000)}s` },
-      failed > 0
-        ? { type: "warning", message: `${failed} test(s) failed - review needed` }
-        : { type: "success", message: "All tests passed" },
-    ],
-  });
 }

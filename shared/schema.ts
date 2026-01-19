@@ -44,6 +44,7 @@ export const testCases = pgTable("test_cases", {
   title: text("title").notNull(),
   description: text("description"),
   preconditions: text("preconditions"),
+  targetUrl: text("target_url"), // URL to test against
   steps: jsonb("steps").$type<{ step: string; expected: string }[]>(),
   priority: text("priority").default("medium"), // low, medium, high, critical
   status: text("status").default("active"), // active, deprecated, draft
@@ -88,6 +89,7 @@ export const testExecutions = pgTable("test_executions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   suiteId: varchar("suite_id").references(() => testSuites.id, { onDelete: "cascade" }),
   agentId: varchar("agent_id").references(() => testAgents.id),
+  targetUrl: text("target_url"), // URL being tested
   status: text("status").default("pending"), // pending, running, passed, failed, cancelled
   environment: text("environment").default("staging"), // development, staging, production
   totalTests: integer("total_tests").default(0),

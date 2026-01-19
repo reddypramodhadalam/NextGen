@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -32,6 +33,7 @@ import {
   StopCircle,
   RefreshCw,
   Eye,
+  Globe,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution } from "@shared/schema";
 
@@ -40,6 +42,7 @@ export default function Executions() {
   const [selectedSuite, setSelectedSuite] = useState<string>("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [selectedEnvironment, setSelectedEnvironment] = useState<string>("staging");
+  const [targetUrl, setTargetUrl] = useState<string>("");
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const { data: suites = [] } = useQuery<TestSuite[]>({
@@ -55,21 +58,29 @@ export default function Executions() {
   });
 
   const runMutation = useMutation({
-    mutationFn: async (data: { suiteId: string; agentId: string; environment: string }) => {
+    mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string }) => {
       const res = await apiRequest("POST", "/api/executions", data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
-      toast({ title: "Execution Started", description: "Test execution has been started." });
+      toast({ title: "Execution Started", description: "Real browser tests are now running against your target URL." });
       setDialogOpen(false);
       setSelectedSuite("");
       setSelectedAgent("");
+      setTargetUrl("");
     },
-    onError: () => {
-      toast({ title: "Error", description: "Failed to start execution.", variant: "destructive" });
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to start execution.", variant: "destructive" });
     },
   });
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   const cancelMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -85,10 +96,20 @@ export default function Executions() {
   });
 
   const handleRunTests = () => {
-    if (!selectedSuite || !selectedAgent) {
+    if (!selectedSuite || !selectedAgent || !targetUrl) {
       toast({
         title: "Selection Required",
-        description: "Please select both a test suite and an agent.",
+        description: "Please select a test suite, agent, and enter a target URL.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      new URL(targetUrl);
+    } catch {
+      toast({
+        title: "Invalid URL",
+        description: "Please enter a valid URL (e.g., https://example.com).",
         variant: "destructive",
       });
       return;
@@ -97,6 +118,7 @@ export default function Executions() {
       suiteId: selectedSuite,
       agentId: selectedAgent,
       environment: selectedEnvironment,
+      targetUrl,
     });
   };
 
@@ -145,6 +167,25 @@ export default function Executions() {
               <DialogTitle>Start Test Execution</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 pt-4">
+              <div className="space-y-2">
+                <Label htmlFor="exec-url">Target URL</Label>
+                <div className="relative">
+                  <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="exec-url"
+                    type="url"
+                    placeholder="https://example.com"
+                    value={targetUrl}
+                    onChange={(e) => setTargetUrl(e.target.value)}
+                    className="pl-9"
+                    data-testid="input-target-url"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The URL where tests will be executed using real browser automation
+                </p>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="exec-suite">Test Suite</Label>
                 <Select value={selectedSuite} onValueChange={setSelectedSuite}>
@@ -202,7 +243,7 @@ export default function Executions() {
 
               <Button
                 onClick={handleRunTests}
-                disabled={!selectedSuite || !selectedAgent || runMutation.isPending}
+                disabled={!selectedSuite || !selectedAgent || !targetUrl || runMutation.isPending}
                 className="w-full"
                 data-testid="button-confirm-run"
               >
