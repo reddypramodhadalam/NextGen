@@ -82,7 +82,24 @@ Pre-built integration modules in `server/replit_integrations/`:
 
 ## Recent Changes
 
-### Autonomous Agentic AI Testing (Latest)
+### Replit Authentication & Multi-Project Team Collaboration (Latest)
+- Integrated Replit Auth supporting Google, GitHub, Apple, and email/password login
+- Landing page for logged-out users with feature showcase at /
+- Authenticated users see the dashboard with sidebar navigation
+- User profile dropdown in sidebar with logout functionality
+- Multi-project support with Projects and TeamMemberships schemas
+- Super admin flag (isSuperAdmin) for master admin access across all projects
+- Projects page at /projects with:
+  - Create/delete projects
+  - Add team members with role assignments
+  - Owner badge and super admin badge indicators
+- Team memberships with flexible per-project role assignments
+- Auth routes: /api/login, /api/logout, /api/auth/user
+- Project API endpoints: GET/POST /api/projects, DELETE /api/projects/:id
+- Team membership API: POST /api/projects/:id/members
+- Auth schema in shared/models/auth.ts with users and sessions tables
+
+### Autonomous Agentic AI Testing
 - Added autonomous agent mode for continuous background testing
 - Agents can be configured with:
   - Target URL for testing
