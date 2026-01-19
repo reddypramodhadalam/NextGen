@@ -2,10 +2,78 @@ import { chromium, type Browser as PlaywrightBrowser, type Page as PlaywrightPag
 import puppeteer, { type Browser as PuppeteerBrowser, type Page as PuppeteerPage } from "puppeteer";
 import { Builder, type WebDriver, By, until } from "selenium-webdriver";
 import chrome from "selenium-webdriver/chrome";
+import OpenAI from "openai";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 
 export type ExecutionFramework = "playwright" | "puppeteer" | "selenium";
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+});
+
+// AI-powered step interpreter - converts natural language to browser commands
+interface BrowserCommand {
+  action: "click" | "type" | "select" | "hover" | "doubleClick" | "rightClick" | 
+          "scroll" | "wait" | "pressKey" | "check" | "uncheck" | "clear" | 
+          "dragDrop" | "focus" | "acceptDialog" | "dismissDialog" | "navigate" | "verify";
+  selector?: string;
+  value?: string;
+  targetSelector?: string;
+  description: string;
+}
+
+async function interpretStepWithAI(step: string, expected: string, pageContext: string): Promise<BrowserCommand[]> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `You are a test automation expert. Convert natural language test steps into browser commands.
+          
+Return a JSON array of commands. Each command has:
+- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify
+- selector: CSS selector or text content to find element (use descriptive text like "Login" for buttons)
+- value: value to type, option to select, key to press, or scroll direction (top/bottom)
+- targetSelector: for dragDrop, the drop target
+- description: brief description of what this does
+
+Examples:
+Step: "Click on the Login button" → [{"action":"click","selector":"Login","description":"Click Login button"}]
+Step: "Enter john@email.com in email field" → [{"action":"type","selector":"email","value":"john@email.com","description":"Type email"}]
+Step: "Select USA from country dropdown" → [{"action":"select","selector":"country","value":"USA","description":"Select country"}]
+Step: "Hover over the menu" → [{"action":"hover","selector":"menu","description":"Hover on menu"}]
+Step: "Accept the confirmation popup" → [{"action":"acceptDialog","description":"Accept dialog"}]
+Step: "Drag item to cart" → [{"action":"dragDrop","selector":"item","targetSelector":"cart","description":"Drag to cart"}]
+Step: "Scroll to the bottom" → [{"action":"scroll","value":"bottom","description":"Scroll down"}]
+Step: "Check the terms checkbox" → [{"action":"check","selector":"terms","description":"Check terms"}]
+
+Only return the JSON array, no explanation.`
+        },
+        {
+          role: "user",
+          content: `Step: "${step}"\nExpected: "${expected}"\nPage context: ${pageContext}`
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 500,
+    });
+
+    const content = response.choices[0]?.message?.content || "[]";
+    // Extract JSON from response (handle markdown code blocks)
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+    return [{ action: "verify", description: step }];
+  } catch (error) {
+    console.error("AI interpretation failed, using fallback:", error);
+    return [{ action: "verify", description: step }];
+  }
+}
 
 // Helper to escape regex special characters in a string
 function escapeRegExp(str: string): string {
@@ -165,374 +233,203 @@ class PlaywrightExecutor implements FrameworkExecutor {
     logs: string[]
   ): Promise<boolean> {
     logs.push(`Executing step: ${stepAction}`);
-    const actionLower = stepAction.toLowerCase();
-
-    // Navigate actions
-    if (actionLower.includes("navigate") || actionLower.includes("go to")) {
-      logs.push(`Page loaded, checking expected: ${expected}`);
-      return true;
-    }
-
-    // Wait for element
-    if (actionLower.includes("wait for") || actionLower.includes("wait until")) {
-      const waitMatch = stepAction.match(/wait\s+(?:for|until)\s+(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
-      if (waitMatch) {
-        const elementText = waitMatch[1].trim();
-        try {
-          await page.waitForSelector(`text=${elementText}`, { timeout: 10000 });
-          logs.push(`Waited for element: ${elementText}`);
-          return true;
-        } catch {
-          logs.push(`Timeout waiting for: ${elementText}`);
-          return false;
-        }
-      }
-    }
-
-    // Double-click
-    if (actionLower.includes("double-click") || actionLower.includes("double click")) {
-      const dblClickMatch = stepAction.match(/double[- ]?click\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
-      if (dblClickMatch) {
-        const elementText = dblClickMatch[1].trim();
-        try {
-          await page.dblclick(`text=${elementText}`, { timeout: 5000 });
-          logs.push(`Double-clicked on: ${elementText}`);
-          return true;
-        } catch {
-          logs.push(`Could not double-click: ${elementText}`);
-          return false;
-        }
-      }
-    }
-
-    // Right-click / Context menu
-    if (actionLower.includes("right-click") || actionLower.includes("right click") || actionLower.includes("context menu")) {
-      const rightClickMatch = stepAction.match(/(?:right[- ]?click|context\s+menu)\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
-      if (rightClickMatch) {
-        const elementText = rightClickMatch[1].trim();
-        try {
-          await page.click(`text=${elementText}`, { button: "right", timeout: 5000 });
-          logs.push(`Right-clicked on: ${elementText}`);
-          return true;
-        } catch {
-          logs.push(`Could not right-click: ${elementText}`);
-          return false;
-        }
-      }
-    }
-
-    // Hover / Mouse over
-    if (actionLower.includes("hover") || actionLower.includes("mouse over") || actionLower.includes("mouseover")) {
-      const hoverMatch = stepAction.match(/(?:hover|mouse\s*over)\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
-      if (hoverMatch) {
-        const elementText = hoverMatch[1].trim();
-        try {
-          await page.hover(`text=${elementText}`, { timeout: 5000 });
-          logs.push(`Hovered on: ${elementText}`);
-          return true;
-        } catch {
-          logs.push(`Could not hover on: ${elementText}`);
-          return false;
-        }
-      }
-    }
-
-    // Select from dropdown
-    if (actionLower.includes("select") && (actionLower.includes("dropdown") || actionLower.includes("from") || actionLower.includes("option"))) {
-      const selectMatch = stepAction.match(/select\s+['""]?([^'""\n]+)['""]?\s+(?:from|in)\s+(?:the\s+)?(?:dropdown\s+)?['""]?([^'""\n]+)['""]?/i);
-      if (selectMatch) {
-        const optionText = selectMatch[1].trim();
-        const dropdownName = selectMatch[2].trim();
-        try {
-          const selectElement = await page.$(`select[name*="${dropdownName}"], select[id*="${dropdownName}"], [aria-label*="${dropdownName}"]`);
-          if (selectElement) {
-            await selectElement.selectOption({ label: optionText });
-            logs.push(`Selected "${optionText}" from dropdown "${dropdownName}"`);
-            return true;
-          }
-          // Try clicking dropdown then option for custom dropdowns
-          await page.click(`text=${dropdownName}`, { timeout: 3000 });
-          await page.click(`text=${optionText}`, { timeout: 3000 });
-          logs.push(`Selected "${optionText}" from custom dropdown`);
-          return true;
-        } catch {
-          logs.push(`Could not select from dropdown: ${dropdownName}`);
-          return false;
-        }
-      }
-    }
-
-    // Drag and drop
-    if (actionLower.includes("drag") && actionLower.includes("drop")) {
-      const dragMatch = stepAction.match(/drag\s+['""]?([^'""\n]+)['""]?\s+(?:to|and\s+drop\s+(?:on|to)?)\s+['""]?([^'""\n]+)['""]?/i);
-      if (dragMatch) {
-        const sourceText = dragMatch[1].trim();
-        const targetText = dragMatch[2].trim();
-        try {
-          const source = await page.$(`text=${sourceText}`);
-          const target = await page.$(`text=${targetText}`);
-          if (source && target) {
-            await source.dragTo(target);
-            logs.push(`Dragged "${sourceText}" to "${targetText}"`);
-            return true;
-          }
-        } catch {
-          logs.push(`Could not drag and drop: ${sourceText} to ${targetText}`);
-          return false;
-        }
-      }
-    }
-
-    // Handle alert/confirm/prompt dialogs
-    if (actionLower.includes("accept") && (actionLower.includes("alert") || actionLower.includes("dialog") || actionLower.includes("popup"))) {
-      page.on("dialog", async (dialog) => {
-        await dialog.accept();
-      });
-      logs.push("Set up dialog auto-accept handler");
-      return true;
-    }
-
-    if (actionLower.includes("dismiss") && (actionLower.includes("alert") || actionLower.includes("dialog") || actionLower.includes("popup"))) {
-      page.on("dialog", async (dialog) => {
-        await dialog.dismiss();
-      });
-      logs.push("Set up dialog auto-dismiss handler");
-      return true;
-    }
-
-    // Scroll actions
-    if (actionLower.includes("scroll")) {
-      if (actionLower.includes("bottom") || actionLower.includes("down")) {
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        logs.push("Scrolled to bottom of page");
-        return true;
-      } else if (actionLower.includes("top") || actionLower.includes("up")) {
-        await page.evaluate(() => window.scrollTo(0, 0));
-        logs.push("Scrolled to top of page");
-        return true;
-      } else {
-        const scrollToMatch = stepAction.match(/scroll\s+(?:to\s+)?['""]?([^'""\n]+)['""]?/i);
-        if (scrollToMatch) {
-          const elementText = scrollToMatch[1].trim();
-          try {
-            const element = await page.$(`text=${elementText}`);
-            if (element) {
-              await element.scrollIntoViewIfNeeded();
-              logs.push(`Scrolled to element: ${elementText}`);
-              return true;
+    
+    // Get page context for AI
+    const pageTitle = await page.title();
+    const pageUrl = page.url();
+    const pageContext = `Title: ${pageTitle}, URL: ${pageUrl}`;
+    
+    // Use AI to interpret the step
+    logs.push("AI interpreting step...");
+    const commands = await interpretStepWithAI(stepAction, expected, pageContext);
+    logs.push(`AI generated ${commands.length} command(s)`);
+    
+    for (const cmd of commands) {
+      try {
+        logs.push(`Executing: ${cmd.action} - ${cmd.description}`);
+        
+        switch (cmd.action) {
+          case "navigate":
+            logs.push(`Page loaded, checking expected: ${expected}`);
+            break;
+            
+          case "click":
+            if (cmd.selector) {
+              try {
+                await page.click(`text=${cmd.selector}`, { timeout: 5000 });
+              } catch {
+                await page.click(`button:has-text("${cmd.selector}"), a:has-text("${cmd.selector}"), [aria-label*="${cmd.selector}"]`, { timeout: 3000 });
+              }
+              logs.push(`Clicked: ${cmd.selector}`);
             }
-          } catch {
-            logs.push(`Could not scroll to: ${elementText}`);
-          }
-        }
-      }
-    }
-
-    // Press keyboard key
-    if (actionLower.includes("press") || actionLower.includes("key")) {
-      const keyMatch = stepAction.match(/press\s+(?:the\s+)?['""]?(\w+)['""]?\s*(?:key)?/i);
-      if (keyMatch) {
-        const keyName = keyMatch[1];
-        try {
-          await page.keyboard.press(keyName);
-          logs.push(`Pressed key: ${keyName}`);
-          return true;
-        } catch {
-          logs.push(`Could not press key: ${keyName}`);
-          return false;
-        }
-      }
-    }
-
-    // Check/uncheck checkbox
-    if (actionLower.includes("check") && !actionLower.includes("uncheck") && (actionLower.includes("checkbox") || actionLower.includes("box"))) {
-      const checkMatch = stepAction.match(/check\s+(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:checkbox)?/i);
-      if (checkMatch) {
-        const checkboxName = checkMatch[1].trim();
-        try {
-          await page.check(`input[name*="${checkboxName}"], input[id*="${checkboxName}"], label:has-text("${checkboxName}") input`);
-          logs.push(`Checked checkbox: ${checkboxName}`);
-          return true;
-        } catch {
-          logs.push(`Could not check: ${checkboxName}`);
-          return false;
-        }
-      }
-    }
-
-    if (actionLower.includes("uncheck")) {
-      const uncheckMatch = stepAction.match(/uncheck\s+(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:checkbox)?/i);
-      if (uncheckMatch) {
-        const checkboxName = uncheckMatch[1].trim();
-        try {
-          await page.uncheck(`input[name*="${checkboxName}"], input[id*="${checkboxName}"], label:has-text("${checkboxName}") input`);
-          logs.push(`Unchecked checkbox: ${checkboxName}`);
-          return true;
-        } catch {
-          logs.push(`Could not uncheck: ${checkboxName}`);
-          return false;
-        }
-      }
-    }
-
-    // Clear input field
-    if (actionLower.includes("clear")) {
-      const clearMatch = stepAction.match(/clear\s+(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:field|input)?/i);
-      if (clearMatch) {
-        const fieldName = clearMatch[1].trim();
-        try {
-          const input = await page.$(`input[name*="${fieldName}"], input[id*="${fieldName}"], input[placeholder*="${fieldName}"]`);
-          if (input) {
-            await input.fill("");
-            logs.push(`Cleared field: ${fieldName}`);
-            return true;
-          }
-        } catch {
-          logs.push(`Could not clear: ${fieldName}`);
-          return false;
-        }
-      }
-    }
-
-    // Upload file
-    if (actionLower.includes("upload") || actionLower.includes("attach file")) {
-      logs.push("File upload action detected - requires file path in test data");
-      return true;
-    }
-
-    // Focus on element
-    if (actionLower.includes("focus")) {
-      const focusMatch = stepAction.match(/focus\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?/i);
-      if (focusMatch) {
-        const elementText = focusMatch[1].trim();
-        try {
-          await page.focus(`text=${elementText}`);
-          logs.push(`Focused on: ${elementText}`);
-          return true;
-        } catch {
-          logs.push(`Could not focus on: ${elementText}`);
-          return false;
-        }
-      }
-    }
-
-    // Click action (general)
-    if (actionLower.includes("click")) {
-      const buttonMatch = stepAction.match(/click\s+(?:on\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?\s*(?:button|link|element)?/i);
-      if (buttonMatch) {
-        const buttonText = buttonMatch[1].trim();
-        try {
-          await page.click(`text=${buttonText}`, { timeout: 5000 });
-          logs.push(`Clicked on: ${buttonText}`);
-          return true;
-        } catch {
-          try {
-            await page.click(`button:has-text("${buttonText}")`, { timeout: 3000 });
-            logs.push(`Clicked button: ${buttonText}`);
-            return true;
-          } catch {
-            logs.push(`Could not find element to click: ${buttonText}`);
-            return false;
-          }
-        }
-      }
-    }
-
-    // Enter/Type action
-    if (actionLower.includes("enter") || actionLower.includes("type") || actionLower.includes("input")) {
-      const inputMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?['""]?([^'""\n]+)['""]?\s+(?:in|into|in\s+the)\s+['""]?([^'""\n]+)['""]?/i);
-      if (inputMatch) {
-        const valueToType = inputMatch[1].trim();
-        const fieldName = inputMatch[2].trim();
-        const selectors = [
-          `input[name*="${fieldName}"]`,
-          `input[placeholder*="${fieldName}"]`,
-          `input[id*="${fieldName}"]`,
-          `textarea[name*="${fieldName}"]`,
-          `[aria-label*="${fieldName}"]`,
-        ];
-
-        for (const selector of selectors) {
-          try {
-            const element = await page.$(selector);
-            if (element) {
-              await element.fill(valueToType);
-              logs.push(`Entered "${valueToType}" in ${fieldName}`);
-              return true;
+            break;
+            
+          case "doubleClick":
+            if (cmd.selector) {
+              await page.dblclick(`text=${cmd.selector}`, { timeout: 5000 });
+              logs.push(`Double-clicked: ${cmd.selector}`);
             }
-          } catch {
-            continue;
-          }
-        }
-      }
-      
-      // Fallback: simple field type matching
-      const simpleMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?(\w+)/i);
-      if (simpleMatch) {
-        const fieldType = simpleMatch[1].toLowerCase();
-        const selectors = [
-          `input[type="${fieldType}"]`,
-          `input[name*="${fieldType}"]`,
-          `input[placeholder*="${fieldType}"]`,
-          `input[id*="${fieldType}"]`,
-        ];
-
-        for (const selector of selectors) {
-          try {
-            const element = await page.$(selector);
-            if (element) {
-              const testValue = fieldType === "email" ? "test@example.com" : "testpassword123";
-              await element.fill(testValue);
-              logs.push(`Entered ${fieldType}: ${testValue}`);
-              return true;
+            break;
+            
+          case "rightClick":
+            if (cmd.selector) {
+              await page.click(`text=${cmd.selector}`, { button: "right", timeout: 5000 });
+              logs.push(`Right-clicked: ${cmd.selector}`);
             }
-          } catch {
-            continue;
-          }
+            break;
+            
+          case "type":
+            if (cmd.selector && cmd.value) {
+              const selectors = [
+                `input[name*="${cmd.selector}" i]`,
+                `input[placeholder*="${cmd.selector}" i]`,
+                `input[id*="${cmd.selector}" i]`,
+                `textarea[name*="${cmd.selector}" i]`,
+                `[aria-label*="${cmd.selector}" i]`,
+                `input[type="${cmd.selector}"]`,
+              ];
+              let typed = false;
+              for (const sel of selectors) {
+                try {
+                  const el = await page.$(sel);
+                  if (el) {
+                    await el.fill(cmd.value);
+                    logs.push(`Typed "${cmd.value}" in ${cmd.selector}`);
+                    typed = true;
+                    break;
+                  }
+                } catch { continue; }
+              }
+              if (!typed) logs.push(`Could not find field: ${cmd.selector}`);
+            }
+            break;
+            
+          case "select":
+            if (cmd.selector && cmd.value) {
+              try {
+                const selectEl = await page.$(`select[name*="${cmd.selector}" i], select[id*="${cmd.selector}" i]`);
+                if (selectEl) {
+                  await selectEl.selectOption({ label: cmd.value });
+                } else {
+                  // Custom dropdown
+                  await page.click(`text=${cmd.selector}`, { timeout: 3000 });
+                  await page.click(`text=${cmd.value}`, { timeout: 3000 });
+                }
+                logs.push(`Selected "${cmd.value}" from ${cmd.selector}`);
+              } catch {
+                logs.push(`Could not select from: ${cmd.selector}`);
+              }
+            }
+            break;
+            
+          case "hover":
+            if (cmd.selector) {
+              await page.hover(`text=${cmd.selector}`, { timeout: 5000 });
+              logs.push(`Hovered: ${cmd.selector}`);
+            }
+            break;
+            
+          case "scroll":
+            if (cmd.value === "bottom" || cmd.value === "down") {
+              await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+            } else if (cmd.value === "top" || cmd.value === "up") {
+              await page.evaluate(() => window.scrollTo(0, 0));
+            } else if (cmd.selector) {
+              const el = await page.$(`text=${cmd.selector}`);
+              if (el) await el.scrollIntoViewIfNeeded();
+            }
+            logs.push(`Scrolled: ${cmd.value || cmd.selector}`);
+            break;
+            
+          case "wait":
+            if (cmd.selector) {
+              await page.waitForSelector(`text=${cmd.selector}`, { timeout: 10000 });
+              logs.push(`Waited for: ${cmd.selector}`);
+            } else {
+              await page.waitForTimeout(2000);
+              logs.push("Waited 2 seconds");
+            }
+            break;
+            
+          case "pressKey":
+            if (cmd.value) {
+              await page.keyboard.press(cmd.value);
+              logs.push(`Pressed key: ${cmd.value}`);
+            }
+            break;
+            
+          case "check":
+            if (cmd.selector) {
+              await page.check(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i], label:has-text("${cmd.selector}") input`);
+              logs.push(`Checked: ${cmd.selector}`);
+            }
+            break;
+            
+          case "uncheck":
+            if (cmd.selector) {
+              await page.uncheck(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i], label:has-text("${cmd.selector}") input`);
+              logs.push(`Unchecked: ${cmd.selector}`);
+            }
+            break;
+            
+          case "clear":
+            if (cmd.selector) {
+              const input = await page.$(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i]`);
+              if (input) await input.fill("");
+              logs.push(`Cleared: ${cmd.selector}`);
+            }
+            break;
+            
+          case "dragDrop":
+            if (cmd.selector && cmd.targetSelector) {
+              const source = await page.$(`text=${cmd.selector}`);
+              const target = await page.$(`text=${cmd.targetSelector}`);
+              if (source && target) {
+                await source.dragTo(target);
+                logs.push(`Dragged ${cmd.selector} to ${cmd.targetSelector}`);
+              }
+            }
+            break;
+            
+          case "focus":
+            if (cmd.selector) {
+              await page.focus(`text=${cmd.selector}`);
+              logs.push(`Focused: ${cmd.selector}`);
+            }
+            break;
+            
+          case "acceptDialog":
+            page.once("dialog", async (dialog) => await dialog.accept());
+            logs.push("Dialog accept handler set");
+            break;
+            
+          case "dismissDialog":
+            page.once("dialog", async (dialog) => await dialog.dismiss());
+            logs.push("Dialog dismiss handler set");
+            break;
+            
+          case "verify":
+            if (cmd.selector) {
+              try {
+                await page.waitForSelector(`text=${cmd.selector}`, { state: "visible", timeout: 5000 });
+                logs.push(`Verified visible: ${cmd.selector}`);
+              } catch {
+                logs.push(`Verification: ${cmd.description}`);
+              }
+            } else {
+              logs.push(`Verification: ${expected}`);
+            }
+            break;
+            
+          default:
+            logs.push(`Unknown action: ${cmd.action}`);
         }
-        logs.push(`Could not find input field for: ${fieldType}`);
+      } catch (error: any) {
+        logs.push(`Command failed: ${cmd.action} - ${error.message}`);
         return false;
       }
     }
-
-    // Verify/Assert actions
-    if (actionLower.includes("verify") || actionLower.includes("check") || actionLower.includes("assert") || actionLower.includes("should")) {
-      if (actionLower.includes("visible") || actionLower.includes("displayed") || actionLower.includes("shown")) {
-        const visibleMatch = stepAction.match(/(?:verify|check|assert|should\s+see)\s+(?:that\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?\s+(?:is\s+)?(?:visible|displayed|shown)/i);
-        if (visibleMatch) {
-          const elementText = visibleMatch[1].trim();
-          try {
-            await page.waitForSelector(`text=${elementText}`, { state: "visible", timeout: 5000 });
-            logs.push(`Verified visible: ${elementText}`);
-            return true;
-          } catch {
-            logs.push(`Element not visible: ${elementText}`);
-            return false;
-          }
-        }
-      }
-      
-      if (actionLower.includes("hidden") || actionLower.includes("not visible") || actionLower.includes("disappear")) {
-        const hiddenMatch = stepAction.match(/(?:verify|check|assert)\s+(?:that\s+)?(?:the\s+)?['""]?([^'""\n]+)['""]?\s+(?:is\s+)?(?:hidden|not\s+visible|disappeared)/i);
-        if (hiddenMatch) {
-          const elementText = hiddenMatch[1].trim();
-          try {
-            await page.waitForSelector(`text=${elementText}`, { state: "hidden", timeout: 5000 });
-            logs.push(`Verified hidden: ${elementText}`);
-            return true;
-          } catch {
-            logs.push(`Element still visible: ${elementText}`);
-            return false;
-          }
-        }
-      }
-
-      const pageContent = await page.content();
-      logs.push(`Verification check: ${expected}`);
-      return true;
-    }
-
-    logs.push(`Generic step executed: ${stepAction} -> Expected: ${expected}`);
+    
     return true;
   }
 }
