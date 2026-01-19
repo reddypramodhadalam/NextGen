@@ -42,6 +42,7 @@ export default function Executions() {
   const [selectedSuite, setSelectedSuite] = useState<string>("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [selectedEnvironment, setSelectedEnvironment] = useState<string>("staging");
+  const [selectedFramework, setSelectedFramework] = useState<string>("playwright");
   const [targetUrl, setTargetUrl] = useState<string>("");
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -58,17 +59,18 @@ export default function Executions() {
   });
 
   const runMutation = useMutation({
-    mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string }) => {
+    mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string; framework: string }) => {
       const res = await apiRequest("POST", "/api/executions", data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
-      toast({ title: "Execution Started", description: "Real browser tests are now running against your target URL." });
+      toast({ title: "Execution Started", description: `Real browser tests are now running with ${selectedFramework.toUpperCase()}.` });
       setDialogOpen(false);
       setSelectedSuite("");
       setSelectedAgent("");
       setTargetUrl("");
+      setSelectedFramework("playwright");
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to start execution.", variant: "destructive" });
@@ -119,6 +121,7 @@ export default function Executions() {
       agentId: selectedAgent,
       environment: selectedEnvironment,
       targetUrl,
+      framework: selectedFramework,
     });
   };
 
@@ -241,6 +244,22 @@ export default function Executions() {
                 </Select>
               </div>
 
+              <div className="space-y-2">
+                <Label htmlFor="exec-framework">Execution Framework</Label>
+                <Select value={selectedFramework} onValueChange={setSelectedFramework}>
+                  <SelectTrigger id="exec-framework" data-testid="select-exec-framework">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="playwright">Playwright</SelectItem>
+                    <SelectItem value="puppeteer">Puppeteer</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Choose the browser automation framework to execute tests
+                </p>
+              </div>
+
               <Button
                 onClick={handleRunTests}
                 disabled={!selectedSuite || !selectedAgent || !targetUrl || runMutation.isPending}
@@ -352,7 +371,7 @@ export default function Executions() {
                     <div>
                       <p className="font-medium">Execution #{execution.id.slice(0, 8)}</p>
                       <p className="text-sm text-muted-foreground capitalize">
-                        {execution.environment} - {execution.totalTests} tests
+                        {execution.framework || "playwright"} - {execution.environment} - {execution.totalTests} tests
                       </p>
                     </div>
                   </div>

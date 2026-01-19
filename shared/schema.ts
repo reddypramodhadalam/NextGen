@@ -90,6 +90,7 @@ export const testExecutions = pgTable("test_executions", {
   suiteId: varchar("suite_id").references(() => testSuites.id, { onDelete: "cascade" }),
   agentId: varchar("agent_id").references(() => testAgents.id),
   targetUrl: text("target_url"), // URL being tested
+  framework: text("framework").default("playwright"), // playwright, puppeteer
   status: text("status").default("pending"), // pending, running, passed, failed, cancelled
   environment: text("environment").default("staging"), // development, staging, production
   totalTests: integer("total_tests").default(0),

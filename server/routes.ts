@@ -32,6 +32,7 @@ const createExecutionSchema = z.object({
   suiteId: z.string().optional().nullable(),
   agentId: z.string().optional().nullable(),
   targetUrl: z.string().url("Valid URL is required"),
+  framework: z.enum(["playwright", "puppeteer"]).optional().default("playwright"),
   environment: z.enum(["development", "staging", "production"]).optional(),
 });
 
@@ -294,7 +295,7 @@ export async function registerRoutes(
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const { suiteId, agentId, environment, targetUrl } = validation.data;
+      const { suiteId, agentId, environment, targetUrl, framework } = validation.data;
 
       // Get test cases for the suite
       const testCases = suiteId 
@@ -309,6 +310,7 @@ export async function registerRoutes(
         suiteId: suiteId ?? undefined,
         agentId: agentId ?? undefined,
         targetUrl,
+        framework: framework ?? "playwright",
         environment: environment ?? "staging",
         status: "pending",
         totalTests: testCases.length,
@@ -317,8 +319,8 @@ export async function registerRoutes(
         skippedTests: 0,
       });
 
-      // Run real test execution asynchronously
-      testExecutor.runExecution(execution.id, testCases, targetUrl).catch((error) => {
+      // Run real test execution asynchronously with selected framework
+      testExecutor.runExecution(execution.id, testCases, targetUrl, framework ?? "playwright").catch((error) => {
         console.error("Execution error:", error);
         storage.updateExecution(execution.id, {
           status: "failed",
