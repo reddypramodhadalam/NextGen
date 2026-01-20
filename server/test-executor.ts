@@ -2,17 +2,11 @@ import { chromium, type Browser as PlaywrightBrowser, type Page as PlaywrightPag
 import puppeteer, { type Browser as PuppeteerBrowser, type Page as PuppeteerPage } from "puppeteer";
 import { Builder, type WebDriver, By, until } from "selenium-webdriver";
 import chrome from "selenium-webdriver/chrome";
-import OpenAI from "openai";
+import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 
 export type ExecutionFramework = "playwright" | "puppeteer" | "selenium";
-
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
 
 // Runtime variables store - shared across steps and tests
 const runtimeVariables: Map<string, string> = new Map();
@@ -43,12 +37,7 @@ interface BrowserCommand {
 
 async function interpretStepWithAI(step: string, expected: string, pageContext: string): Promise<BrowserCommand[]> {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You are a test automation expert. Convert natural language test steps into browser commands.
+    const systemPrompt = `You are a test automation expert. Convert natural language test steps into browser commands.
           
 Return a JSON array of commands. Each command has:
 - action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount
@@ -75,18 +64,13 @@ Step: "Count the items in cart as itemCount" → [{"action":"captureCount","sele
 Step: "Enter the saved order number in search" → [{"action":"type","selector":"search","value":"$orderNum$","description":"Type saved order number"}]
 Step: "Verify the confirmation code matches" → [{"action":"verify","selector":"$confirmCode$","description":"Verify confirmation code"}]
 
-Only return the JSON array, no explanation.`
-        },
-        {
-          role: "user",
-          content: `Step: "${step}"\nExpected: "${expected}"\nPage context: ${pageContext}`
-        }
-      ],
-      temperature: 0.1,
-      max_tokens: 500,
-    });
+Only return the JSON array, no explanation.`;
 
-    const content = response.choices[0]?.message?.content || "[]";
+    const userPrompt = `Step: "${step}"\nExpected: "${expected}"\nPage context: ${pageContext}`;
+
+    const aiClient = await getAiClient();
+    const content = await aiClient.chat([{ role: "user", content: userPrompt }], systemPrompt);
+
     // Extract JSON from response (handle markdown code blocks)
     const jsonMatch = content.match(/\[[\s\S]*\]/);
     if (jsonMatch) {

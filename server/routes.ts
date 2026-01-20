@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import OpenAI from "openai";
+import { getAiClient } from "./ai-client";
 import { z } from "zod";
 import {
   insertTestSuiteSchema,
@@ -72,10 +72,6 @@ const importTestCasesSchema = z.object({
   })),
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
 
 // Helper for validation
 function validateBody<T>(schema: z.ZodSchema<T>, body: unknown): { success: true; data: T } | { success: false; error: string } {
@@ -531,12 +527,7 @@ export async function registerRoutes(
       }
       const { title, description } = validation.data;
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `You are a QA expert that generates comprehensive test cases from requirements. Generate test cases in JSON format with the following structure:
+      const systemPrompt = `You are a QA expert that generates comprehensive test cases from requirements. Generate test cases in JSON format with the following structure:
 {
   "testCases": [
     {
@@ -550,20 +541,20 @@ export async function registerRoutes(
     }
   ]
 }
-Generate 3-5 comprehensive test cases covering positive, negative, and edge cases.`,
-          },
-          {
-            role: "user",
-            content: `Generate test cases for the following requirement:\n\nTitle: ${title}\n\nDescription: ${description}`,
-          },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.7,
-        max_tokens: 2000,
-      });
+Generate 3-5 comprehensive test cases covering positive, negative, and edge cases. Only output valid JSON.`;
 
-      const content = completion.choices[0]?.message?.content || "{}";
-      const result = JSON.parse(content);
+      const userPrompt = `Generate test cases for the following requirement:\n\nTitle: ${title}\n\nDescription: ${description}`;
+
+      const aiClient = await getAiClient();
+      const content = await aiClient.chat([{ role: "user", content: userPrompt }], systemPrompt);
+
+      let result;
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        result = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      } catch {
+        result = { testCases: [] };
+      }
 
       res.json(result);
     } catch (error) {
@@ -600,32 +591,21 @@ Generate 3-5 comprehensive test cases covering positive, negative, and edge case
         java: "Use Java with proper class structure and JUnit annotations.",
       };
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `You are an automation engineer expert. Generate production-ready test automation scripts.
+      const systemPrompt = `You are an automation engineer expert. Generate production-ready test automation scripts.
 ${frameworkGuides[framework] || ""}
 ${languageGuides[language] || ""}
-Only output the code, no explanations. Include proper imports and setup.`,
-          },
-          {
-            role: "user",
-            content: `Generate a ${framework} test script in ${language} for the following test case:
+Only output the code, no explanations. Include proper imports and setup.`;
+
+      const userPrompt = `Generate a ${framework} test script in ${language} for the following test case:
 
 Title: ${testCase.title}
 Description: ${testCase.description || "N/A"}
 Preconditions: ${testCase.preconditions || "None"}
 Steps:
-${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step} -> Expected: ${s.expected}`).join("\n")}`,
-          },
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-      });
+${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step} -> Expected: ${s.expected}`).join("\n")}`;
 
-      const code = completion.choices[0]?.message?.content || "";
+      const aiClient = await getAiClient();
+      const code = await aiClient.chat([{ role: "user", content: userPrompt }], systemPrompt);
 
       // Save the generated script
       const script = await storage.createScript({

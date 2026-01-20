@@ -1,12 +1,7 @@
 import { storage } from "./storage";
 import { TestExecutor } from "./test-executor";
-import OpenAI from "openai";
+import { getAiClient } from "./ai-client";
 import type { TestAgent, TestCase } from "@shared/schema";
-
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
 
 interface AgentRunResult {
   agentId: string;
@@ -192,33 +187,29 @@ class AutonomousAgentRunner {
 
   private async generateHealedSteps(testCase: TestCase, failedResult: any): Promise<any[] | null> {
     try {
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `You are a test automation expert. A test step failed. Suggest an alternative approach.
+      const systemPrompt = `You are a test automation expert. A test step failed. Suggest an alternative approach.
             
 Return a JSON object with:
 - canHeal: boolean - whether you can suggest a fix
 - healedStep: string - the corrected step action
 - explanation: string - why this might work better
 
-Only return JSON, no explanation.`
-          },
-          {
-            role: "user",
-            content: `Test: ${testCase.title}
-Failed step: ${JSON.stringify(failedResult)}
-Original steps: ${JSON.stringify(testCase.steps)}`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 300,
-      });
+Only return JSON, no explanation.`;
 
-      const content = response.choices[0]?.message?.content || "{}";
-      const result = JSON.parse(content);
+      const userPrompt = `Test: ${testCase.title}
+Failed step: ${JSON.stringify(failedResult)}
+Original steps: ${JSON.stringify(testCase.steps)}`;
+
+      const aiClient = await getAiClient();
+      const content = await aiClient.chat([{ role: "user", content: userPrompt }], systemPrompt);
+
+      let result;
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        result = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      } catch {
+        result = { canHeal: false };
+      }
       
       if (result.canHeal) {
         return result.healedStep;

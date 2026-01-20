@@ -26,6 +26,10 @@ import {
   Save,
   Loader2,
   CheckCircle2,
+  Brain,
+  Key,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import type { PlatformSetting } from "@shared/schema";
 
@@ -53,6 +57,14 @@ type SettingsState = {
     includeScreenshots: boolean;
     includeLogs: boolean;
   };
+  ai: {
+    useCustomLlm: boolean;
+    bedrockEndpointUrl: string;
+    bedrockAccessKey: string;
+    bedrockSecretKey: string;
+    bedrockRegion: string;
+    bedrockModelId: string;
+  };
 };
 
 const defaultSettings: SettingsState = {
@@ -79,13 +91,21 @@ const defaultSettings: SettingsState = {
     includeScreenshots: true,
     includeLogs: true,
   },
+  ai: {
+    useCustomLlm: false,
+    bedrockEndpointUrl: "",
+    bedrockAccessKey: "",
+    bedrockSecretKey: "",
+    bedrockRegion: "us-east-1",
+    bedrockModelId: "anthropic.claude-3-sonnet-20240229-v1:0",
+  },
 };
 
 function parseSettingsFromApi(apiSettings: PlatformSetting[]): SettingsState {
   const result = structuredClone(defaultSettings);
   
   for (const setting of apiSettings) {
-    const { category, key, value, valueJson } = setting;
+    const { category, key, value } = setting;
     
     if (category === "notifications" && key in result.notifications) {
       (result.notifications as any)[key] = value === "true";
@@ -100,6 +120,12 @@ function parseSettingsFromApi(apiSettings: PlatformSetting[]): SettingsState {
         (result.reporting as any)[key] = value === "true";
       } else {
         (result.reporting as any)[key] = value || defaultSettings.reporting[key as keyof typeof defaultSettings.reporting];
+      }
+    } else if (category === "ai" && key in result.ai) {
+      if (typeof (result.ai as any)[key] === "boolean") {
+        (result.ai as any)[key] = value === "true";
+      } else {
+        (result.ai as any)[key] = value || defaultSettings.ai[key as keyof typeof defaultSettings.ai];
       }
     }
   }
@@ -119,6 +145,9 @@ function convertSettingsToApi(settings: SettingsState): Array<{ category: string
   for (const [key, value] of Object.entries(settings.reporting)) {
     result.push({ category: "reporting", key, value: String(value) });
   }
+  for (const [key, value] of Object.entries(settings.ai)) {
+    result.push({ category: "ai", key, value: String(value) });
+  }
   
   return result;
 }
@@ -127,6 +156,8 @@ export default function Settings() {
   const { toast } = useToast();
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
   const [hasChanges, setHasChanges] = useState(false);
+  const [showAccessKey, setShowAccessKey] = useState(false);
+  const [showSecretKey, setShowSecretKey] = useState(false);
 
   const { data: apiSettings, isLoading } = useQuery<PlatformSetting[]>({
     queryKey: ["/api/settings"],
@@ -184,6 +215,14 @@ export default function Settings() {
     setSettings((prev) => ({
       ...prev,
       reporting: { ...prev.reporting, [key]: value },
+    }));
+    setHasChanges(true);
+  };
+
+  const updateAi = (key: keyof typeof settings.ai, value: string | boolean) => {
+    setSettings((prev) => ({
+      ...prev,
+      ai: { ...prev.ai, [key]: value },
     }));
     setHasChanges(true);
   };
@@ -500,6 +539,151 @@ export default function Settings() {
                 data-testid="switch-include-logs"
               />
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Brain className="h-4 w-4 text-primary" />
+              AI Integration
+            </CardTitle>
+            <CardDescription>Configure custom LLM for AI-powered features</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="use-custom-llm">Use Custom LLM</Label>
+                <p className="text-sm text-muted-foreground">
+                  Enable to use your own AWS Bedrock instead of the default AI service
+                </p>
+              </div>
+              <Switch
+                id="use-custom-llm"
+                checked={settings.ai.useCustomLlm}
+                onCheckedChange={(v) => updateAi("useCustomLlm", v)}
+                data-testid="switch-use-custom-llm"
+              />
+            </div>
+
+            {settings.ai.useCustomLlm && (
+              <>
+                <Separator />
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="bedrock-endpoint">Bedrock Endpoint URL</Label>
+                    <Input
+                      id="bedrock-endpoint"
+                      type="url"
+                      placeholder="https://bedrock-runtime.us-east-1.amazonaws.com"
+                      value={settings.ai.bedrockEndpointUrl}
+                      onChange={(e) => updateAi("bedrockEndpointUrl", e.target.value)}
+                      data-testid="input-bedrock-endpoint"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      AWS Bedrock Runtime endpoint URL
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bedrock-region">AWS Region</Label>
+                    <Select
+                      value={settings.ai.bedrockRegion}
+                      onValueChange={(v) => updateAi("bedrockRegion", v)}
+                    >
+                      <SelectTrigger id="bedrock-region" data-testid="select-bedrock-region">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="us-east-1">US East (N. Virginia)</SelectItem>
+                        <SelectItem value="us-west-2">US West (Oregon)</SelectItem>
+                        <SelectItem value="eu-west-1">Europe (Ireland)</SelectItem>
+                        <SelectItem value="eu-central-1">Europe (Frankfurt)</SelectItem>
+                        <SelectItem value="ap-southeast-1">Asia Pacific (Singapore)</SelectItem>
+                        <SelectItem value="ap-northeast-1">Asia Pacific (Tokyo)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bedrock-access-key">Access Key ID</Label>
+                    <div className="relative">
+                      <Input
+                        id="bedrock-access-key"
+                        type={showAccessKey ? "text" : "password"}
+                        placeholder="AKIA..."
+                        value={settings.ai.bedrockAccessKey}
+                        onChange={(e) => updateAi("bedrockAccessKey", e.target.value)}
+                        data-testid="input-bedrock-access-key"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-3"
+                        onClick={() => setShowAccessKey(!showAccessKey)}
+                        data-testid="button-toggle-access-key"
+                      >
+                        {showAccessKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bedrock-secret-key">Secret Access Key</Label>
+                    <div className="relative">
+                      <Input
+                        id="bedrock-secret-key"
+                        type={showSecretKey ? "text" : "password"}
+                        placeholder="Enter your secret key"
+                        value={settings.ai.bedrockSecretKey}
+                        onChange={(e) => updateAi("bedrockSecretKey", e.target.value)}
+                        data-testid="input-bedrock-secret-key"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-3"
+                        onClick={() => setShowSecretKey(!showSecretKey)}
+                        data-testid="button-toggle-secret-key"
+                      >
+                        {showSecretKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="bedrock-model">Model ID</Label>
+                    <Select
+                      value={settings.ai.bedrockModelId}
+                      onValueChange={(v) => updateAi("bedrockModelId", v)}
+                    >
+                      <SelectTrigger id="bedrock-model" data-testid="select-bedrock-model">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="anthropic.claude-3-sonnet-20240229-v1:0">Claude 3 Sonnet</SelectItem>
+                        <SelectItem value="anthropic.claude-3-haiku-20240307-v1:0">Claude 3 Haiku</SelectItem>
+                        <SelectItem value="anthropic.claude-3-opus-20240229-v1:0">Claude 3 Opus</SelectItem>
+                        <SelectItem value="amazon.titan-text-express-v1">Amazon Titan Text Express</SelectItem>
+                        <SelectItem value="meta.llama3-70b-instruct-v1:0">Meta Llama 3 70B</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Select the Bedrock model to use for AI features
+                    </p>
+                  </div>
+                </div>
+                <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                  <div className="flex items-start gap-3">
+                    <Key className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5" />
+                    <div>
+                      <span className="font-medium text-amber-600 dark:text-amber-400">Security Note</span>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Your AWS credentials are stored securely and encrypted. Make sure to use IAM credentials with minimal required permissions for Bedrock access only.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
