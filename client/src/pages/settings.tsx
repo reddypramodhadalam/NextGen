@@ -62,7 +62,6 @@ type SettingsState = {
     bedrockEndpointUrl: string;
     bedrockAccessKey: string;
     bedrockSecretKey: string;
-    bedrockRegion: string;
     bedrockModelId: string;
   };
 };
@@ -96,8 +95,7 @@ const defaultSettings: SettingsState = {
     bedrockEndpointUrl: "",
     bedrockAccessKey: "",
     bedrockSecretKey: "",
-    bedrockRegion: "us-east-1",
-    bedrockModelId: "anthropic.claude-3-sonnet-20240229-v1:0",
+    bedrockModelId: "",
   },
 };
 
@@ -570,46 +568,27 @@ export default function Settings() {
               <>
                 <Separator />
                 <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="bedrock-endpoint">Bedrock Endpoint URL</Label>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="bedrock-endpoint">API Endpoint URL</Label>
                     <Input
                       id="bedrock-endpoint"
                       type="url"
-                      placeholder="https://bedrock-runtime.us-east-1.amazonaws.com"
+                      placeholder="https://your-bedrock-endpoint.amazonaws.com"
                       value={settings.ai.bedrockEndpointUrl}
                       onChange={(e) => updateAi("bedrockEndpointUrl", e.target.value)}
                       data-testid="input-bedrock-endpoint"
                     />
                     <p className="text-xs text-muted-foreground">
-                      AWS Bedrock Runtime endpoint URL
+                      Your custom LLM API endpoint URL
                     </p>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="bedrock-region">AWS Region</Label>
-                    <Select
-                      value={settings.ai.bedrockRegion}
-                      onValueChange={(v) => updateAi("bedrockRegion", v)}
-                    >
-                      <SelectTrigger id="bedrock-region" data-testid="select-bedrock-region">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="us-east-1">US East (N. Virginia)</SelectItem>
-                        <SelectItem value="us-west-2">US West (Oregon)</SelectItem>
-                        <SelectItem value="eu-west-1">Europe (Ireland)</SelectItem>
-                        <SelectItem value="eu-central-1">Europe (Frankfurt)</SelectItem>
-                        <SelectItem value="ap-southeast-1">Asia Pacific (Singapore)</SelectItem>
-                        <SelectItem value="ap-northeast-1">Asia Pacific (Tokyo)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="bedrock-access-key">Access Key ID</Label>
+                    <Label htmlFor="bedrock-access-key">Access Key</Label>
                     <div className="relative">
                       <Input
                         id="bedrock-access-key"
                         type={showAccessKey ? "text" : "password"}
-                        placeholder="AKIA..."
+                        placeholder="Enter your access key"
                         value={settings.ai.bedrockAccessKey}
                         onChange={(e) => updateAi("bedrockAccessKey", e.target.value)}
                         data-testid="input-bedrock-access-key"
@@ -627,7 +606,7 @@ export default function Settings() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="bedrock-secret-key">Secret Access Key</Label>
+                    <Label htmlFor="bedrock-secret-key">Secret Key</Label>
                     <div className="relative">
                       <Input
                         id="bedrock-secret-key"
@@ -651,23 +630,16 @@ export default function Settings() {
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="bedrock-model">Model ID</Label>
-                    <Select
+                    <Input
+                      id="bedrock-model"
+                      type="text"
+                      placeholder="e.g., anthropic.claude-3-5-haiku-20241022-v1:0"
                       value={settings.ai.bedrockModelId}
-                      onValueChange={(v) => updateAi("bedrockModelId", v)}
-                    >
-                      <SelectTrigger id="bedrock-model" data-testid="select-bedrock-model">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="anthropic.claude-3-sonnet-20240229-v1:0">Claude 3 Sonnet</SelectItem>
-                        <SelectItem value="anthropic.claude-3-haiku-20240307-v1:0">Claude 3 Haiku</SelectItem>
-                        <SelectItem value="anthropic.claude-3-opus-20240229-v1:0">Claude 3 Opus</SelectItem>
-                        <SelectItem value="amazon.titan-text-express-v1">Amazon Titan Text Express</SelectItem>
-                        <SelectItem value="meta.llama3-70b-instruct-v1:0">Meta Llama 3 70B</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      onChange={(e) => updateAi("bedrockModelId", e.target.value)}
+                      data-testid="input-bedrock-model"
+                    />
                     <p className="text-xs text-muted-foreground">
-                      Select the Bedrock model to use for AI features
+                      The model identifier for your Bedrock model (e.g., anthropic.claude-3-5-haiku-20241022-v1:0)
                     </p>
                   </div>
                 </div>

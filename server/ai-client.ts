@@ -8,7 +8,6 @@ type AiSettings = {
   bedrockEndpointUrl: string;
   bedrockAccessKey: string;
   bedrockSecretKey: string;
-  bedrockRegion: string;
   bedrockModelId: string;
 };
 
@@ -23,8 +22,7 @@ async function getAiSettings(): Promise<AiSettings> {
     bedrockEndpointUrl: "",
     bedrockAccessKey: "",
     bedrockSecretKey: "",
-    bedrockRegion: "us-east-1",
-    bedrockModelId: "anthropic.claude-3-sonnet-20240229-v1:0",
+    bedrockModelId: "",
   };
 
   for (const setting of settings) {
@@ -36,10 +34,8 @@ async function getAiSettings(): Promise<AiSettings> {
       result.bedrockAccessKey = setting.value || "";
     } else if (setting.key === "bedrockSecretKey") {
       result.bedrockSecretKey = setting.value || "";
-    } else if (setting.key === "bedrockRegion") {
-      result.bedrockRegion = setting.value || "us-east-1";
     } else if (setting.key === "bedrockModelId") {
-      result.bedrockModelId = setting.value || "anthropic.claude-3-sonnet-20240229-v1:0";
+      result.bedrockModelId = setting.value || "";
     }
   }
 
@@ -119,14 +115,21 @@ async function callBedrock(
   systemPrompt?: string
 ): Promise<string> {
   const modelId = settings.bedrockModelId;
-  const region = settings.bedrockRegion;
+  const endpoint = settings.bedrockEndpointUrl;
 
-  let endpoint = settings.bedrockEndpointUrl;
   if (!endpoint) {
-    endpoint = `https://bedrock-runtime.${region}.amazonaws.com`;
+    throw new Error("Bedrock endpoint URL is required");
+  }
+
+  if (!modelId) {
+    throw new Error("Bedrock model ID is required");
   }
 
   const url = new URL(`${endpoint}/model/${encodeURIComponent(modelId)}/invoke`);
+  
+  // Extract region from endpoint URL (e.g., bedrock-runtime.us-east-1.amazonaws.com)
+  const regionMatch = endpoint.match(/\.([a-z]{2}-[a-z]+-\d+)\./);
+  const region = regionMatch ? regionMatch[1] : "us-east-1";
 
   const anthropicMessages = messages.map((m) => ({
     role: m.role === "assistant" ? "assistant" : "user",
