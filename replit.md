@@ -82,22 +82,34 @@ Pre-built integration modules in `server/replit_integrations/`:
 
 ## Recent Changes
 
-### Replit Authentication & Multi-Project Team Collaboration (Latest)
-- Integrated Replit Auth supporting Google, GitHub, Apple, and email/password login
+### Email/Password Authentication & Multi-Project Team Collaboration (Latest)
+- Custom email/password authentication (no OAuth/Replit Auth)
+- Corporate ALM-style workflow:
+  - Administrators create projects and add users with temporary passwords
+  - Users must change password on first login (mustChangePassword flag)
+  - Password hashing using PBKDF2 with 100,000 iterations
+- User schema with passwordHash, mustChangePassword, isActive fields
 - Landing page for logged-out users with feature showcase at /
+- Login page at /login with email/password form
+- Force password change page at /change-password for first login
 - Authenticated users see the dashboard with sidebar navigation
 - User profile dropdown in sidebar with logout functionality
 - Multi-project support with Projects and TeamMemberships schemas
 - Super admin flag (isSuperAdmin) for master admin access across all projects
 - Projects page at /projects with:
   - Create/delete projects
-  - Add team members with role assignments
+  - Add team members with firstName, lastName, email, temporaryPassword
   - Owner badge and super admin badge indicators
 - Team memberships with flexible per-project role assignments
-- Auth routes: /api/login, /api/logout, /api/auth/user
+- Auth API endpoints:
+  - POST /api/auth/login - Email/password login
+  - POST /api/auth/logout - Logout
+  - GET /api/auth/user - Get current user
+  - POST /api/auth/change-password - Change password
 - Project API endpoints: GET/POST /api/projects, DELETE /api/projects/:id
-- Team membership API: POST /api/projects/:id/members
+- Team membership API: POST /api/projects/:id/members (creates user with temp password)
 - Auth schema in shared/models/auth.ts with users and sessions tables
+- Auth module in server/auth/ with password utilities and session handling
 
 ### Autonomous Agentic AI Testing
 - Added autonomous agent mode for continuous background testing

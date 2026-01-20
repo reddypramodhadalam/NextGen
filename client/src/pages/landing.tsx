@@ -64,7 +64,7 @@ export default function Landing() {
             <span className="text-xl font-bold">AITAS</span>
           </div>
           <Button asChild data-testid="button-login">
-            <a href="/api/login">Sign In</a>
+            <a href="/login">Sign In</a>
           </Button>
         </div>
       </header>
@@ -80,7 +80,7 @@ export default function Landing() {
               Build reliable software faster with intelligent test automation.
             </p>
             <Button size="lg" asChild data-testid="button-get-started">
-              <a href="/api/login">Get Started</a>
+              <a href="/login">Get Started</a>
             </Button>
           </div>
         </section>
@@ -117,10 +117,10 @@ export default function Landing() {
             <h2 className="text-3xl font-bold mb-6">Ready to Automate?</h2>
             <p className="text-muted-foreground mb-8">
               Start generating AI-powered test cases in minutes. 
-              Sign in with your Replit account to get started.
+              Sign in to get started.
             </p>
             <Button size="lg" asChild data-testid="button-sign-in-cta">
-              <a href="/api/login">Sign In with Replit</a>
+              <a href="/login">Sign In</a>
             </Button>
           </div>
         </section>

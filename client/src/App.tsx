@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -19,9 +19,11 @@ import Settings from "@/pages/settings";
 import Environments from "@/pages/environments";
 import Projects from "@/pages/projects";
 import Landing from "@/pages/landing";
+import Login from "@/pages/login";
+import ChangePassword from "@/pages/change-password";
 import { Loader2 } from "lucide-react";
 
-function Router() {
+function AuthenticatedRouter() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
@@ -55,7 +57,7 @@ function AuthenticatedApp() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-y-auto">
-            <Router />
+            <AuthenticatedRouter />
           </main>
         </div>
       </div>
@@ -63,8 +65,22 @@ function AuthenticatedApp() {
   );
 }
 
+function UnauthenticatedRouter() {
+  return (
+    <Switch>
+      <Route path="/" component={Landing} />
+      <Route path="/login" component={Login} />
+      <Route path="/change-password" component={ChangePassword} />
+      <Route>
+        <Redirect to="/" />
+      </Route>
+    </Switch>
+  );
+}
+
 function AppContent() {
-  const { isLoading, isAuthenticated } = useAuth();
+  const { isLoading, isAuthenticated, mustChangePassword } = useAuth();
+  const [location] = useLocation();
 
   if (isLoading) {
     return (
@@ -74,8 +90,22 @@ function AppContent() {
     );
   }
 
+  // If authenticated but must change password, only allow change-password page
+  if (isAuthenticated && mustChangePassword) {
+    if (location !== "/change-password") {
+      return <Redirect to="/change-password" />;
+    }
+    return <ChangePassword />;
+  }
+
+  // If not authenticated, show unauthenticated routes
   if (!isAuthenticated) {
-    return <Landing />;
+    return <UnauthenticatedRouter />;
+  }
+
+  // Redirect from login/change-password to home if already authenticated
+  if (location === "/login" || location === "/change-password") {
+    return <Redirect to="/" />;
   }
 
   return <AuthenticatedApp />;

@@ -55,7 +55,10 @@ const createProjectSchema = z.object({
 
 const addMemberSchema = z.object({
   email: z.string().email("Valid email is required"),
-  roleId: z.string().min(1, "Role is required"),
+  firstName: z.string().min(1, "First name is required"),
+  lastName: z.string().min(1, "Last name is required"),
+  temporaryPassword: z.string().min(8, "Password must be at least 8 characters"),
+  role: z.string().min(1, "Role is required"),
 });
 
 type CreateProjectForm = z.infer<typeof createProjectSchema>;
@@ -88,7 +91,10 @@ export default function Projects() {
     resolver: zodResolver(addMemberSchema),
     defaultValues: {
       email: "",
-      roleId: "",
+      firstName: "",
+      lastName: "",
+      temporaryPassword: "",
+      role: "",
     },
   });
 
@@ -134,20 +140,29 @@ export default function Projects() {
     },
   });
 
+  const [addedMemberInfo, setAddedMemberInfo] = useState<{ email: string; temporaryPassword: string } | null>(null);
+
   const addMemberMutation = useMutation({
     mutationFn: async (data: AddMemberForm & { projectId: string }) => {
-      return apiRequest("POST", `/api/projects/${data.projectId}/members`, {
+      const response = await apiRequest("POST", `/api/projects/${data.projectId}/members`, {
         email: data.email,
-        roleId: data.roleId,
+        firstName: data.firstName,
+        lastName: data.lastName,
+        temporaryPassword: data.temporaryPassword,
+        role: data.role,
       });
+      return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (result, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/projects"] });
-      setAddMemberDialogOpen(false);
+      setAddedMemberInfo({
+        email: variables.email,
+        temporaryPassword: variables.temporaryPassword,
+      });
       memberForm.reset();
       toast({
         title: "Member added",
-        description: "Team member has been added to the project.",
+        description: "Team member has been added to the project. Share the temporary password with them.",
       });
     },
     onError: (error: Error) => {
@@ -361,86 +376,173 @@ export default function Projects() {
         </div>
       )}
 
-      <Dialog open={addMemberDialogOpen} onOpenChange={setAddMemberDialogOpen}>
-        <DialogContent>
+      <Dialog open={addMemberDialogOpen} onOpenChange={(open) => {
+        setAddMemberDialogOpen(open);
+        if (!open) {
+          setAddedMemberInfo(null);
+          memberForm.reset();
+        }
+      }}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Add Team Member</DialogTitle>
             <DialogDescription>
-              Add a team member to {selectedProject?.name}
+              Add a team member to {selectedProject?.name}. A new account will be created with a temporary password.
             </DialogDescription>
           </DialogHeader>
-          <Form {...memberForm}>
-            <form onSubmit={memberForm.handleSubmit(onAddMember)} className="space-y-4">
-              <FormField
-                control={memberForm.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email Address</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="email"
-                        placeholder="teammate@example.com"
-                        data-testid="input-member-email"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      The user must have a Replit account with this email.
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={memberForm.control}
-                name="roleId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Role</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-member-role">
-                          <SelectValue placeholder="Select a role" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {roles?.map((role) => (
-                          <SelectItem key={role.id} value={role.id}>
-                            {role.name} - {role.description}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+
+          {addedMemberInfo ? (
+            <div className="space-y-4">
+              <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
+                <h4 className="font-medium text-green-800 dark:text-green-200 mb-2">Member Added Successfully</h4>
+                <p className="text-sm text-green-700 dark:text-green-300 mb-3">
+                  Share these credentials with the new team member:
+                </p>
+                <div className="space-y-2 bg-white dark:bg-gray-900 rounded p-3 font-mono text-sm">
+                  <div><span className="text-muted-foreground">Email:</span> {addedMemberInfo.email}</div>
+                  <div><span className="text-muted-foreground">Password:</span> {addedMemberInfo.temporaryPassword}</div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-3">
+                  The user will be prompted to change their password on first login.
+                </p>
+              </div>
               <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setAddMemberDialogOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={addMemberMutation.isPending}
-                  data-testid="button-submit-member"
-                >
-                  {addMemberMutation.isPending ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Adding...
-                    </>
-                  ) : (
-                    "Add Member"
-                  )}
+                <Button onClick={() => {
+                  setAddMemberDialogOpen(false);
+                  setAddedMemberInfo(null);
+                }}>
+                  Done
                 </Button>
               </DialogFooter>
-            </form>
-          </Form>
+            </div>
+          ) : (
+            <Form {...memberForm}>
+              <form onSubmit={memberForm.handleSubmit(onAddMember)} className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={memberForm.control}
+                    name="firstName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>First Name</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="John"
+                            data-testid="input-member-first-name"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={memberForm.control}
+                    name="lastName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Last Name</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder="Doe"
+                            data-testid="input-member-last-name"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <FormField
+                  control={memberForm.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Email Address</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="email"
+                          placeholder="teammate@company.com"
+                          data-testid="input-member-email"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={memberForm.control}
+                  name="temporaryPassword"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Temporary Password</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="text"
+                          placeholder="At least 8 characters"
+                          data-testid="input-member-temp-password"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        The user will be required to change this on first login.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={memberForm.control}
+                  name="role"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Role</FormLabel>
+                      <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormControl>
+                          <SelectTrigger data-testid="select-member-role">
+                            <SelectValue placeholder="Select a role" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {roles?.map((role) => (
+                            <SelectItem key={role.id} value={role.name}>
+                              {role.name} - {role.description}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setAddMemberDialogOpen(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={addMemberMutation.isPending}
+                    data-testid="button-submit-member"
+                  >
+                    {addMemberMutation.isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Adding...
+                      </>
+                    ) : (
+                      "Add Member"
+                    )}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </Form>
+          )}
         </DialogContent>
       </Dialog>
     </div>

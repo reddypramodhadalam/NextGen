@@ -452,7 +452,7 @@ export default function Agents() {
             <div className="flex-1 min-w-[200px]">
               <h3 className="font-semibold">Local Agent Setup</h3>
               <p className="text-sm text-muted-foreground">
-                Install the TestComet agent on your infrastructure for secure, local test execution. Your code never leaves your environment.
+                Install the AITAS agent on your infrastructure for secure, local test execution. Your code never leaves your environment.
               </p>
             </div>
             <Button variant="outline" data-testid="button-view-setup-guide">

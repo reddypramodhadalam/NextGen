@@ -20,7 +20,8 @@ import {
   insertTeamMembershipSchema,
 } from "@shared/schema";
 import { testExecutor } from "./test-executor";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, isAuthenticated, createUser, getUserByEmail } from "./auth";
+import { addProjectMemberSchema } from "@shared/models/auth";
 
 // Partial schemas for PATCH operations
 const partialTestSuiteSchema = insertTestSuiteSchema.partial();
@@ -91,7 +92,6 @@ export async function registerRoutes(
 ): Promise<Server> {
   // Setup authentication before other routes
   await setupAuth(app);
-  registerAuthRoutes(app);
 
   // Test Suites
   app.get("/api/test-suites", async (req: Request, res: Response) => {
@@ -1264,7 +1264,7 @@ aitas_tests:
   // Projects
   app.get("/api/projects", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req as any).user?.id;
       // Get all projects user has access to
       const projects = await storage.getProjectsForUser(userId);
       res.json(projects);
@@ -1289,7 +1289,7 @@ aitas_tests:
 
   app.post("/api/projects", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req as any).user?.id;
       const validation = validateBody(insertProjectSchema, { ...req.body, ownerId: userId });
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
@@ -1348,17 +1348,56 @@ aitas_tests:
 
   app.post("/api/projects/:projectId/members", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const validation = validateBody(insertTeamMembershipSchema, {
-        ...req.body,
-        projectId: req.params.projectId,
-      });
+      const validation = validateBody(addProjectMemberSchema, req.body);
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const membership = await storage.createTeamMembership(validation.data);
-      res.status(201).json(membership);
-    } catch (error) {
+
+      const { email, firstName, lastName, temporaryPassword, role } = validation.data;
+
+      // Check if user already exists
+      let user = await getUserByEmail(email);
+
+      // If user doesn't exist, create them with temporary password
+      if (!user) {
+        user = await createUser(email, firstName, lastName, temporaryPassword, false);
+      }
+
+      // Get the role
+      const roleRecord = await storage.getRoleByName(role);
+      if (!roleRecord) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+
+      // Check if user is already a member
+      const existingMembership = await storage.getUserProjectMembership(user.id, req.params.projectId);
+      if (existingMembership) {
+        return res.status(400).json({ error: "User is already a member of this project" });
+      }
+
+      // Create team membership
+      const membership = await storage.createTeamMembership({
+        userId: user.id,
+        projectId: req.params.projectId,
+        roleId: roleRecord.id,
+        isOwner: false,
+      });
+
+      res.status(201).json({
+        membership,
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        },
+        temporaryPassword: temporaryPassword, // Return so admin can share with user
+      });
+    } catch (error: any) {
       console.error("Error adding project member:", error);
+      if (error.code === "23505") { // Unique constraint violation
+        return res.status(400).json({ error: "User with this email already exists" });
+      }
       res.status(500).json({ error: "Failed to add project member" });
     }
   });
@@ -1389,7 +1428,7 @@ aitas_tests:
   // Get current user's role in a project
   app.get("/api/projects/:projectId/my-role", isAuthenticated, async (req: Request, res: Response) => {
     try {
-      const userId = (req.user as any)?.claims?.sub;
+      const userId = (req as any).user?.id;
       const membership = await storage.getUserProjectMembership(userId, req.params.projectId as string);
       if (!membership) {
         return res.status(404).json({ error: "Not a member of this project" });
