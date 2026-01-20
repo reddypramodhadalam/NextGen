@@ -130,7 +130,7 @@ async function callBedrock(
 
   const anthropicMessages = messages.map((m) => ({
     role: m.role === "assistant" ? "assistant" : "user",
-    content: m.content,
+    content: [{ type: "text", text: m.content }],
   }));
 
   const requestBody = JSON.stringify({
