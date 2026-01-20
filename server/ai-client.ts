@@ -7,7 +7,6 @@ type AiSettings = {
   useCustomLlm: boolean;
   bedrockEndpointUrl: string;
   bedrockAccessKey: string;
-  bedrockSecretKey: string;
   bedrockModelId: string;
 };
 
@@ -21,7 +20,6 @@ async function getAiSettings(): Promise<AiSettings> {
     useCustomLlm: false,
     bedrockEndpointUrl: "",
     bedrockAccessKey: "",
-    bedrockSecretKey: "",
     bedrockModelId: "",
   };
 
@@ -32,8 +30,6 @@ async function getAiSettings(): Promise<AiSettings> {
       result.bedrockEndpointUrl = setting.value || "";
     } else if (setting.key === "bedrockAccessKey") {
       result.bedrockAccessKey = setting.value || "";
-    } else if (setting.key === "bedrockSecretKey") {
-      result.bedrockSecretKey = setting.value || "";
     } else if (setting.key === "bedrockModelId") {
       result.bedrockModelId = setting.value || "";
     }
@@ -42,94 +38,30 @@ async function getAiSettings(): Promise<AiSettings> {
   return result;
 }
 
-async function createBedrockSignature(
-  method: string,
-  url: URL,
-  body: string,
-  accessKey: string,
-  secretKey: string,
-  region: string
-): Promise<Record<string, string>> {
-  const crypto = await import("crypto");
-  const date = new Date();
-  const amzDate = date.toISOString().replace(/[:-]|\.\d{3}/g, "");
-  const dateStamp = amzDate.slice(0, 8);
-  const service = "bedrock";
-
-  const canonicalUri = url.pathname;
-  const canonicalQuerystring = "";
-  const host = url.host;
-
-  const payloadHash = crypto.createHash("sha256").update(body).digest("hex");
-
-  const canonicalHeaders =
-    `content-type:application/json\n` +
-    `host:${host}\n` +
-    `x-amz-date:${amzDate}\n`;
-
-  const signedHeaders = "content-type;host;x-amz-date";
-
-  const canonicalRequest =
-    `${method}\n${canonicalUri}\n${canonicalQuerystring}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-
-  const algorithm = "AWS4-HMAC-SHA256";
-  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-
-  const stringToSign =
-    `${algorithm}\n${amzDate}\n${credentialScope}\n${crypto.createHash("sha256").update(canonicalRequest).digest("hex")}`;
-
-  const getSignatureKey = (
-    key: string,
-    dateStamp: string,
-    regionName: string,
-    serviceName: string
-  ) => {
-    const kDate = crypto
-      .createHmac("sha256", `AWS4${key}`)
-      .update(dateStamp)
-      .digest();
-    const kRegion = crypto.createHmac("sha256", kDate).update(regionName).digest();
-    const kService = crypto.createHmac("sha256", kRegion).update(serviceName).digest();
-    const kSigning = crypto.createHmac("sha256", kService).update("aws4_request").digest();
-    return kSigning;
-  };
-
-  const signingKey = getSignatureKey(secretKey, dateStamp, region, service);
-  const signature = crypto
-    .createHmac("sha256", signingKey)
-    .update(stringToSign)
-    .digest("hex");
-
-  const authorizationHeader = `${algorithm} Credential=${accessKey}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-
-  return {
-    "Content-Type": "application/json",
-    "X-Amz-Date": amzDate,
-    Authorization: authorizationHeader,
-  };
-}
-
-async function callBedrock(
+async function callCustomLlm(
   settings: AiSettings,
   messages: Array<{ role: string; content: string }>,
   systemPrompt?: string
 ): Promise<string> {
   const modelId = settings.bedrockModelId;
   const endpoint = settings.bedrockEndpointUrl;
+  const accessKey = settings.bedrockAccessKey;
 
   if (!endpoint) {
-    throw new Error("Bedrock endpoint URL is required");
+    throw new Error("API endpoint URL is required");
   }
 
-  if (!modelId) {
-    throw new Error("Bedrock model ID is required");
+  if (!accessKey) {
+    throw new Error("Access key is required");
   }
 
-  const url = new URL(`${endpoint}/model/${encodeURIComponent(modelId)}/invoke`);
-  
-  // Extract region from endpoint URL (e.g., bedrock-runtime.us-east-1.amazonaws.com)
-  const regionMatch = endpoint.match(/\.([a-z]{2}-[a-z]+-\d+)\./);
-  const region = regionMatch ? regionMatch[1] : "us-east-1";
+  // Build the URL - append model path if model ID is provided
+  let url: string;
+  if (modelId) {
+    url = `${endpoint.replace(/\/$/, "")}/model/${encodeURIComponent(modelId)}/invoke`;
+  } else {
+    url = endpoint;
+  }
 
   const anthropicMessages = messages.map((m) => ({
     role: m.role === "assistant" ? "assistant" : "user",
@@ -143,14 +75,10 @@ async function callBedrock(
     messages: anthropicMessages,
   });
 
-  const headers = await createBedrockSignature(
-    "POST",
-    url,
-    requestBody,
-    settings.bedrockAccessKey,
-    settings.bedrockSecretKey,
-    region
-  );
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${accessKey}`,
+  };
 
   const response = await fetch(url.toString(), {
     method: "POST",
@@ -217,7 +145,7 @@ class OpenAiClient implements AiClient {
   }
 }
 
-class BedrockClient implements AiClient {
+class CustomLlmClient implements AiClient {
   private settings: AiSettings;
 
   constructor(settings: AiSettings) {
@@ -226,7 +154,7 @@ class BedrockClient implements AiClient {
 
   async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
     const filteredMessages = messages.filter((m) => m.role !== "system");
-    return callBedrock(this.settings, filteredMessages, systemPrompt);
+    return callCustomLlm(this.settings, filteredMessages, systemPrompt);
   }
 
   isUsingCustomLlm(): boolean {
@@ -239,10 +167,10 @@ export async function getAiClient(): Promise<AiClient> {
 
   if (
     settings.useCustomLlm &&
-    settings.bedrockAccessKey &&
-    settings.bedrockSecretKey
+    settings.bedrockEndpointUrl &&
+    settings.bedrockAccessKey
   ) {
-    return new BedrockClient(settings);
+    return new CustomLlmClient(settings);
   }
 
   return new OpenAiClient();

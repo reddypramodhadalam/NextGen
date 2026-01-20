@@ -61,7 +61,6 @@ type SettingsState = {
     useCustomLlm: boolean;
     bedrockEndpointUrl: string;
     bedrockAccessKey: string;
-    bedrockSecretKey: string;
     bedrockModelId: string;
   };
 };
@@ -94,7 +93,6 @@ const defaultSettings: SettingsState = {
     useCustomLlm: false,
     bedrockEndpointUrl: "",
     bedrockAccessKey: "",
-    bedrockSecretKey: "",
     bedrockModelId: "",
   },
 };
@@ -155,7 +153,6 @@ export default function Settings() {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
   const [hasChanges, setHasChanges] = useState(false);
   const [showAccessKey, setShowAccessKey] = useState(false);
-  const [showSecretKey, setShowSecretKey] = useState(false);
 
   const { data: apiSettings, isLoading } = useQuery<PlatformSetting[]>({
     queryKey: ["/api/settings"],
@@ -582,13 +579,13 @@ export default function Settings() {
                       Your custom LLM API endpoint URL
                     </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="bedrock-access-key">Access Key</Label>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="bedrock-access-key">Access Key / API Token</Label>
                     <div className="relative">
                       <Input
                         id="bedrock-access-key"
                         type={showAccessKey ? "text" : "password"}
-                        placeholder="Enter your access key"
+                        placeholder="Enter your access key or API token"
                         value={settings.ai.bedrockAccessKey}
                         onChange={(e) => updateAi("bedrockAccessKey", e.target.value)}
                         data-testid="input-bedrock-access-key"
@@ -602,29 +599,6 @@ export default function Settings() {
                         data-testid="button-toggle-access-key"
                       >
                         {showAccessKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="bedrock-secret-key">Secret Key</Label>
-                    <div className="relative">
-                      <Input
-                        id="bedrock-secret-key"
-                        type={showSecretKey ? "text" : "password"}
-                        placeholder="Enter your secret key"
-                        value={settings.ai.bedrockSecretKey}
-                        onChange={(e) => updateAi("bedrockSecretKey", e.target.value)}
-                        data-testid="input-bedrock-secret-key"
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-full px-3"
-                        onClick={() => setShowSecretKey(!showSecretKey)}
-                        data-testid="button-toggle-secret-key"
-                      >
-                        {showSecretKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
                     </div>
                   </div>
@@ -649,7 +623,7 @@ export default function Settings() {
                     <div>
                       <span className="font-medium text-amber-600 dark:text-amber-400">Security Note</span>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Your AWS credentials are stored securely and encrypted. Make sure to use IAM credentials with minimal required permissions for Bedrock access only.
+                        Your API credentials are stored securely. Use tokens with minimal required permissions.
                       </p>
                     </div>
                   </div>
