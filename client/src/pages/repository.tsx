@@ -45,6 +45,8 @@ import {
   FileJson,
   Edit,
   X,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -274,6 +276,24 @@ export default function Repository() {
       ...prev,
       steps: prev.steps.map((s, i) => (i === index ? { ...s, [field]: value } : s)),
     }));
+  };
+
+  const moveStepUp = (index: number) => {
+    if (index === 0) return;
+    setTestCaseForm((prev) => {
+      const newSteps = [...prev.steps];
+      [newSteps[index - 1], newSteps[index]] = [newSteps[index], newSteps[index - 1]];
+      return { ...prev, steps: newSteps };
+    });
+  };
+
+  const moveStepDown = (index: number) => {
+    setTestCaseForm((prev) => {
+      if (index === prev.steps.length - 1) return prev;
+      const newSteps = [...prev.steps];
+      [newSteps[index], newSteps[index + 1]] = [newSteps[index + 1], newSteps[index]];
+      return { ...prev, steps: newSteps };
+    });
   };
 
   const handleSaveTestCase = () => {
@@ -590,18 +610,38 @@ Example format:
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>Test Steps</Label>
-                <Button type="button" variant="outline" size="sm" onClick={addStep} data-testid="button-add-step">
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Step
-                </Button>
-              </div>
+              <Label>Test Steps</Label>
               <div className="space-y-3">
                 {testCaseForm.steps.map((step, index) => (
                   <div key={index} className="flex gap-2 items-start p-3 rounded-lg bg-muted/50">
-                    <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-medium shrink-0 mt-1">
-                      {index + 1}
+                    <div className="flex flex-col items-center gap-1 shrink-0">
+                      <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-medium">
+                        {index + 1}
+                      </div>
+                      <div className="flex flex-col">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => moveStepUp(index)}
+                          disabled={index === 0}
+                          data-testid={`button-move-step-up-${index}`}
+                        >
+                          <ChevronUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          onClick={() => moveStepDown(index)}
+                          disabled={index === testCaseForm.steps.length - 1}
+                          data-testid={`button-move-step-down-${index}`}
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                     <div className="flex-1 space-y-2">
                       <Input
@@ -632,6 +672,10 @@ Example format:
                   </div>
                 ))}
               </div>
+              <Button type="button" variant="outline" onClick={addStep} className="w-full" data-testid="button-add-step">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Step
+              </Button>
             </div>
 
             <div className="flex gap-2 pt-4">
