@@ -1270,7 +1270,12 @@ aitas_tests:
   app.post("/api/projects", isAuthenticated, async (req: Request, res: Response) => {
     try {
       const userId = (req as any).user?.id;
-      const validation = validateBody(insertProjectSchema, { ...req.body, ownerId: userId });
+      // Auto-generate slug from name if not provided
+      const slug = req.body.slug || req.body.name?.toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .substring(0, 50) + '-' + Date.now().toString(36);
+      const validation = validateBody(insertProjectSchema, { ...req.body, slug, ownerId: userId });
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
