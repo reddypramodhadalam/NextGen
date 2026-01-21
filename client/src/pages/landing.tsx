@@ -63,9 +63,14 @@ export default function Landing() {
             <TestTube2 className="h-8 w-8 text-primary" />
             <span className="text-xl font-bold">AITAS</span>
           </div>
-          <Button asChild data-testid="button-login">
-            <a href="/login">Sign In</a>
-          </Button>
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" asChild data-testid="button-docs">
+              <a href="/docs">Documentation</a>
+            </Button>
+            <Button asChild data-testid="button-login">
+              <a href="/login">Sign In</a>
+            </Button>
+          </div>
         </div>
       </header>
 

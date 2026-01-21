@@ -21,6 +21,7 @@ import Projects from "@/pages/projects";
 import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import ChangePassword from "@/pages/change-password";
+import Documentation from "@/pages/documentation";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedRouter() {
@@ -36,6 +37,7 @@ function AuthenticatedRouter() {
       <Route path="/environments" component={Environments} />
       <Route path="/projects" component={Projects} />
       <Route path="/settings" component={Settings} />
+      <Route path="/docs" component={Documentation} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -71,6 +73,7 @@ function UnauthenticatedRouter() {
       <Route path="/" component={Landing} />
       <Route path="/login" component={Login} />
       <Route path="/change-password" component={ChangePassword} />
+      <Route path="/docs" component={Documentation} />
       <Route>
         <Redirect to="/" />
       </Route>
