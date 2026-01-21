@@ -168,17 +168,26 @@ ${reportData.executions.map((e) => `  <testsuite name="Execution ${e.id.slice(0,
 
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    
+    // Use a more reliable download method
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    
+    // For better compatibility, trigger download via timeout
+    setTimeout(() => {
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 100);
+    }, 0);
 
     toast({
       title: "Report Exported",
-      description: `Report saved as ${filename}`,
+      description: `Downloading ${filename}...`,
     });
   };
 
