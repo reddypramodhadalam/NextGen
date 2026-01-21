@@ -21,6 +21,13 @@ import {
 } from "@/components/ui/accordion";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -30,13 +37,14 @@ import {
   Search,
   TestTube2,
   Sparkles,
-  ChevronRight,
   MoreVertical,
   Trash2,
   Loader2,
   Upload,
   Download,
   FileJson,
+  Edit,
+  X,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -45,6 +53,32 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { TestSuite, TestCase } from "@shared/schema";
+
+type TestStep = { step: string; expected: string };
+
+interface TestCaseFormData {
+  title: string;
+  description: string;
+  preconditions: string;
+  targetUrl: string;
+  suiteId: string;
+  priority: string;
+  status: string;
+  tags: string;
+  steps: TestStep[];
+}
+
+const emptyFormData: TestCaseFormData = {
+  title: "",
+  description: "",
+  preconditions: "",
+  targetUrl: "",
+  suiteId: "",
+  priority: "medium",
+  status: "active",
+  tags: "",
+  steps: [{ step: "", expected: "" }],
+};
 
 export default function Repository() {
   const { toast } = useToast();
@@ -56,6 +90,9 @@ export default function Repository() {
   const [importJson, setImportJson] = useState("");
   const [selectedImportSuite, setSelectedImportSuite] = useState("");
   const [expandedSuites, setExpandedSuites] = useState<string[]>([]);
+  const [testCaseDialogOpen, setTestCaseDialogOpen] = useState(false);
+  const [editingTestCase, setEditingTestCase] = useState<TestCase | null>(null);
+  const [testCaseForm, setTestCaseForm] = useState<TestCaseFormData>(emptyFormData);
 
   const { data: suites = [], isLoading: suitesLoading } = useQuery<TestSuite[]>({
     queryKey: ["/api/test-suites"],
@@ -109,6 +146,36 @@ export default function Repository() {
     },
   });
 
+  const createTestCaseMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/test-cases", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/test-cases"] });
+      toast({ title: "Test Case Created", description: "New test case has been created." });
+      closeTestCaseDialog();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create test case.", variant: "destructive" });
+    },
+  });
+
+  const updateTestCaseMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const res = await apiRequest("PATCH", `/api/test-cases/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/test-cases"] });
+      toast({ title: "Test Case Updated", description: "Test case has been updated." });
+      closeTestCaseDialog();
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to update test case.", variant: "destructive" });
+    },
+  });
+
   const importMutation = useMutation({
     mutationFn: async (data: { suiteId: string | null; testCases: any[] }) => {
       const res = await apiRequest("POST", "/api/test-cases/import", data);
@@ -157,6 +224,81 @@ export default function Repository() {
       toast({ title: "Export Complete", description: `Exported ${data.length} test cases.` });
     } catch {
       toast({ title: "Export Failed", description: "Failed to export test cases.", variant: "destructive" });
+    }
+  };
+
+  const openCreateTestCaseDialog = () => {
+    setEditingTestCase(null);
+    setTestCaseForm(emptyFormData);
+    setTestCaseDialogOpen(true);
+  };
+
+  const openEditTestCaseDialog = (testCase: TestCase) => {
+    setEditingTestCase(testCase);
+    setTestCaseForm({
+      title: testCase.title,
+      description: testCase.description || "",
+      preconditions: testCase.preconditions || "",
+      targetUrl: testCase.targetUrl || "",
+      suiteId: testCase.suiteId || "",
+      priority: testCase.priority || "medium",
+      status: testCase.status || "active",
+      tags: testCase.tags?.join(", ") || "",
+      steps: (testCase.steps as TestStep[]) || [{ step: "", expected: "" }],
+    });
+    setTestCaseDialogOpen(true);
+  };
+
+  const closeTestCaseDialog = () => {
+    setTestCaseDialogOpen(false);
+    setEditingTestCase(null);
+    setTestCaseForm(emptyFormData);
+  };
+
+  const addStep = () => {
+    setTestCaseForm((prev) => ({
+      ...prev,
+      steps: [...prev.steps, { step: "", expected: "" }],
+    }));
+  };
+
+  const removeStep = (index: number) => {
+    setTestCaseForm((prev) => ({
+      ...prev,
+      steps: prev.steps.filter((_, i) => i !== index),
+    }));
+  };
+
+  const updateStep = (index: number, field: "step" | "expected", value: string) => {
+    setTestCaseForm((prev) => ({
+      ...prev,
+      steps: prev.steps.map((s, i) => (i === index ? { ...s, [field]: value } : s)),
+    }));
+  };
+
+  const handleSaveTestCase = () => {
+    if (!testCaseForm.title.trim()) {
+      toast({ title: "Validation Error", description: "Title is required.", variant: "destructive" });
+      return;
+    }
+
+    const validSteps = testCaseForm.steps.filter((s) => s.step.trim());
+    const data = {
+      title: testCaseForm.title.trim(),
+      description: testCaseForm.description.trim() || null,
+      preconditions: testCaseForm.preconditions.trim() || null,
+      targetUrl: testCaseForm.targetUrl.trim() || null,
+      suiteId: testCaseForm.suiteId || null,
+      priority: testCaseForm.priority,
+      status: testCaseForm.status,
+      tags: testCaseForm.tags ? testCaseForm.tags.split(",").map((t) => t.trim()).filter(Boolean) : null,
+      steps: validSteps.length > 0 ? validSteps : null,
+    };
+
+    if (editingTestCase) {
+      updateTestCaseMutation.mutate({ id: editingTestCase.id, data });
+    } else {
+      createTestCaseMutation.mutate(data);
     }
   };
 
@@ -328,8 +470,195 @@ Example format:
             </div>
           </DialogContent>
         </Dialog>
+          <Button onClick={openCreateTestCaseDialog} data-testid="button-create-test-case">
+            <TestTube2 className="h-4 w-4 mr-2" />
+            New Test Case
+          </Button>
         </div>
       </div>
+
+      <Dialog open={testCaseDialogOpen} onOpenChange={setTestCaseDialogOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TestTube2 className="h-5 w-5" />
+              {editingTestCase ? "Edit Test Case" : "Create Test Case"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2 col-span-2">
+                <Label htmlFor="tc-title">Title *</Label>
+                <Input
+                  id="tc-title"
+                  placeholder="e.g., Verify KYC form submission"
+                  value={testCaseForm.title}
+                  onChange={(e) => setTestCaseForm((prev) => ({ ...prev, title: e.target.value }))}
+                  data-testid="input-test-case-title"
+                />
+              </div>
+              <div className="space-y-2 col-span-2">
+                <Label htmlFor="tc-description">Description</Label>
+                <Textarea
+                  id="tc-description"
+                  placeholder="Describe what this test case verifies..."
+                  value={testCaseForm.description}
+                  onChange={(e) => setTestCaseForm((prev) => ({ ...prev, description: e.target.value }))}
+                  data-testid="textarea-test-case-description"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tc-suite">Test Suite</Label>
+                <Select
+                  value={testCaseForm.suiteId || "__unassigned__"}
+                  onValueChange={(value) => setTestCaseForm((prev) => ({ ...prev, suiteId: value === "__unassigned__" ? "" : value }))}
+                >
+                  <SelectTrigger data-testid="select-test-case-suite">
+                    <SelectValue placeholder="Select a suite (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__unassigned__">Unassigned</SelectItem>
+                    {suites.map((suite) => (
+                      <SelectItem key={suite.id} value={suite.id}>{suite.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tc-target-url">Target URL</Label>
+                <Input
+                  id="tc-target-url"
+                  placeholder="https://example.com/kyc-form"
+                  value={testCaseForm.targetUrl}
+                  onChange={(e) => setTestCaseForm((prev) => ({ ...prev, targetUrl: e.target.value }))}
+                  data-testid="input-test-case-target-url"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tc-priority">Priority</Label>
+                <Select
+                  value={testCaseForm.priority}
+                  onValueChange={(value) => setTestCaseForm((prev) => ({ ...prev, priority: value }))}
+                >
+                  <SelectTrigger data-testid="select-test-case-priority">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="critical">Critical</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tc-status">Status</Label>
+                <Select
+                  value={testCaseForm.status}
+                  onValueChange={(value) => setTestCaseForm((prev) => ({ ...prev, status: value }))}
+                >
+                  <SelectTrigger data-testid="select-test-case-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="deprecated">Deprecated</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 col-span-2">
+                <Label htmlFor="tc-preconditions">Preconditions</Label>
+                <Textarea
+                  id="tc-preconditions"
+                  placeholder="Any conditions that must be met before running this test..."
+                  value={testCaseForm.preconditions}
+                  onChange={(e) => setTestCaseForm((prev) => ({ ...prev, preconditions: e.target.value }))}
+                  data-testid="textarea-test-case-preconditions"
+                />
+              </div>
+              <div className="space-y-2 col-span-2">
+                <Label htmlFor="tc-tags">Tags (comma-separated)</Label>
+                <Input
+                  id="tc-tags"
+                  placeholder="e.g., kyc, form, validation"
+                  value={testCaseForm.tags}
+                  onChange={(e) => setTestCaseForm((prev) => ({ ...prev, tags: e.target.value }))}
+                  data-testid="input-test-case-tags"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>Test Steps</Label>
+                <Button type="button" variant="outline" size="sm" onClick={addStep} data-testid="button-add-step">
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Step
+                </Button>
+              </div>
+              <div className="space-y-3">
+                {testCaseForm.steps.map((step, index) => (
+                  <div key={index} className="flex gap-2 items-start p-3 rounded-lg bg-muted/50">
+                    <div className="flex items-center justify-center h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs font-medium shrink-0 mt-1">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <Input
+                        placeholder="Step action (e.g., Navigate to {{kycFormUrl}})"
+                        value={step.step}
+                        onChange={(e) => updateStep(index, "step", e.target.value)}
+                        data-testid={`input-step-action-${index}`}
+                      />
+                      <Input
+                        placeholder="Expected result (e.g., KYC form is displayed)"
+                        value={step.expected}
+                        onChange={(e) => updateStep(index, "expected", e.target.value)}
+                        data-testid={`input-step-expected-${index}`}
+                      />
+                    </div>
+                    {testCaseForm.steps.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeStep(index)}
+                        className="shrink-0"
+                        data-testid={`button-remove-step-${index}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-4">
+              <Button variant="outline" onClick={closeTestCaseDialog} className="flex-1" data-testid="button-cancel-test-case">
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveTestCase}
+                disabled={!testCaseForm.title.trim() || createTestCaseMutation.isPending || updateTestCaseMutation.isPending}
+                className="flex-1"
+                data-testid="button-save-test-case"
+              >
+                {(createTestCaseMutation.isPending || updateTestCaseMutation.isPending) ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : editingTestCase ? (
+                  "Update Test Case"
+                ) : (
+                  "Create Test Case"
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -413,6 +742,7 @@ Example format:
                             <TestCaseRow
                               key={tc.id}
                               testCase={tc}
+                              onEdit={() => openEditTestCaseDialog(tc)}
                               onDelete={() => deleteTestCaseMutation.mutate(tc.id)}
                             />
                           ))
@@ -439,6 +769,7 @@ Example format:
                   <TestCaseRow
                     key={tc.id}
                     testCase={tc}
+                    onEdit={() => openEditTestCaseDialog(tc)}
                     onDelete={() => deleteTestCaseMutation.mutate(tc.id)}
                   />
                 ))}
@@ -451,7 +782,7 @@ Example format:
   );
 }
 
-function TestCaseRow({ testCase, onDelete }: { testCase: TestCase; onDelete: () => void }) {
+function TestCaseRow({ testCase, onEdit, onDelete }: { testCase: TestCase; onEdit: () => void; onDelete: () => void }) {
   return (
     <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover-elevate gap-4">
       <div className="flex items-center gap-3 min-w-0">
@@ -475,6 +806,10 @@ function TestCaseRow({ testCase, onDelete }: { testCase: TestCase; onDelete: () 
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onEdit} data-testid={`button-edit-test-${testCase.id}`}>
+              <Edit className="h-4 w-4 mr-2" />
+              Edit Test
+            </DropdownMenuItem>
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
               onClick={onDelete}
