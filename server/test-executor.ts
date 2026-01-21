@@ -26,12 +26,14 @@ interface BrowserCommand {
   action: "click" | "type" | "select" | "hover" | "doubleClick" | "rightClick" | 
           "scroll" | "wait" | "pressKey" | "check" | "uncheck" | "clear" | 
           "dragDrop" | "focus" | "acceptDialog" | "dismissDialog" | "navigate" | "verify" |
-          "capture" | "captureAttribute" | "captureCount";
+          "capture" | "captureAttribute" | "captureCount" |
+          "switchToIframe" | "switchToMainFrame" | "switchToWindow" | "switchToNewWindow" | "closeWindow";
   selector?: string;
   value?: string;
   targetSelector?: string;
   variableName?: string;  // For capture actions - store result in this variable
   attributeName?: string; // For captureAttribute - which attribute to get
+  windowIndex?: number;   // For switchToWindow - which window/tab to switch to (0-based)
   description: string;
 }
 
@@ -40,13 +42,23 @@ async function interpretStepWithAI(step: string, expected: string, pageContext: 
     const systemPrompt = `You are a test automation expert. Convert natural language test steps into browser commands.
           
 Return a JSON array of commands. Each command has:
-- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount
-- selector: CSS selector or text content to find element
+- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount, switchToIframe, switchToMainFrame, switchToWindow, switchToNewWindow, closeWindow
+- selector: CSS selector or text content to find element (for iframes: can be name, id, or selector)
 - value: value to type, option to select, key to press, or scroll direction (top/bottom). Can include $variableName$ to use captured values.
 - targetSelector: for dragDrop, the drop target
 - variableName: for capture actions, the name to store the captured value (use for later with $variableName$)
 - attributeName: for captureAttribute, which HTML attribute to get (href, src, data-id, etc.)
+- windowIndex: for switchToWindow, which window/tab index (0-based, 0 is main window)
 - description: brief description
+
+IFRAME ACTIONS (for working with embedded frames):
+- switchToIframe: Switch context to an iframe (use selector for iframe name, id, or CSS selector)
+- switchToMainFrame: Switch back to the main page/default content
+
+WINDOW/TAB ACTIONS (for working with popups and multiple tabs):
+- switchToWindow: Switch to a specific window/tab by index (0 is main, 1 is first popup, etc.)
+- switchToNewWindow: Wait for and switch to a newly opened window/popup
+- closeWindow: Close the current window and switch back to main
 
 CAPTURE ACTIONS (for getting data from page):
 - capture: Get text content of element, store in variableName
@@ -57,6 +69,13 @@ Examples:
 Step: "Click Login button" → [{"action":"click","selector":"Login","description":"Click Login"}]
 Step: "Enter john@email.com in email" → [{"action":"type","selector":"email","value":"john@email.com","description":"Type email"}]
 Step: "Select USA from country" → [{"action":"select","selector":"country","value":"USA","description":"Select country"}]
+Step: "Switch to the payment iframe" → [{"action":"switchToIframe","selector":"payment-frame","description":"Switch to payment iframe"}]
+Step: "Switch to iframe named checkout" → [{"action":"switchToIframe","selector":"checkout","description":"Switch to checkout iframe"}]
+Step: "Go back to main page" → [{"action":"switchToMainFrame","description":"Return to main frame"}]
+Step: "Switch back to default content" → [{"action":"switchToMainFrame","description":"Return to main frame"}]
+Step: "Switch to the new popup window" → [{"action":"switchToNewWindow","description":"Switch to popup"}]
+Step: "Switch to the second tab" → [{"action":"switchToWindow","windowIndex":1,"description":"Switch to second tab"}]
+Step: "Close popup and return to main" → [{"action":"closeWindow","description":"Close current window"}]
 Step: "Save the order number as orderNum" → [{"action":"capture","selector":"order-number","variableName":"orderNum","description":"Capture order number"}]
 Step: "Get the confirmation code and save it" → [{"action":"capture","selector":"confirmation-code","variableName":"confirmCode","description":"Capture confirmation"}]
 Step: "Remember the product link as productUrl" → [{"action":"captureAttribute","selector":"product-link","attributeName":"href","variableName":"productUrl","description":"Capture product URL"}]
@@ -127,8 +146,19 @@ interface FrameworkExecutor {
   executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult>;
 }
 
+import type { BrowserContext as PlaywrightContext, Frame as PlaywrightFrame } from "playwright";
+
+// Execution context for tracking current frame/window state
+interface PlaywrightExecutionContext {
+  context: PlaywrightContext;
+  pages: PlaywrightPage[];
+  currentPageIndex: number;
+  currentFrame: PlaywrightFrame | null;  // null means main frame
+}
+
 class PlaywrightExecutor implements FrameworkExecutor {
   private browser: PlaywrightBrowser | null = null;
+  private execContext: PlaywrightExecutionContext | null = null;
 
   async initialize(): Promise<void> {
     if (!this.browser) {
@@ -165,6 +195,14 @@ class PlaywrightExecutor implements FrameworkExecutor {
       viewport: { width: 1280, height: 720 },
     });
     const page = await context.newPage();
+    
+    // Initialize execution context for frame/window tracking
+    this.execContext = {
+      context,
+      pages: [page],
+      currentPageIndex: 0,
+      currentFrame: null,
+    };
 
     try {
       await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 30000 });
@@ -184,7 +222,8 @@ class PlaywrightExecutor implements FrameworkExecutor {
         };
 
         try {
-          const stepPassed = await this.executeStep(page, processedStep, processedExpected, logs);
+          const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+          const stepPassed = await this.executeStep(currentPage, processedStep, processedExpected, logs);
           stepResult.passed = stepPassed;
           if (!stepPassed) {
             passed = false;
@@ -200,7 +239,8 @@ class PlaywrightExecutor implements FrameworkExecutor {
         stepResults.push(stepResult);
       }
 
-      const screenshotBuffer = await page.screenshot({ fullPage: true });
+      const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+      const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
       screenshot = screenshotBuffer.toString("base64");
       logs.push("Captured final screenshot");
 
@@ -210,12 +250,16 @@ class PlaywrightExecutor implements FrameworkExecutor {
       logs.push(`Test failed: ${error.message}`);
 
       try {
-        const screenshotBuffer = await page.screenshot({ fullPage: true });
-        screenshot = screenshotBuffer.toString("base64");
+        const currentPage = this.execContext?.pages[this.execContext?.currentPageIndex || 0];
+        if (currentPage) {
+          const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
+          screenshot = screenshotBuffer.toString("base64");
+        }
       } catch {
         logs.push("Failed to capture error screenshot");
       }
     } finally {
+      this.execContext = null;
       await context.close();
     }
 
@@ -242,10 +286,19 @@ class PlaywrightExecutor implements FrameworkExecutor {
   ): Promise<boolean> {
     logs.push(`Executing step: ${stepAction}`);
     
+    // Get the current execution context (page or frame)
+    // When inside an iframe, use the frame; otherwise use the page
+    const context: PlaywrightPage | PlaywrightFrame = 
+      this.execContext?.currentFrame || page;
+    const isInFrame = !!this.execContext?.currentFrame;
+    if (isInFrame) {
+      logs.push("(executing in iframe context)");
+    }
+    
     // Get page context for AI
     const pageTitle = await page.title();
     const pageUrl = page.url();
-    const pageContext = `Title: ${pageTitle}, URL: ${pageUrl}`;
+    const pageContext = `Title: ${pageTitle}, URL: ${pageUrl}${isInFrame ? " (in iframe)" : ""}`;
     
     // Use AI to interpret the step
     logs.push("AI interpreting step...");
@@ -264,9 +317,9 @@ class PlaywrightExecutor implements FrameworkExecutor {
           case "click":
             if (cmd.selector) {
               try {
-                await page.click(`text=${cmd.selector}`, { timeout: 5000 });
+                await context.click(`text=${cmd.selector}`, { timeout: 5000 });
               } catch {
-                await page.click(`button:has-text("${cmd.selector}"), a:has-text("${cmd.selector}"), [aria-label*="${cmd.selector}"]`, { timeout: 3000 });
+                await context.click(`button:has-text("${cmd.selector}"), a:has-text("${cmd.selector}"), [aria-label*="${cmd.selector}"]`, { timeout: 3000 });
               }
               logs.push(`Clicked: ${cmd.selector}`);
             }
@@ -274,14 +327,14 @@ class PlaywrightExecutor implements FrameworkExecutor {
             
           case "doubleClick":
             if (cmd.selector) {
-              await page.dblclick(`text=${cmd.selector}`, { timeout: 5000 });
+              await context.dblclick(`text=${cmd.selector}`, { timeout: 5000 });
               logs.push(`Double-clicked: ${cmd.selector}`);
             }
             break;
             
           case "rightClick":
             if (cmd.selector) {
-              await page.click(`text=${cmd.selector}`, { button: "right", timeout: 5000 });
+              await context.click(`text=${cmd.selector}`, { button: "right", timeout: 5000 });
               logs.push(`Right-clicked: ${cmd.selector}`);
             }
             break;
@@ -301,7 +354,7 @@ class PlaywrightExecutor implements FrameworkExecutor {
               let typed = false;
               for (const sel of selectors) {
                 try {
-                  const el = await page.$(sel);
+                  const el = await context.$(sel);
                   if (el) {
                     await el.fill(valueToType);
                     logs.push(`Typed "${valueToType}" in ${cmd.selector}`);
@@ -317,13 +370,13 @@ class PlaywrightExecutor implements FrameworkExecutor {
           case "select":
             if (cmd.selector && cmd.value) {
               try {
-                const selectEl = await page.$(`select[name*="${cmd.selector}" i], select[id*="${cmd.selector}" i]`);
+                const selectEl = await context.$(`select[name*="${cmd.selector}" i], select[id*="${cmd.selector}" i]`);
                 if (selectEl) {
                   await selectEl.selectOption({ label: cmd.value });
                 } else {
                   // Custom dropdown
-                  await page.click(`text=${cmd.selector}`, { timeout: 3000 });
-                  await page.click(`text=${cmd.value}`, { timeout: 3000 });
+                  await context.click(`text=${cmd.selector}`, { timeout: 3000 });
+                  await context.click(`text=${cmd.value}`, { timeout: 3000 });
                 }
                 logs.push(`Selected "${cmd.value}" from ${cmd.selector}`);
               } catch {
@@ -334,18 +387,18 @@ class PlaywrightExecutor implements FrameworkExecutor {
             
           case "hover":
             if (cmd.selector) {
-              await page.hover(`text=${cmd.selector}`, { timeout: 5000 });
+              await context.hover(`text=${cmd.selector}`, { timeout: 5000 });
               logs.push(`Hovered: ${cmd.selector}`);
             }
             break;
             
           case "scroll":
             if (cmd.value === "bottom" || cmd.value === "down") {
-              await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+              await context.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
             } else if (cmd.value === "top" || cmd.value === "up") {
-              await page.evaluate(() => window.scrollTo(0, 0));
+              await context.evaluate(() => window.scrollTo(0, 0));
             } else if (cmd.selector) {
-              const el = await page.$(`text=${cmd.selector}`);
+              const el = await context.$(`text=${cmd.selector}`);
               if (el) await el.scrollIntoViewIfNeeded();
             }
             logs.push(`Scrolled: ${cmd.value || cmd.selector}`);
@@ -353,38 +406,38 @@ class PlaywrightExecutor implements FrameworkExecutor {
             
           case "wait":
             if (cmd.selector) {
-              await page.waitForSelector(`text=${cmd.selector}`, { timeout: 10000 });
+              await context.waitForSelector(`text=${cmd.selector}`, { timeout: 10000 });
               logs.push(`Waited for: ${cmd.selector}`);
             } else {
-              await page.waitForTimeout(2000);
+              await page.waitForTimeout(2000);  // waitForTimeout is page-only
               logs.push("Waited 2 seconds");
             }
             break;
             
           case "pressKey":
             if (cmd.value) {
-              await page.keyboard.press(cmd.value);
+              await page.keyboard.press(cmd.value);  // keyboard is page-only
               logs.push(`Pressed key: ${cmd.value}`);
             }
             break;
             
           case "check":
             if (cmd.selector) {
-              await page.check(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i], label:has-text("${cmd.selector}") input`);
+              await context.check(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i], label:has-text("${cmd.selector}") input`);
               logs.push(`Checked: ${cmd.selector}`);
             }
             break;
             
           case "uncheck":
             if (cmd.selector) {
-              await page.uncheck(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i], label:has-text("${cmd.selector}") input`);
+              await context.uncheck(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i], label:has-text("${cmd.selector}") input`);
               logs.push(`Unchecked: ${cmd.selector}`);
             }
             break;
             
           case "clear":
             if (cmd.selector) {
-              const input = await page.$(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i]`);
+              const input = await context.$(`input[name*="${cmd.selector}" i], input[id*="${cmd.selector}" i]`);
               if (input) await input.fill("");
               logs.push(`Cleared: ${cmd.selector}`);
             }
@@ -392,18 +445,26 @@ class PlaywrightExecutor implements FrameworkExecutor {
             
           case "dragDrop":
             if (cmd.selector && cmd.targetSelector) {
-              const source = await page.$(`text=${cmd.selector}`);
-              const target = await page.$(`text=${cmd.targetSelector}`);
+              const source = await context.$(`text=${cmd.selector}`);
+              const target = await context.$(`text=${cmd.targetSelector}`);
               if (source && target) {
-                await source.dragTo(target);
-                logs.push(`Dragged ${cmd.selector} to ${cmd.targetSelector}`);
+                // Get bounding boxes and perform drag operation
+                const sourceBox = await source.boundingBox();
+                const targetBox = await target.boundingBox();
+                if (sourceBox && targetBox) {
+                  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+                  await page.mouse.down();
+                  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2);
+                  await page.mouse.up();
+                  logs.push(`Dragged ${cmd.selector} to ${cmd.targetSelector}`);
+                }
               }
             }
             break;
             
           case "focus":
             if (cmd.selector) {
-              await page.focus(`text=${cmd.selector}`);
+              await context.focus(`text=${cmd.selector}`);
               logs.push(`Focused: ${cmd.selector}`);
             }
             break;
@@ -422,7 +483,7 @@ class PlaywrightExecutor implements FrameworkExecutor {
             if (cmd.selector) {
               const selectorValue = replaceRuntimeVariables(cmd.selector);
               try {
-                await page.waitForSelector(`text=${selectorValue}`, { state: "visible", timeout: 5000 });
+                await context.waitForSelector(`text=${selectorValue}`, { state: "visible", timeout: 5000 });
                 logs.push(`Verified visible: ${selectorValue}`);
               } catch {
                 logs.push(`Verification: ${cmd.description}`);
@@ -435,10 +496,10 @@ class PlaywrightExecutor implements FrameworkExecutor {
           case "capture":
             if (cmd.selector && cmd.variableName) {
               try {
-                const element = await page.$(`text=${cmd.selector}`) || 
-                                await page.$(`[data-testid*="${cmd.selector}" i]`) ||
-                                await page.$(`#${cmd.selector}`) ||
-                                await page.$(`.${cmd.selector}`);
+                const element = await context.$(`text=${cmd.selector}`) || 
+                                await context.$(`[data-testid*="${cmd.selector}" i]`) ||
+                                await context.$(`#${cmd.selector}`) ||
+                                await context.$(`.${cmd.selector}`);
                 if (element) {
                   const text = await element.textContent() || "";
                   runtimeVariables.set(cmd.variableName, text.trim());
@@ -455,9 +516,9 @@ class PlaywrightExecutor implements FrameworkExecutor {
           case "captureAttribute":
             if (cmd.selector && cmd.variableName && cmd.attributeName) {
               try {
-                const element = await page.$(`[${cmd.attributeName}]`) ||
-                                await page.$(`text=${cmd.selector}`) ||
-                                await page.$(`a:has-text("${cmd.selector}")`);
+                const element = await context.$(`[${cmd.attributeName}]`) ||
+                                await context.$(`text=${cmd.selector}`) ||
+                                await context.$(`a:has-text("${cmd.selector}")`);
                 if (element) {
                   const attrValue = await element.getAttribute(cmd.attributeName) || "";
                   runtimeVariables.set(cmd.variableName, attrValue);
@@ -474,15 +535,113 @@ class PlaywrightExecutor implements FrameworkExecutor {
           case "captureCount":
             if (cmd.selector && cmd.variableName) {
               try {
-                const elements = await page.$$(`text=${cmd.selector}`) ||
-                                 await page.$$(`[data-testid*="${cmd.selector}" i]`) ||
-                                 await page.$$(`.${cmd.selector}`);
+                const elements = await context.$$(`text=${cmd.selector}`) ||
+                                 await context.$$(`[data-testid*="${cmd.selector}" i]`) ||
+                                 await context.$$(`.${cmd.selector}`);
                 const count = elements.length.toString();
                 runtimeVariables.set(cmd.variableName, count);
                 logs.push(`Captured count ${count} as $${cmd.variableName}$`);
               } catch (e: any) {
                 logs.push(`Capture count failed: ${e.message}`);
               }
+            }
+            break;
+            
+          case "switchToIframe":
+            if (cmd.selector && this.execContext) {
+              try {
+                // Try multiple ways to find the iframe
+                let frame = page.frame({ name: cmd.selector }) ||
+                            page.frame({ url: new RegExp(cmd.selector, 'i') });
+                
+                if (!frame) {
+                  // Try finding iframe by selector
+                  const iframeElement = await page.$(`iframe[name="${cmd.selector}"]`) ||
+                                        await page.$(`iframe[id="${cmd.selector}"]`) ||
+                                        await page.$(`iframe[src*="${cmd.selector}"]`) ||
+                                        await page.$(cmd.selector);
+                  if (iframeElement) {
+                    frame = await iframeElement.contentFrame();
+                  }
+                }
+                
+                if (frame) {
+                  this.execContext.currentFrame = frame;
+                  logs.push(`Switched to iframe: ${cmd.selector}`);
+                } else {
+                  logs.push(`Could not find iframe: ${cmd.selector}`);
+                }
+              } catch (e: any) {
+                logs.push(`Switch to iframe failed: ${e.message}`);
+              }
+            }
+            break;
+            
+          case "switchToMainFrame":
+            if (this.execContext) {
+              this.execContext.currentFrame = null;
+              logs.push("Switched back to main frame");
+            }
+            break;
+            
+          case "switchToWindow":
+            if (this.execContext) {
+              const windowIndex = cmd.windowIndex ?? 0;
+              // Refresh the pages list
+              this.execContext.pages = this.execContext.context.pages();
+              
+              if (windowIndex >= 0 && windowIndex < this.execContext.pages.length) {
+                this.execContext.currentPageIndex = windowIndex;
+                this.execContext.currentFrame = null;  // Reset frame when switching windows
+                logs.push(`Switched to window/tab ${windowIndex}`);
+              } else {
+                logs.push(`Window index ${windowIndex} out of range (${this.execContext.pages.length} windows available)`);
+              }
+            }
+            break;
+            
+          case "switchToNewWindow":
+            if (this.execContext) {
+              try {
+                // Wait for a new page to be created
+                const newPage = await this.execContext.context.waitForEvent("page", { timeout: 10000 });
+                await newPage.waitForLoadState("domcontentloaded");
+                
+                // Refresh pages list and find the new page
+                this.execContext.pages = this.execContext.context.pages();
+                const newPageIndex = this.execContext.pages.indexOf(newPage);
+                if (newPageIndex !== -1) {
+                  this.execContext.currentPageIndex = newPageIndex;
+                  this.execContext.currentFrame = null;
+                  logs.push(`Switched to new popup window (index: ${newPageIndex})`);
+                } else {
+                  this.execContext.pages.push(newPage);
+                  this.execContext.currentPageIndex = this.execContext.pages.length - 1;
+                  this.execContext.currentFrame = null;
+                  logs.push("Switched to new popup window");
+                }
+              } catch (e: any) {
+                logs.push(`No new window detected: ${e.message}`);
+              }
+            }
+            break;
+            
+          case "closeWindow":
+            if (this.execContext && this.execContext.currentPageIndex > 0) {
+              try {
+                const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+                await currentPage.close();
+                
+                // Refresh pages list and go back to main window
+                this.execContext.pages = this.execContext.context.pages();
+                this.execContext.currentPageIndex = 0;
+                this.execContext.currentFrame = null;
+                logs.push("Closed current window, switched back to main");
+              } catch (e: any) {
+                logs.push(`Close window failed: ${e.message}`);
+              }
+            } else {
+              logs.push("Cannot close main window");
             }
             break;
             
