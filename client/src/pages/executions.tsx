@@ -82,6 +82,8 @@ export default function Executions() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [testData, setTestData] = useState<TestDataParam[]>([]);
   const [detectedPlaceholders, setDetectedPlaceholders] = useState<string[]>([]);
+  const [viewingExecution, setViewingExecution] = useState<TestExecution | null>(null);
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
 
   const addTestDataParam = () => {
     setTestData([...testData, { key: "", value: "", type: "text" }]);
@@ -120,19 +122,34 @@ export default function Executions() {
       const placeholders = extractPlaceholders(suiteTestCases);
       setDetectedPlaceholders(placeholders);
       
-      // Auto-populate test data with detected placeholders (only if testData is empty)
-      if (placeholders.length > 0 && testData.length === 0) {
+      // Auto-populate test data with detected placeholders (only on suite change)
+      if (placeholders.length > 0) {
         const autoParams: TestDataParam[] = placeholders.map(key => ({
           key,
           value: "",
           type: guessInputType(key),
         }));
         setTestData(autoParams);
+      } else {
+        setTestData([]);
       }
     } else {
       setDetectedPlaceholders([]);
+      setTestData([]);
     }
   }, [selectedSuite, allTestCases]);
+
+  // Fetch execution results when viewing
+  const { data: executionResults = [] } = useQuery({
+    queryKey: ["/api/executions", viewingExecution?.id, "results"],
+    queryFn: async () => {
+      if (!viewingExecution) return [];
+      const res = await fetch(`/api/executions/${viewingExecution.id}/results`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!viewingExecution,
+  });
 
   const runMutation = useMutation({
     mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string; framework: string; testData?: TestDataParam[] }) => {
@@ -558,6 +575,10 @@ export default function Executions() {
                       variant="ghost"
                       size="sm"
                       data-testid={`button-view-execution-${execution.id}`}
+                      onClick={() => {
+                        setViewingExecution(execution);
+                        setViewDialogOpen(true);
+                      }}
                     >
                       <Eye className="h-4 w-4 mr-2" />
                       View
@@ -569,6 +590,112 @@ export default function Executions() {
           </CardContent>
         </Card>
       )}
+
+      {/* View Execution Dialog */}
+      <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="h-5 w-5" />
+              Execution Details
+            </DialogTitle>
+          </DialogHeader>
+          
+          {viewingExecution && (
+            <div className="flex-1 overflow-hidden flex flex-col gap-4">
+              {/* Execution Summary */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg">
+                <div>
+                  <p className="text-sm text-muted-foreground">Status</p>
+                  <StatusBadge status={viewingExecution.status || "pending"} />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Framework</p>
+                  <Badge variant="outline">{viewingExecution.framework || "playwright"}</Badge>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Duration</p>
+                  <p className="font-medium">{formatDuration(viewingExecution.duration)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Target URL</p>
+                  <p className="font-medium text-sm truncate">{viewingExecution.targetUrl || "N/A"}</p>
+                </div>
+              </div>
+
+              {/* Pass/Fail Stats */}
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  <span className="font-medium">{viewingExecution.passedTests || 0} Passed</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <XCircle className="h-5 w-5 text-red-500" />
+                  <span className="font-medium">{viewingExecution.failedTests || 0} Failed</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-muted-foreground" />
+                  <span className="text-muted-foreground">
+                    {new Date(viewingExecution.startedAt || "").toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Test Results */}
+              <div className="flex-1 overflow-hidden">
+                <p className="text-sm font-medium mb-2">Test Results</p>
+                <ScrollArea className="h-[300px] border rounded-lg">
+                  {executionResults.length === 0 ? (
+                    <div className="p-4 text-center text-muted-foreground">
+                      No test results available
+                    </div>
+                  ) : (
+                    <div className="divide-y">
+                      {executionResults.map((result: any) => (
+                        <div key={result.id} className="p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-medium">Test Case #{result.testCaseId}</span>
+                            <Badge variant={result.status === "passed" ? "default" : "destructive"}>
+                              {result.status}
+                            </Badge>
+                          </div>
+                          {result.error && (
+                            <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/30 p-2 rounded mt-2">
+                              {result.error}
+                            </div>
+                          )}
+                          {result.logs && (
+                            <details className="mt-2">
+                              <summary className="text-sm text-muted-foreground cursor-pointer">
+                                View Logs
+                              </summary>
+                              <pre className="text-xs bg-muted p-2 rounded mt-1 overflow-x-auto whitespace-pre-wrap">
+                                {typeof result.logs === "string" ? result.logs : JSON.stringify(result.logs, null, 2)}
+                              </pre>
+                            </details>
+                          )}
+                          {result.screenshot && (
+                            <details className="mt-2">
+                              <summary className="text-sm text-muted-foreground cursor-pointer">
+                                View Screenshot
+                              </summary>
+                              <img 
+                                src={result.screenshot} 
+                                alt="Test screenshot" 
+                                className="mt-2 rounded border max-w-full"
+                              />
+                            </details>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </ScrollArea>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
