@@ -38,6 +38,7 @@ import {
   Plus,
   Trash2,
   Key,
+  RotateCcw,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -188,6 +189,27 @@ export default function Executions() {
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to cancel execution.", variant: "destructive" });
+    },
+  });
+
+  const rerunMutation = useMutation({
+    mutationFn: async (execution: TestExecution) => {
+      const res = await apiRequest("POST", "/api/executions", {
+        suiteId: execution.suiteId,
+        agentId: execution.agentId,
+        environment: execution.environment,
+        targetUrl: execution.targetUrl,
+        framework: execution.framework || "playwright",
+        testData: execution.testData || [],
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
+      toast({ title: "Rerun Started", description: "A new test execution has been started with the same settings." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to rerun execution.", variant: "destructive" });
     },
   });
 
@@ -583,6 +605,22 @@ export default function Executions() {
                       <Eye className="h-4 w-4 mr-2" />
                       View
                     </Button>
+                    {(execution.status === "completed" || execution.status === "failed") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        data-testid={`button-rerun-execution-${execution.id}`}
+                        onClick={() => rerunMutation.mutate(execution)}
+                        disabled={rerunMutation.isPending}
+                      >
+                        {rerunMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-4 w-4 mr-2" />
+                        )}
+                        Rerun
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}
