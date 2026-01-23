@@ -271,10 +271,10 @@ export default function Agents() {
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <Label className="flex items-center gap-2">
-                      <Zap className="h-4 w-4 text-primary" />
-                      Autonomous Mode
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      Scheduled Monitoring (Optional)
                     </Label>
-                    <p className="text-xs text-muted-foreground">Enable AI-powered continuous testing</p>
+                    <p className="text-xs text-muted-foreground">Auto-run tests on a schedule for production monitoring</p>
                   </div>
                   <Switch
                     checked={isAutonomous}
