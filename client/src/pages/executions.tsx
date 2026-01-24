@@ -350,15 +350,15 @@ export default function Executions() {
                     <SelectValue placeholder="Select an agent..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {onlineAgents.length === 0 ? (
+                    {agents.length === 0 ? (
                       <div className="p-2 text-sm text-muted-foreground text-center">
-                        No online agents available
+                        No agents available. Create one in the Agents page.
                       </div>
                     ) : (
-                      onlineAgents.map((agent) => (
+                      agents.map((agent) => (
                         <SelectItem key={agent.id} value={agent.id}>
                           <div className="flex items-center gap-2">
-                            <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                            <div className={`h-2 w-2 rounded-full ${agent.status === "online" ? "bg-emerald-500" : "bg-slate-400"}`} />
                             {agent.name}
                           </div>
                         </SelectItem>
@@ -366,6 +366,7 @@ export default function Executions() {
                     )}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">All agents can run tests. Status only indicates Scheduled Monitoring.</p>
               </div>
 
               <div className="space-y-2">
