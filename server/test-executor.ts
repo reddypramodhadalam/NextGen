@@ -1040,7 +1040,9 @@ export class TestExecutor {
     testCases: TestCase[],
     targetUrl: string,
     framework: ExecutionFramework = "playwright",
-    testData?: TestDataParam[]
+    testData?: TestDataParam[],
+    selfHealing: boolean = false,
+    maxRetries: number = 2
   ): Promise<void> {
     const executor = this.getExecutor(framework);
     let passedCount = 0;
@@ -1057,7 +1059,30 @@ export class TestExecutor {
 
       for (const testCase of testCases) {
         try {
-          const result = await executor.executeTest(testCase, targetUrl, testData);
+          let result = await executor.executeTest(testCase, targetUrl, testData);
+          let healingAttempts = 0;
+          let healed = false;
+
+          // Self-healing: if test failed and self-healing is enabled, try to fix and retry
+          while (!result.passed && selfHealing && healingAttempts < maxRetries) {
+            healingAttempts++;
+            console.log(`[Self-Healing] Attempt ${healingAttempts}/${maxRetries} for test: ${testCase.title}`);
+            
+            const healedSteps = await this.attemptSelfHealing(testCase, result);
+            if (healedSteps) {
+              // Create a modified test case with healed steps
+              const healedTestCase = { ...testCase, steps: healedSteps };
+              result = await executor.executeTest(healedTestCase, targetUrl, testData);
+              
+              if (result.passed) {
+                healed = true;
+                result.logs = [...(result.logs || []), `[Self-Healing] Test passed after healing attempt ${healingAttempts}`];
+                console.log(`[Self-Healing] Success! Test passed after healing`);
+              }
+            } else {
+              break; // AI couldn't suggest a fix
+            }
+          }
 
           if (result.passed) {
             passedCount++;
@@ -1072,7 +1097,9 @@ export class TestExecutor {
             duration: result.duration,
             errorMessage: result.errorMessage || null,
             screenshot: result.screenshot || null,
-            logs: result.logs,
+            logs: healed 
+              ? [...(result.logs || []), `[Self-Healing] Healed after ${healingAttempts} attempt(s)`]
+              : result.logs,
           });
 
           await storage.updateExecution(executionId, {
@@ -1119,6 +1146,64 @@ export class TestExecutor {
           : { type: "success", message: "All tests passed" },
       ],
     });
+  }
+
+  // Self-healing: use AI to suggest alternative steps when a test fails
+  private async attemptSelfHealing(
+    testCase: TestCase,
+    failedResult: { passed: boolean; errorMessage?: string; logs?: string[] }
+  ): Promise<TestCase["steps"] | null> {
+    try {
+      const systemPrompt = `You are a test automation expert. A test step failed. Analyze the failure and suggest corrected test steps.
+
+The test may have failed due to:
+- Changed element selectors (class names, IDs)
+- Different page structure
+- Timing issues (element not loaded yet)
+- Changed text content
+
+Return a JSON object with:
+- canHeal: boolean - whether you can suggest a fix
+- healedSteps: array of step objects with "action" and "expected" properties
+- explanation: string - what you changed and why
+
+Each step should have the same structure as the original steps.
+Only return JSON, no explanation outside the JSON.`;
+
+      const userPrompt = `Test: ${testCase.title}
+      
+Original steps:
+${JSON.stringify(testCase.steps, null, 2)}
+
+Error message: ${failedResult.errorMessage || "Unknown error"}
+
+Logs:
+${(failedResult.logs || []).slice(-5).join("\n")}
+
+Suggest alternative steps that might work better.`;
+
+      const aiClient = await getAiClient();
+      const content = await aiClient.chat([{ role: "user", content: userPrompt }], systemPrompt);
+
+      let result;
+      try {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        result = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      } catch {
+        console.log("[Self-Healing] Failed to parse AI response");
+        return null;
+      }
+
+      if (result.canHeal && result.healedSteps && result.healedSteps.length > 0) {
+        console.log(`[Self-Healing] AI suggestion: ${result.explanation}`);
+        return result.healedSteps;
+      }
+
+      return null;
+    } catch (error) {
+      console.error("[Self-Healing] AI call failed:", error);
+      return null;
+    }
   }
 }
 

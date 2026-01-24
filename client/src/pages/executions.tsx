@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -39,6 +40,7 @@ import {
   Trash2,
   Key,
   RotateCcw,
+  Zap,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -85,6 +87,8 @@ export default function Executions() {
   const [detectedPlaceholders, setDetectedPlaceholders] = useState<string[]>([]);
   const [viewingExecution, setViewingExecution] = useState<TestExecution | null>(null);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [selfHealing, setSelfHealing] = useState<boolean>(false);
+  const [maxRetries, setMaxRetries] = useState<number>(2);
 
   const addTestDataParam = () => {
     setTestData([...testData, { key: "", value: "", type: "text" }]);
@@ -153,19 +157,31 @@ export default function Executions() {
   });
 
   const runMutation = useMutation({
-    mutationFn: async (data: { suiteId: string; agentId: string; environment: string; targetUrl: string; framework: string; testData?: TestDataParam[] }) => {
+    mutationFn: async (data: { 
+      suiteId: string; 
+      agentId: string; 
+      environment: string; 
+      targetUrl: string; 
+      framework: string; 
+      testData?: TestDataParam[];
+      selfHealing?: boolean;
+      maxRetries?: number;
+    }) => {
       const res = await apiRequest("POST", "/api/executions", data);
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
-      toast({ title: "Execution Started", description: `Real browser tests are now running with ${selectedFramework.toUpperCase()}.` });
+      const healingMsg = selfHealing ? " with AI self-healing enabled" : "";
+      toast({ title: "Execution Started", description: `Real browser tests are now running with ${selectedFramework.toUpperCase()}${healingMsg}.` });
       setDialogOpen(false);
       setSelectedSuite("");
       setSelectedAgent("");
       setTargetUrl("");
       setSelectedFramework("playwright");
       setTestData([]);
+      setSelfHealing(false);
+      setMaxRetries(2);
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to start execution.", variant: "destructive" });
@@ -242,6 +258,8 @@ export default function Executions() {
       targetUrl,
       framework: selectedFramework,
       testData: validTestData.length > 0 ? validTestData : undefined,
+      selfHealing,
+      maxRetries,
     });
   };
 
@@ -460,6 +478,44 @@ export default function Executions() {
                       ))}
                     </div>
                   </ScrollArea>
+                )}
+              </div>
+
+              {/* Self-Healing Option */}
+              <div className="border-t pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-amber-500" />
+                      AI Self-Healing
+                    </Label>
+                    <p className="text-xs text-muted-foreground">Automatically retry failed tests with AI-suggested fixes</p>
+                  </div>
+                  <Switch
+                    checked={selfHealing}
+                    onCheckedChange={setSelfHealing}
+                    data-testid="switch-self-healing"
+                  />
+                </div>
+                
+                {selfHealing && (
+                  <div className="flex items-center gap-3 pl-6">
+                    <Label className="text-sm text-muted-foreground">Max retries:</Label>
+                    <Select 
+                      value={maxRetries.toString()} 
+                      onValueChange={(v) => setMaxRetries(parseInt(v))}
+                    >
+                      <SelectTrigger className="w-20" data-testid="select-max-retries">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1</SelectItem>
+                        <SelectItem value="2">2</SelectItem>
+                        <SelectItem value="3">3</SelectItem>
+                        <SelectItem value="5">5</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 )}
               </div>
 
