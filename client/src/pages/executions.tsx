@@ -129,24 +129,30 @@ export default function Executions() {
     if (selectedSuite) {
       const suiteTestCases = allTestCases.filter(tc => tc.suiteId?.toString() === selectedSuite);
       const placeholders = extractPlaceholders(suiteTestCases);
-      setDetectedPlaceholders(placeholders);
+      const newPlaceholdersKey = placeholders.join(',');
+      const currentPlaceholdersKey = detectedPlaceholders.join(',');
       
-      // Auto-populate test data with detected placeholders (only on suite change)
-      if (placeholders.length > 0) {
-        const autoParams: TestDataParam[] = placeholders.map(key => ({
-          key,
-          value: "",
-          type: guessInputType(key),
-        }));
-        setTestData(autoParams);
-      } else {
-        setTestData([]);
+      // Only update if placeholders actually changed
+      if (newPlaceholdersKey !== currentPlaceholdersKey) {
+        setDetectedPlaceholders(placeholders);
+        
+        // Auto-populate test data with detected placeholders (only on suite change)
+        if (placeholders.length > 0) {
+          const autoParams: TestDataParam[] = placeholders.map(key => ({
+            key,
+            value: "",
+            type: guessInputType(key),
+          }));
+          setTestData(autoParams);
+        } else {
+          setTestData([]);
+        }
       }
-    } else {
+    } else if (detectedPlaceholders.length > 0) {
       setDetectedPlaceholders([]);
       setTestData([]);
     }
-  }, [selectedSuite, allTestCases]);
+  }, [selectedSuite, allTestCases.length]);
 
   // Fetch execution results when viewing
   const { data: executionResults = [] } = useQuery({
