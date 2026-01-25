@@ -728,6 +728,23 @@ export default function Executions() {
                 </div>
               </div>
 
+              {/* Framework Capabilities Indicator */}
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-muted-foreground">Capabilities:</span>
+                <Badge variant="outline" className={viewingExecution.framework === "playwright" ? "border-green-500 text-green-600" : "border-muted text-muted-foreground"}>
+                  Video {viewingExecution.framework === "playwright" ? "✓" : "✗"}
+                </Badge>
+                <Badge variant="outline" className={["playwright", "puppeteer"].includes(viewingExecution.framework || "") ? "border-green-500 text-green-600" : "border-muted text-muted-foreground"}>
+                  Network {["playwright", "puppeteer"].includes(viewingExecution.framework || "") ? "✓" : "✗"}
+                </Badge>
+                <Badge variant="outline" className="border-green-500 text-green-600">
+                  Performance ✓
+                </Badge>
+                <Badge variant="outline" className="border-green-500 text-green-600">
+                  Screenshots ✓
+                </Badge>
+              </div>
+
               {/* Pass/Fail Stats */}
               <div className="flex items-center gap-6">
                 <div className="flex items-center gap-2">
