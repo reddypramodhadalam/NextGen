@@ -228,21 +228,46 @@ class PlaywrightExecutor implements FrameworkExecutor {
           if (!stepPassed) {
             passed = false;
             stepResult.error = "Step verification failed";
+            // Capture screenshot immediately at point of failure
+            if (!screenshot) {
+              try {
+                const failPage = this.execContext.pages[this.execContext.currentPageIndex];
+                const screenshotBuffer = await failPage.screenshot({ fullPage: true });
+                screenshot = screenshotBuffer.toString("base64");
+                logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
+              } catch (e) {
+                logs.push("Failed to capture failure screenshot");
+              }
+            }
           }
         } catch (error: any) {
           stepResult.passed = false;
           stepResult.error = error.message;
           passed = false;
           logs.push(`Step failed: ${error.message}`);
+          // Capture screenshot immediately at point of failure
+          if (!screenshot) {
+            try {
+              const failPage = this.execContext.pages[this.execContext.currentPageIndex];
+              const screenshotBuffer = await failPage.screenshot({ fullPage: true });
+              screenshot = screenshotBuffer.toString("base64");
+              logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
+            } catch (e) {
+              logs.push("Failed to capture failure screenshot");
+            }
+          }
         }
 
         stepResults.push(stepResult);
       }
 
-      const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
-      const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
-      screenshot = screenshotBuffer.toString("base64");
-      logs.push("Captured final screenshot");
+      // Only capture final screenshot if test passed (no failure screenshot exists)
+      if (!screenshot) {
+        const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+        const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
+        screenshot = screenshotBuffer.toString("base64");
+        logs.push("Captured final screenshot");
+      }
 
     } catch (error: any) {
       passed = false;
@@ -718,20 +743,43 @@ class PuppeteerExecutor implements FrameworkExecutor {
           if (!stepPassed) {
             passed = false;
             stepResult.error = "Step verification failed";
+            // Capture screenshot immediately at point of failure
+            if (!screenshot) {
+              try {
+                const screenshotBuffer = await page.screenshot({ fullPage: true });
+                screenshot = Buffer.from(screenshotBuffer).toString("base64");
+                logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
+              } catch (e) {
+                logs.push("Failed to capture failure screenshot");
+              }
+            }
           }
         } catch (error: any) {
           stepResult.passed = false;
           stepResult.error = error.message;
           passed = false;
           logs.push(`Step failed: ${error.message}`);
+          // Capture screenshot immediately at point of failure
+          if (!screenshot) {
+            try {
+              const screenshotBuffer = await page.screenshot({ fullPage: true });
+              screenshot = Buffer.from(screenshotBuffer).toString("base64");
+              logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
+            } catch (e) {
+              logs.push("Failed to capture failure screenshot");
+            }
+          }
         }
 
         stepResults.push(stepResult);
       }
 
-      const screenshotBuffer = await page.screenshot({ fullPage: true });
-      screenshot = Buffer.from(screenshotBuffer).toString("base64");
-      logs.push("Captured final screenshot");
+      // Only capture final screenshot if test passed (no failure screenshot exists)
+      if (!screenshot) {
+        const screenshotBuffer = await page.screenshot({ fullPage: true });
+        screenshot = Buffer.from(screenshotBuffer).toString("base64");
+        logs.push("Captured final screenshot");
+      }
 
     } catch (error: any) {
       passed = false;
@@ -908,20 +956,43 @@ class SeleniumExecutor implements FrameworkExecutor {
           if (!stepPassed) {
             passed = false;
             stepResult.error = "Step verification failed";
+            // Capture screenshot immediately at point of failure
+            if (!screenshot) {
+              try {
+                const screenshotData = await this.driver!.takeScreenshot();
+                screenshot = screenshotData;
+                logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
+              } catch (e) {
+                logs.push("Failed to capture failure screenshot");
+              }
+            }
           }
         } catch (error: any) {
           stepResult.passed = false;
           stepResult.error = error.message;
           passed = false;
           logs.push(`Step failed: ${error.message}`);
+          // Capture screenshot immediately at point of failure
+          if (!screenshot) {
+            try {
+              const screenshotData = await this.driver!.takeScreenshot();
+              screenshot = screenshotData;
+              logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
+            } catch (e) {
+              logs.push("Failed to capture failure screenshot");
+            }
+          }
         }
 
         stepResults.push(stepResult);
       }
 
-      const screenshotData = await this.driver!.takeScreenshot();
-      screenshot = screenshotData;
-      logs.push("Captured final screenshot");
+      // Only capture final screenshot if test passed (no failure screenshot exists)
+      if (!screenshot) {
+        const screenshotData = await this.driver!.takeScreenshot();
+        screenshot = screenshotData;
+        logs.push("Captured final screenshot");
+      }
 
     } catch (error: any) {
       passed = false;
