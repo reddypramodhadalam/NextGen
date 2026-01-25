@@ -124,6 +124,14 @@ export const insertTestExecutionSchema = createInsertSchema(testExecutions).omit
 export type InsertTestExecution = z.infer<typeof insertTestExecutionSchema>;
 export type TestExecution = typeof testExecutions.$inferSelect;
 
+// Step screenshot interface for type safety
+export interface StepScreenshot {
+  stepIndex: number;
+  stepName: string;
+  screenshot: string;
+  passed: boolean;
+}
+
 // Test Results (individual test case results within an execution)
 export const testResults = pgTable("test_results", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -132,7 +140,8 @@ export const testResults = pgTable("test_results", {
   status: text("status").default("pending"), // pending, running, passed, failed, skipped
   duration: integer("duration"), // in milliseconds
   errorMessage: text("error_message"),
-  screenshot: text("screenshot"), // base64 or URL
+  screenshot: text("screenshot"), // base64 or URL - final/failure screenshot
+  stepScreenshots: jsonb("step_screenshots").$type<StepScreenshot[]>(), // screenshot at each step
   logs: jsonb("logs").$type<string[]>(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });

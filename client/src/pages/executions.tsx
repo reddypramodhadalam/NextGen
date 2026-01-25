@@ -42,6 +42,7 @@ import {
   RotateCcw,
   Zap,
   FileText,
+  Camera,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -770,8 +771,40 @@ export default function Executions() {
                             </div>
                           )}
                           
-                          {/* Screenshot - shown by default for failed tests, collapsed for passed */}
-                          {result.screenshot && (
+                          {/* Step Screenshots - show all steps with their screenshots */}
+                          {result.stepScreenshots && Array.isArray(result.stepScreenshots) && result.stepScreenshots.length > 0 && (
+                            <details className="mt-3" open={result.status === "failed"}>
+                              <summary className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                                <Camera className="h-4 w-4" />
+                                Step-by-Step Screenshots ({result.stepScreenshots.length} steps)
+                              </summary>
+                              <div className="mt-2 space-y-3">
+                                {result.stepScreenshots.map((stepShot: any, idx: number) => (
+                                  <div key={idx} className={`border rounded-lg p-3 ${stepShot.passed ? 'border-green-500/30 bg-green-50/50 dark:bg-green-950/20' : 'border-red-500/50 bg-red-50/50 dark:bg-red-950/20'}`}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Badge variant={stepShot.passed ? "default" : "destructive"} className="text-xs">
+                                        Step {stepShot.stepIndex}
+                                      </Badge>
+                                      <span className={`text-xs font-medium ${stepShot.passed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                        {stepShot.passed ? '✓ PASS' : '✗ FAIL'}
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mb-2 truncate" title={stepShot.stepName}>
+                                      {stepShot.stepName}
+                                    </p>
+                                    <img 
+                                      src={stepShot.screenshot.startsWith('data:') ? stepShot.screenshot : `data:image/png;base64,${stepShot.screenshot}`}
+                                      alt={`Step ${stepShot.stepIndex} screenshot`}
+                                      className="rounded border max-w-full shadow-sm"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          )}
+                          
+                          {/* Fallback: Single screenshot if no step screenshots (backward compatibility) */}
+                          {result.screenshot && (!result.stepScreenshots || result.stepScreenshots.length === 0) && (
                             <details className="mt-3" open={result.status === "failed"}>
                               <summary className="text-sm font-medium cursor-pointer flex items-center gap-2">
                                 <Eye className="h-4 w-4" />

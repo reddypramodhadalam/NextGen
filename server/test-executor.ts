@@ -129,6 +129,13 @@ interface TestStepResult {
   error?: string;
 }
 
+interface StepScreenshot {
+  stepIndex: number;
+  stepName: string;
+  screenshot: string;
+  passed: boolean;
+}
+
 interface ExecutionResult {
   testCaseId: string;
   testCaseTitle: string;
@@ -136,6 +143,7 @@ interface ExecutionResult {
   duration: number;
   steps: TestStepResult[];
   screenshot?: string;
+  stepScreenshots?: StepScreenshot[];
   errorMessage?: string;
   logs: string[];
 }
@@ -179,6 +187,7 @@ class PlaywrightExecutor implements FrameworkExecutor {
   async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
+    const stepScreenshots: { stepIndex: number; stepName: string; screenshot: string; passed: boolean }[] = [];
     const startTime = Date.now();
     let passed = true;
     let errorMessage: string | undefined;
@@ -210,7 +219,8 @@ class PlaywrightExecutor implements FrameworkExecutor {
 
       const steps = (testCase.steps as { step: string; expected: string }[]) || [];
 
-      for (const step of steps) {
+      for (let stepIdx = 0; stepIdx < steps.length; stepIdx++) {
+        const step = steps[stepIdx];
         // Replace placeholders in step and expected with test data values
         const processedStep = replaceTestDataPlaceholders(step.step, testData);
         const processedExpected = replaceTestDataPlaceholders(step.expected, testData);
@@ -221,52 +231,50 @@ class PlaywrightExecutor implements FrameworkExecutor {
           passed: false,
         };
 
+        let stepPassed = false;
         try {
           const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
-          const stepPassed = await this.executeStep(currentPage, processedStep, processedExpected, logs);
+          stepPassed = await this.executeStep(currentPage, processedStep, processedExpected, logs);
           stepResult.passed = stepPassed;
           if (!stepPassed) {
             passed = false;
             stepResult.error = "Step verification failed";
-            // Capture screenshot immediately at point of failure
-            if (!screenshot) {
-              try {
-                const failPage = this.execContext.pages[this.execContext.currentPageIndex];
-                const screenshotBuffer = await failPage.screenshot({ fullPage: true });
-                screenshot = screenshotBuffer.toString("base64");
-                logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
-              } catch (e) {
-                logs.push("Failed to capture failure screenshot");
-              }
-            }
           }
         } catch (error: any) {
           stepResult.passed = false;
           stepResult.error = error.message;
           passed = false;
           logs.push(`Step failed: ${error.message}`);
-          // Capture screenshot immediately at point of failure
-          if (!screenshot) {
-            try {
-              const failPage = this.execContext.pages[this.execContext.currentPageIndex];
-              const screenshotBuffer = await failPage.screenshot({ fullPage: true });
-              screenshot = screenshotBuffer.toString("base64");
-              logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
-            } catch (e) {
-              logs.push("Failed to capture failure screenshot");
-            }
+        }
+
+        // Capture screenshot after EVERY step
+        try {
+          const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+          const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
+          const stepScreenshot = screenshotBuffer.toString("base64");
+          stepScreenshots.push({
+            stepIndex: stepIdx + 1,
+            stepName: processedStep,
+            screenshot: stepScreenshot,
+            passed: stepResult.passed,
+          });
+          logs.push(`Captured screenshot after Step ${stepIdx + 1}`);
+          
+          // Also set the main screenshot if this step failed (for backward compatibility)
+          if (!stepResult.passed && !screenshot) {
+            screenshot = stepScreenshot;
           }
+        } catch (e) {
+          logs.push(`Failed to capture screenshot for Step ${stepIdx + 1}`);
         }
 
         stepResults.push(stepResult);
       }
 
-      // Only capture final screenshot if test passed (no failure screenshot exists)
-      if (!screenshot) {
-        const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
-        const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
-        screenshot = screenshotBuffer.toString("base64");
-        logs.push("Captured final screenshot");
+      // Capture final screenshot if all steps passed
+      if (!screenshot && stepScreenshots.length > 0) {
+        screenshot = stepScreenshots[stepScreenshots.length - 1].screenshot;
+        logs.push("Using last step screenshot as final screenshot");
       }
 
     } catch (error: any) {
@@ -298,6 +306,7 @@ class PlaywrightExecutor implements FrameworkExecutor {
       duration,
       steps: stepResults,
       screenshot,
+      stepScreenshots,
       errorMessage,
       logs,
     };
@@ -705,6 +714,7 @@ class PuppeteerExecutor implements FrameworkExecutor {
   async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
+    const stepScreenshots: StepScreenshot[] = [];
     const startTime = Date.now();
     let passed = true;
     let errorMessage: string | undefined;
@@ -726,8 +736,8 @@ class PuppeteerExecutor implements FrameworkExecutor {
 
       const steps = (testCase.steps as { step: string; expected: string }[]) || [];
 
-      for (const step of steps) {
-        // Replace placeholders in step and expected with test data values
+      for (let stepIdx = 0; stepIdx < steps.length; stepIdx++) {
+        const step = steps[stepIdx];
         const processedStep = replaceTestDataPlaceholders(step.step, testData);
         const processedExpected = replaceTestDataPlaceholders(step.expected, testData);
         
@@ -737,48 +747,47 @@ class PuppeteerExecutor implements FrameworkExecutor {
           passed: false,
         };
 
+        let stepPassed = false;
         try {
-          const stepPassed = await this.executeStep(page, processedStep, processedExpected, logs);
+          stepPassed = await this.executeStep(page, processedStep, processedExpected, logs);
           stepResult.passed = stepPassed;
           if (!stepPassed) {
             passed = false;
             stepResult.error = "Step verification failed";
-            // Capture screenshot immediately at point of failure
-            if (!screenshot) {
-              try {
-                const screenshotBuffer = await page.screenshot({ fullPage: true });
-                screenshot = Buffer.from(screenshotBuffer).toString("base64");
-                logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
-              } catch (e) {
-                logs.push("Failed to capture failure screenshot");
-              }
-            }
           }
         } catch (error: any) {
           stepResult.passed = false;
           stepResult.error = error.message;
           passed = false;
           logs.push(`Step failed: ${error.message}`);
-          // Capture screenshot immediately at point of failure
-          if (!screenshot) {
-            try {
-              const screenshotBuffer = await page.screenshot({ fullPage: true });
-              screenshot = Buffer.from(screenshotBuffer).toString("base64");
-              logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
-            } catch (e) {
-              logs.push("Failed to capture failure screenshot");
-            }
+        }
+
+        // Capture screenshot after EVERY step
+        try {
+          const screenshotBuffer = await page.screenshot({ fullPage: true });
+          const stepScreenshot = Buffer.from(screenshotBuffer).toString("base64");
+          stepScreenshots.push({
+            stepIndex: stepIdx + 1,
+            stepName: processedStep,
+            screenshot: stepScreenshot,
+            passed: stepResult.passed,
+          });
+          logs.push(`Captured screenshot after Step ${stepIdx + 1}`);
+          
+          if (!stepResult.passed && !screenshot) {
+            screenshot = stepScreenshot;
           }
+        } catch (e) {
+          logs.push(`Failed to capture screenshot for Step ${stepIdx + 1}`);
         }
 
         stepResults.push(stepResult);
       }
 
-      // Only capture final screenshot if test passed (no failure screenshot exists)
-      if (!screenshot) {
-        const screenshotBuffer = await page.screenshot({ fullPage: true });
-        screenshot = Buffer.from(screenshotBuffer).toString("base64");
-        logs.push("Captured final screenshot");
+      // Use last step screenshot as final if all passed
+      if (!screenshot && stepScreenshots.length > 0) {
+        screenshot = stepScreenshots[stepScreenshots.length - 1].screenshot;
+        logs.push("Using last step screenshot as final screenshot");
       }
 
     } catch (error: any) {
@@ -806,6 +815,7 @@ class PuppeteerExecutor implements FrameworkExecutor {
       duration,
       steps: stepResults,
       screenshot,
+      stepScreenshots,
       errorMessage,
       logs,
     };
@@ -920,6 +930,7 @@ class SeleniumExecutor implements FrameworkExecutor {
   async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
+    const stepScreenshots: StepScreenshot[] = [];
     const startTime = Date.now();
     let passed = true;
     let errorMessage: string | undefined;
@@ -940,7 +951,8 @@ class SeleniumExecutor implements FrameworkExecutor {
 
       const steps = (testCase.steps as { step: string; expected: string }[]) || [];
 
-      for (const step of steps) {
+      for (let stepIdx = 0; stepIdx < steps.length; stepIdx++) {
+        const step = steps[stepIdx];
         const processedStep = replaceTestDataPlaceholders(step.step, testData);
         const processedExpected = replaceTestDataPlaceholders(step.expected, testData);
         
@@ -950,48 +962,46 @@ class SeleniumExecutor implements FrameworkExecutor {
           passed: false,
         };
 
+        let stepPassed = false;
         try {
-          const stepPassed = await this.executeStep(processedStep, processedExpected, logs);
+          stepPassed = await this.executeStep(processedStep, processedExpected, logs);
           stepResult.passed = stepPassed;
           if (!stepPassed) {
             passed = false;
             stepResult.error = "Step verification failed";
-            // Capture screenshot immediately at point of failure
-            if (!screenshot) {
-              try {
-                const screenshotData = await this.driver!.takeScreenshot();
-                screenshot = screenshotData;
-                logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
-              } catch (e) {
-                logs.push("Failed to capture failure screenshot");
-              }
-            }
           }
         } catch (error: any) {
           stepResult.passed = false;
           stepResult.error = error.message;
           passed = false;
           logs.push(`Step failed: ${error.message}`);
-          // Capture screenshot immediately at point of failure
-          if (!screenshot) {
-            try {
-              const screenshotData = await this.driver!.takeScreenshot();
-              screenshot = screenshotData;
-              logs.push(`Captured screenshot at failure: Step ${stepResults.length + 1}`);
-            } catch (e) {
-              logs.push("Failed to capture failure screenshot");
-            }
+        }
+
+        // Capture screenshot after EVERY step
+        try {
+          const screenshotData = await this.driver!.takeScreenshot();
+          stepScreenshots.push({
+            stepIndex: stepIdx + 1,
+            stepName: processedStep,
+            screenshot: screenshotData,
+            passed: stepResult.passed,
+          });
+          logs.push(`Captured screenshot after Step ${stepIdx + 1}`);
+          
+          if (!stepResult.passed && !screenshot) {
+            screenshot = screenshotData;
           }
+        } catch (e) {
+          logs.push(`Failed to capture screenshot for Step ${stepIdx + 1}`);
         }
 
         stepResults.push(stepResult);
       }
 
-      // Only capture final screenshot if test passed (no failure screenshot exists)
-      if (!screenshot) {
-        const screenshotData = await this.driver!.takeScreenshot();
-        screenshot = screenshotData;
-        logs.push("Captured final screenshot");
+      // Use last step screenshot as final if all passed
+      if (!screenshot && stepScreenshots.length > 0) {
+        screenshot = stepScreenshots[stepScreenshots.length - 1].screenshot;
+        logs.push("Using last step screenshot as final screenshot");
       }
 
     } catch (error: any) {
@@ -1017,6 +1027,7 @@ class SeleniumExecutor implements FrameworkExecutor {
       duration,
       steps: stepResults,
       screenshot,
+      stepScreenshots,
       errorMessage,
       logs,
     };
@@ -1199,6 +1210,7 @@ export class TestExecutor {
             duration: result.duration,
             errorMessage: detailedErrorMessage,
             screenshot: result.screenshot || null,
+            stepScreenshots: result.stepScreenshots || null,
             logs: detailedLogs,
           });
 
