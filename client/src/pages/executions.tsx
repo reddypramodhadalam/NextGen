@@ -41,6 +41,7 @@ import {
   Key,
   RotateCcw,
   Zap,
+  FileText,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -749,36 +750,66 @@ export default function Executions() {
                       {executionResults.map((result: any) => (
                         <div key={result.id} className="p-4">
                           <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium">Test Case #{result.testCaseId}</span>
+                            <span className="font-medium">Test Case #{result.testCaseId?.slice(0, 8)}...</span>
                             <Badge variant={result.status === "passed" ? "default" : "destructive"}>
-                              {result.status}
+                              {result.status?.toUpperCase()}
                             </Badge>
                           </div>
-                          {result.error && (
-                            <div className="text-sm text-red-500 bg-red-50 dark:bg-red-950/30 p-2 rounded mt-2">
-                              {result.error}
+                          <div className="text-xs text-muted-foreground mb-2">
+                            Duration: {result.duration ? `${(result.duration / 1000).toFixed(1)}s` : "-"}
+                          </div>
+                          
+                          {/* Error Message - shown prominently for failed tests */}
+                          {result.errorMessage && (
+                            <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 p-3 rounded mt-2 border border-red-200 dark:border-red-800">
+                              <div className="font-medium mb-1 flex items-center gap-2">
+                                <XCircle className="h-4 w-4" />
+                                Error Details:
+                              </div>
+                              <pre className="whitespace-pre-wrap text-xs">{result.errorMessage}</pre>
                             </div>
                           )}
-                          {result.logs && (
-                            <details className="mt-2">
-                              <summary className="text-sm text-muted-foreground cursor-pointer">
-                                View Logs
-                              </summary>
-                              <pre className="text-xs bg-muted p-2 rounded mt-1 overflow-x-auto whitespace-pre-wrap">
-                                {typeof result.logs === "string" ? result.logs : JSON.stringify(result.logs, null, 2)}
-                              </pre>
-                            </details>
-                          )}
+                          
+                          {/* Screenshot - shown by default for failed tests, collapsed for passed */}
                           {result.screenshot && (
-                            <details className="mt-2">
-                              <summary className="text-sm text-muted-foreground cursor-pointer">
-                                View Screenshot
+                            <details className="mt-3" open={result.status === "failed"}>
+                              <summary className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                                <Eye className="h-4 w-4" />
+                                Screenshot at Failure
                               </summary>
                               <img 
-                                src={result.screenshot} 
+                                src={result.screenshot.startsWith('data:') ? result.screenshot : `data:image/png;base64,${result.screenshot}`}
                                 alt="Test screenshot" 
-                                className="mt-2 rounded border max-w-full"
+                                className="mt-2 rounded border max-w-full shadow-sm"
                               />
+                            </details>
+                          )}
+                          
+                          {/* Execution Logs */}
+                          {result.logs && Array.isArray(result.logs) && result.logs.length > 0 && (
+                            <details className="mt-3">
+                              <summary className="text-sm font-medium cursor-pointer flex items-center gap-2">
+                                <FileText className="h-4 w-4" />
+                                Execution Log ({result.logs.length} entries)
+                              </summary>
+                              <div className="mt-2 bg-slate-900 dark:bg-slate-950 rounded p-3 overflow-x-auto max-h-96 overflow-y-auto">
+                                {result.logs.map((log: string, idx: number) => (
+                                  <div 
+                                    key={idx} 
+                                    className={`text-xs font-mono ${
+                                      log.includes('✗ FAIL') || log.includes('Error:') || log.includes('failed')
+                                        ? 'text-red-400' 
+                                        : log.includes('✓ PASS') || log.includes('[Self-Healing]')
+                                          ? 'text-green-400'
+                                          : log.includes('===')
+                                            ? 'text-blue-400 font-bold mt-2'
+                                            : 'text-slate-300'
+                                    }`}
+                                  >
+                                    {log}
+                                  </div>
+                                ))}
+                              </div>
                             </details>
                           )}
                         </div>

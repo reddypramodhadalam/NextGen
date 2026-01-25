@@ -1090,16 +1090,45 @@ export class TestExecutor {
             failedCount++;
           }
 
+          // Build detailed error message from step results
+          let detailedErrorMessage = result.errorMessage || null;
+          const detailedLogs = [...(result.logs || [])];
+          
+          if (!result.passed && result.steps) {
+            const failedSteps = result.steps.filter((s: any) => !s.passed);
+            if (failedSteps.length > 0) {
+              // Create a summary error message
+              const errorParts = failedSteps.map((s: any, idx: number) => {
+                const stepNum = result.steps.indexOf(s) + 1;
+                return `Step ${stepNum}: ${s.error || 'Verification failed'} (Action: "${s.step}")`;
+              });
+              detailedErrorMessage = `${failedSteps.length} step(s) failed:\n${errorParts.join('\n')}`;
+              
+              // Add step-by-step details to logs
+              detailedLogs.push('\n=== STEP-BY-STEP RESULTS ===');
+              result.steps.forEach((s: any, idx: number) => {
+                const status = s.passed ? '✓ PASS' : '✗ FAIL';
+                detailedLogs.push(`Step ${idx + 1} [${status}]: ${s.step}`);
+                detailedLogs.push(`  Expected: ${s.expected}`);
+                if (!s.passed && s.error) {
+                  detailedLogs.push(`  Error: ${s.error}`);
+                }
+              });
+            }
+          }
+
+          if (healed) {
+            detailedLogs.push(`[Self-Healing] Healed after ${healingAttempts} attempt(s)`);
+          }
+
           await storage.createResult({
             executionId,
             testCaseId: testCase.id,
             status: result.passed ? "passed" : "failed",
             duration: result.duration,
-            errorMessage: result.errorMessage || null,
+            errorMessage: detailedErrorMessage,
             screenshot: result.screenshot || null,
-            logs: healed 
-              ? [...(result.logs || []), `[Self-Healing] Healed after ${healingAttempts} attempt(s)`]
-              : result.logs,
+            logs: detailedLogs,
           });
 
           await storage.updateExecution(executionId, {
