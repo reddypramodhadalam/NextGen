@@ -136,6 +136,29 @@ interface StepScreenshot {
   passed: boolean;
 }
 
+interface NetworkLogEntry {
+  timestamp: number;
+  method: string;
+  url: string;
+  status?: number;
+  duration?: number;
+  size?: number;
+  type?: string;
+}
+
+interface PerformanceData {
+  loadTime?: number;
+  domContentLoaded?: number;
+  firstPaint?: number;
+  firstContentfulPaint?: number;
+  largestContentfulPaint?: number;
+  timeToInteractive?: number;
+  totalBlockingTime?: number;
+  cumulativeLayoutShift?: number;
+  memoryUsed?: number;
+  memoryTotal?: number;
+}
+
 interface ExecutionResult {
   testCaseId: string;
   testCaseTitle: string;
@@ -144,14 +167,23 @@ interface ExecutionResult {
   steps: TestStepResult[];
   screenshot?: string;
   stepScreenshots?: StepScreenshot[];
+  video?: string;
+  networkLogs?: NetworkLogEntry[];
+  performanceMetrics?: PerformanceData;
   errorMessage?: string;
   logs: string[];
+}
+
+interface ExecutionCapabilities {
+  captureVideo?: boolean;
+  captureNetwork?: boolean;
+  capturePerformance?: boolean;
 }
 
 interface FrameworkExecutor {
   initialize(): Promise<void>;
   close(): Promise<void>;
-  executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult>;
+  executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[], capabilities?: ExecutionCapabilities): Promise<ExecutionResult>;
 }
 
 import type { BrowserContext as PlaywrightContext, Frame as PlaywrightFrame } from "playwright";
@@ -184,26 +216,78 @@ class PlaywrightExecutor implements FrameworkExecutor {
     }
   }
 
-  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
+  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[], capabilities?: ExecutionCapabilities): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
     const stepScreenshots: { stepIndex: number; stepName: string; screenshot: string; passed: boolean }[] = [];
+    const networkLogs: NetworkLogEntry[] = [];
     const startTime = Date.now();
     let passed = true;
     let errorMessage: string | undefined;
     let screenshot: string | undefined;
+    let video: string | undefined;
+    let performanceMetrics: PerformanceData | undefined;
 
     logs.push(`[Playwright] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
     if (testData && testData.length > 0) {
       logs.push(`Test data provided: ${testData.map(d => d.key).join(", ")}`);
     }
+    if (capabilities) {
+      logs.push(`Capabilities: video=${capabilities.captureVideo}, network=${capabilities.captureNetwork}, performance=${capabilities.capturePerformance}`);
+    }
 
     await this.initialize();
-    const context = await this.browser!.newContext({
+    
+    // Configure context options based on capabilities
+    const contextOptions: any = {
       viewport: { width: 1280, height: 720 },
-    });
+    };
+    
+    // Enable video recording if requested
+    if (capabilities?.captureVideo) {
+      contextOptions.recordVideo = {
+        dir: '/tmp/videos/',
+        size: { width: 1280, height: 720 },
+      };
+      logs.push('Video recording enabled');
+    }
+    
+    const context = await this.browser!.newContext(contextOptions);
     const page = await context.newPage();
+    
+    // Set up network logging if requested using request ID correlation
+    const requestMap = new Map<any, { timestamp: number; index: number }>();
+    if (capabilities?.captureNetwork) {
+      page.on('request', (request) => {
+        const idx = networkLogs.length;
+        const timestamp = Date.now();
+        requestMap.set(request, { timestamp, index: idx });
+        networkLogs.push({
+          timestamp,
+          method: request.method(),
+          url: request.url(),
+          type: request.resourceType(),
+        });
+      });
+      
+      page.on('response', (response) => {
+        const reqInfo = requestMap.get(response.request());
+        if (reqInfo) {
+          const entry = networkLogs[reqInfo.index];
+          if (entry) {
+            entry.status = response.status();
+            entry.duration = Date.now() - reqInfo.timestamp;
+            try {
+              const headers = response.headers();
+              entry.size = parseInt(headers['content-length'] || '0', 10);
+              entry.contentType = headers['content-type'];
+            } catch {}
+          }
+        }
+      });
+      logs.push('Network logging enabled');
+    }
     
     // Initialize execution context for frame/window tracking
     this.execContext = {
@@ -276,6 +360,38 @@ class PlaywrightExecutor implements FrameworkExecutor {
         screenshot = stepScreenshots[stepScreenshots.length - 1].screenshot;
         logs.push("Using last step screenshot as final screenshot");
       }
+      
+      // Capture performance metrics if requested
+      if (capabilities?.capturePerformance) {
+        try {
+          const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+          const perfTiming = await currentPage.evaluate(() => {
+            const perf = window.performance;
+            const timing = perf.timing;
+            const navigation = perf.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+            const paint = perf.getEntriesByType('paint');
+            
+            return {
+              loadTime: timing.loadEventEnd - timing.navigationStart,
+              domContentLoaded: timing.domContentLoadedEventEnd - timing.navigationStart,
+              firstPaint: paint.find(p => p.name === 'first-paint')?.startTime,
+              firstContentfulPaint: paint.find(p => p.name === 'first-contentful-paint')?.startTime,
+              timeToInteractive: navigation?.domInteractive - navigation?.startTime,
+            };
+          });
+          
+          performanceMetrics = {
+            loadTime: perfTiming.loadTime,
+            domContentLoaded: perfTiming.domContentLoaded,
+            firstPaint: perfTiming.firstPaint,
+            firstContentfulPaint: perfTiming.firstContentfulPaint,
+            timeToInteractive: perfTiming.timeToInteractive,
+          };
+          logs.push(`Performance metrics captured: loadTime=${perfTiming.loadTime}ms, FCP=${perfTiming.firstContentfulPaint}ms`);
+        } catch (e) {
+          logs.push(`Failed to capture performance metrics: ${e}`);
+        }
+      }
 
     } catch (error: any) {
       passed = false;
@@ -292,6 +408,28 @@ class PlaywrightExecutor implements FrameworkExecutor {
         logs.push("Failed to capture error screenshot");
       }
     } finally {
+      // Capture video if enabled
+      if (capabilities?.captureVideo) {
+        try {
+          const currentPage = this.execContext?.pages[this.execContext?.currentPageIndex || 0];
+          if (currentPage) {
+            const videoPath = await currentPage.video()?.path();
+            if (videoPath) {
+              const fs = await import('fs');
+              // Wait a moment for video to finalize
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const videoBuffer = fs.readFileSync(videoPath);
+              video = videoBuffer.toString('base64');
+              logs.push(`Video captured: ${videoPath}`);
+              // Clean up video file
+              try { fs.unlinkSync(videoPath); } catch {}
+            }
+          }
+        } catch (e) {
+          logs.push(`Failed to capture video: ${e}`);
+        }
+      }
+      
       this.execContext = null;
       await context.close();
     }
@@ -307,6 +445,9 @@ class PlaywrightExecutor implements FrameworkExecutor {
       steps: stepResults,
       screenshot,
       stepScreenshots,
+      video,
+      networkLogs: networkLogs.length > 0 ? networkLogs : undefined,
+      performanceMetrics,
       errorMessage,
       logs,
     };
@@ -1124,12 +1265,23 @@ export class TestExecutor {
     framework: ExecutionFramework = "playwright",
     testData?: TestDataParam[],
     selfHealing: boolean = false,
-    maxRetries: number = 2
+    maxRetries: number = 2,
+    agentCapabilities?: string[]
   ): Promise<void> {
     const executor = this.getExecutor(framework);
     let passedCount = 0;
     let failedCount = 0;
     const startTime = Date.now();
+    
+    // Convert agent capabilities to execution capabilities
+    const capabilities: ExecutionCapabilities = {
+      captureVideo: agentCapabilities?.includes('video'),
+      captureNetwork: agentCapabilities?.includes('network-logging'),
+      capturePerformance: agentCapabilities?.includes('performance-metrics'),
+    };
+    
+    console.log(`[TestExecutor] Agent capabilities: ${JSON.stringify(agentCapabilities)}`);
+    console.log(`[TestExecutor] Execution capabilities: ${JSON.stringify(capabilities)}`);
 
     await storage.updateExecution(executionId, {
       status: "running",
@@ -1141,7 +1293,7 @@ export class TestExecutor {
 
       for (const testCase of testCases) {
         try {
-          let result = await executor.executeTest(testCase, targetUrl, testData);
+          let result = await executor.executeTest(testCase, targetUrl, testData, capabilities);
           let healingAttempts = 0;
           let healed = false;
 
@@ -1154,7 +1306,7 @@ export class TestExecutor {
             if (healedSteps) {
               // Create a modified test case with healed steps
               const healedTestCase = { ...testCase, steps: healedSteps };
-              result = await executor.executeTest(healedTestCase, targetUrl, testData);
+              result = await executor.executeTest(healedTestCase, targetUrl, testData, capabilities);
               
               if (result.passed) {
                 healed = true;
@@ -1211,6 +1363,9 @@ export class TestExecutor {
             errorMessage: detailedErrorMessage,
             screenshot: result.screenshot || null,
             stepScreenshots: result.stepScreenshots || null,
+            video: result.video || null,
+            networkLogs: result.networkLogs || null,
+            performanceMetrics: result.performanceMetrics || null,
             logs: detailedLogs,
           });
 
@@ -1227,6 +1382,10 @@ export class TestExecutor {
             duration: 0,
             errorMessage: error.message,
             screenshot: null,
+            stepScreenshots: null,
+            video: null,
+            networkLogs: null,
+            performanceMetrics: null,
             logs: [`Test execution error: ${error.message}`],
           });
         }

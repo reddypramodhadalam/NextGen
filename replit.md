@@ -111,6 +111,24 @@ Pre-built integration modules in `server/replit_integrations/`:
 - Auth schema in shared/models/auth.ts with users and sessions tables
 - Auth module in server/auth/ with password utilities and session handling
 
+### Video Recording, Network Logging & Performance Metrics (Latest)
+- Agent capabilities: video, network-logging, performance-metrics, screenshot, accessibility, visual-regression
+- ExecutionCapabilities interface maps agent capabilities to execution flags
+- Step-by-step screenshot capture for all frameworks after every step execution
+- Screenshot timing fixed to capture at exact point of failure
+- Visual step gallery in UI showing all step screenshots with color-coded pass/fail indicators
+- Video recording capability using Playwright's recordVideo feature (stored as base64)
+- Network request logging with detailed request/response tracking (method, URL, status, duration, size, contentType)
+- Improved network log correlation using request object identity instead of URL matching
+- Performance metrics capture (loadTime, DOM content loaded, first paint, FCP, TTI, etc.)
+- Updated schema with video, networkLogs, performanceMetrics fields in testResults table
+- Routes fetch agent capabilities and pass them to runExecution
+- Comprehensive reporting UI:
+  - Video player for test recordings
+  - Performance metrics dashboard with load time, DOM loaded, first paint, TTI metrics
+  - Network requests table with method, URL, status, duration columns
+- Note: Video, network, and performance capture currently Playwright-only (Puppeteer/Selenium have limited support)
+
 ### Autonomous Agentic AI Testing
 - Added autonomous agent mode for continuous background testing
 - Agents can be configured with:
@@ -119,11 +137,12 @@ Pre-built integration modules in `server/replit_integrations/`:
   - Schedule interval (1, 5, 15, 30, 60 minutes)
   - Self-healing capability using GPT-4o
   - Max retries for self-healing attempts
+  - Capabilities: video, network-logging, performance-metrics, screenshot, accessibility, visual-regression
 - Start/Stop controls in agent cards for running autonomous agents
 - Agents run in background and execute tests on schedule
 - Self-healing uses AI to suggest alternative steps when tests fail
 - API endpoints: POST /api/agents/:id/start, POST /api/agents/:id/stop, GET /api/agents/:id/status
-- New schema fields: isAutonomous, targetUrl, suiteId, scheduleInterval, maxRetries, selfHealingEnabled
+- New schema fields: isAutonomous, targetUrl, suiteId, scheduleInterval, maxRetries, selfHealingEnabled, capabilities
 
 ### Test Data Parameters & Selenium Support
 - Added test data parameters feature for supplying execution-time values

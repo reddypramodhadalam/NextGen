@@ -43,6 +43,8 @@ import {
   Zap,
   FileText,
   Camera,
+  Video,
+  BarChart3,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -815,6 +817,96 @@ export default function Executions() {
                                 alt="Test screenshot" 
                                 className="mt-2 rounded border max-w-full shadow-sm"
                               />
+                            </details>
+                          )}
+                          
+                          {/* Video Recording */}
+                          {result.video && (
+                            <details className="mt-3" data-testid={`details-video-${result.id}`}>
+                              <summary className="text-sm font-medium cursor-pointer flex items-center gap-2" data-testid={`summary-video-${result.id}`}>
+                                <Video className="h-4 w-4" />
+                                Test Video Recording
+                              </summary>
+                              <div className="mt-2">
+                                <video 
+                                  controls 
+                                  className="rounded border max-w-full"
+                                  data-testid={`video-player-${result.id}`}
+                                  src={result.video.startsWith('data:') ? result.video : `data:video/webm;base64,${result.video}`}
+                                />
+                              </div>
+                            </details>
+                          )}
+                          
+                          {/* Performance Metrics */}
+                          {result.performanceMetrics && (
+                            <details className="mt-3" data-testid={`details-performance-${result.id}`}>
+                              <summary className="text-sm font-medium cursor-pointer flex items-center gap-2" data-testid={`summary-performance-${result.id}`}>
+                                <BarChart3 className="h-4 w-4" />
+                                Performance Metrics
+                              </summary>
+                              <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3" data-testid={`metrics-grid-${result.id}`}>
+                                {result.performanceMetrics.loadTime && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-loadtime-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">Page Load</p>
+                                    <p className="font-bold text-lg">{result.performanceMetrics.loadTime}ms</p>
+                                  </div>
+                                )}
+                                {result.performanceMetrics.domContentLoaded && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-domloaded-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">DOM Loaded</p>
+                                    <p className="font-bold text-lg">{result.performanceMetrics.domContentLoaded}ms</p>
+                                  </div>
+                                )}
+                                {result.performanceMetrics.firstContentfulPaint && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-fcp-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">First Paint</p>
+                                    <p className="font-bold text-lg">{Math.round(result.performanceMetrics.firstContentfulPaint)}ms</p>
+                                  </div>
+                                )}
+                                {result.performanceMetrics.timeToInteractive && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-tti-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">Interactive</p>
+                                    <p className="font-bold text-lg">{Math.round(result.performanceMetrics.timeToInteractive)}ms</p>
+                                  </div>
+                                )}
+                              </div>
+                            </details>
+                          )}
+                          
+                          {/* Network Logs */}
+                          {result.networkLogs && Array.isArray(result.networkLogs) && result.networkLogs.length > 0 && (
+                            <details className="mt-3" data-testid={`details-network-${result.id}`}>
+                              <summary className="text-sm font-medium cursor-pointer flex items-center gap-2" data-testid={`summary-network-${result.id}`}>
+                                <Globe className="h-4 w-4" />
+                                Network Requests ({result.networkLogs.length})
+                              </summary>
+                              <div className="mt-2 max-h-64 overflow-y-auto border rounded">
+                                <table className="w-full text-xs" data-testid={`table-network-${result.id}`}>
+                                  <thead className="bg-muted sticky top-0">
+                                    <tr>
+                                      <th className="p-2 text-left">Method</th>
+                                      <th className="p-2 text-left">URL</th>
+                                      <th className="p-2 text-center">Status</th>
+                                      <th className="p-2 text-right">Duration</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {result.networkLogs.map((entry: any, idx: number) => (
+                                      <tr key={idx} className="border-t hover:bg-muted/50" data-testid={`row-network-${result.id}-${idx}`}>
+                                        <td className="p-2 font-mono">{entry.method}</td>
+                                        <td className="p-2 truncate max-w-xs" title={entry.url}>
+                                          {entry.url.length > 50 ? `${entry.url.substring(0, 50)}...` : entry.url}
+                                        </td>
+                                        <td className={`p-2 text-center font-mono ${entry.status >= 400 ? 'text-red-500' : entry.status >= 300 ? 'text-yellow-500' : 'text-green-500'}`}>
+                                          {entry.status || '-'}
+                                        </td>
+                                        <td className="p-2 text-right font-mono">{entry.duration ? `${entry.duration}ms` : '-'}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
                             </details>
                           )}
                           

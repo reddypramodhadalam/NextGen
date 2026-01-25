@@ -366,6 +366,16 @@ export async function registerRoutes(
       if (testCases.length === 0) {
         return res.status(400).json({ error: "No test cases found to execute" });
       }
+      
+      // Get agent capabilities if agentId is provided
+      let agentCapabilities: string[] | undefined;
+      if (agentId) {
+        const agent = await storage.getAgent(agentId);
+        if (agent && agent.capabilities) {
+          agentCapabilities = agent.capabilities;
+          console.log(`[Execution] Agent ${agent.name} capabilities: ${agentCapabilities.join(', ')}`);
+        }
+      }
 
       const execution = await storage.createExecution({
         suiteId: suiteId ?? undefined,
@@ -381,7 +391,7 @@ export async function registerRoutes(
         skippedTests: 0,
       });
 
-      // Run real test execution asynchronously with selected framework and self-healing
+      // Run real test execution asynchronously with selected framework, self-healing, and agent capabilities
       testExecutor.runExecution(
         execution.id, 
         testCases, 
@@ -389,7 +399,8 @@ export async function registerRoutes(
         framework ?? "playwright", 
         testData,
         selfHealing ?? false,
-        maxRetries ?? 2
+        maxRetries ?? 2,
+        agentCapabilities
       ).catch((error) => {
         console.error("Execution error:", error);
         storage.updateExecution(execution.id, {

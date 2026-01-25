@@ -133,6 +133,31 @@ export interface StepScreenshot {
 }
 
 // Test Results (individual test case results within an execution)
+// Network log entry interface
+export interface NetworkLogEntry {
+  timestamp: number;
+  method: string;
+  url: string;
+  status?: number;
+  duration?: number;
+  size?: number;
+  type?: string;
+}
+
+// Performance metrics interface  
+export interface PerformanceData {
+  loadTime?: number;
+  domContentLoaded?: number;
+  firstPaint?: number;
+  firstContentfulPaint?: number;
+  largestContentfulPaint?: number;
+  timeToInteractive?: number;
+  totalBlockingTime?: number;
+  cumulativeLayoutShift?: number;
+  memoryUsed?: number;
+  memoryTotal?: number;
+}
+
 export const testResults = pgTable("test_results", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   executionId: varchar("execution_id").references(() => testExecutions.id, { onDelete: "cascade" }),
@@ -142,6 +167,9 @@ export const testResults = pgTable("test_results", {
   errorMessage: text("error_message"),
   screenshot: text("screenshot"), // base64 or URL - final/failure screenshot
   stepScreenshots: jsonb("step_screenshots").$type<StepScreenshot[]>(), // screenshot at each step
+  video: text("video"), // base64 encoded video or URL
+  networkLogs: jsonb("network_logs").$type<NetworkLogEntry[]>(), // network request logs
+  performanceMetrics: jsonb("performance_metrics").$type<PerformanceData>(), // performance data
   logs: jsonb("logs").$type<string[]>(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
