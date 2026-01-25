@@ -703,7 +703,7 @@ export default function Executions() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg">
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
-                  <StatusBadge status={viewingExecution.status || "pending"} />
+                  <StatusBadge status={(viewingExecution.status || "pending") as "passed" | "failed" | "running" | "pending"} />
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Framework</p>
