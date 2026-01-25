@@ -127,7 +127,10 @@ Pre-built integration modules in `server/replit_integrations/`:
   - Video player for test recordings
   - Performance metrics dashboard with load time, DOM loaded, first paint, TTI metrics
   - Network requests table with method, URL, status, duration columns
-- Note: Video, network, and performance capture currently Playwright-only (Puppeteer/Selenium have limited support)
+- Feature support by framework:
+  - **Playwright**: Full support (video, network logging, performance metrics)
+  - **Puppeteer**: Network logging and performance metrics (no video - not natively supported)
+  - **Selenium**: Performance metrics only (no video or network - not natively supported)
 
 ### Autonomous Agentic AI Testing
 - Added autonomous agent mode for continuous background testing

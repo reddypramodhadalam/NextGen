@@ -852,24 +852,62 @@ class PuppeteerExecutor implements FrameworkExecutor {
     }
   }
 
-  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
+  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[], capabilities?: ExecutionCapabilities): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
     const stepScreenshots: StepScreenshot[] = [];
+    const networkLogs: NetworkLogEntry[] = [];
     const startTime = Date.now();
     let passed = true;
     let errorMessage: string | undefined;
     let screenshot: string | undefined;
+    let performanceMetrics: PerformanceMetrics | undefined;
 
     logs.push(`[Puppeteer] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
     if (testData && testData.length > 0) {
       logs.push(`Test data provided: ${testData.map(d => d.key).join(", ")}`);
     }
+    if (capabilities) {
+      logs.push(`Capabilities: network=${capabilities.captureNetwork}, performance=${capabilities.capturePerformance} (video not supported in Puppeteer)`);
+    }
 
     await this.initialize();
     const page = await this.browser!.newPage();
     await page.setViewport({ width: 1280, height: 720 });
+    
+    // Set up network logging if requested using request ID correlation
+    const requestMap = new Map<any, { timestamp: number; index: number }>();
+    if (capabilities?.captureNetwork) {
+      page.on('request', (request) => {
+        const idx = networkLogs.length;
+        const timestamp = Date.now();
+        requestMap.set(request, { timestamp, index: idx });
+        networkLogs.push({
+          timestamp,
+          method: request.method(),
+          url: request.url(),
+          type: request.resourceType(),
+        });
+      });
+      
+      page.on('response', (response) => {
+        const reqInfo = requestMap.get(response.request());
+        if (reqInfo) {
+          const entry = networkLogs[reqInfo.index];
+          if (entry) {
+            entry.status = response.status();
+            entry.duration = Date.now() - reqInfo.timestamp;
+            try {
+              const headers = response.headers();
+              entry.size = parseInt(headers['content-length'] || '0', 10);
+              entry.contentType = headers['content-type'];
+            } catch {}
+          }
+        }
+      });
+      logs.push('Network logging enabled');
+    }
 
     try {
       await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 30000 });
@@ -930,6 +968,37 @@ class PuppeteerExecutor implements FrameworkExecutor {
         screenshot = stepScreenshots[stepScreenshots.length - 1].screenshot;
         logs.push("Using last step screenshot as final screenshot");
       }
+      
+      // Capture performance metrics if requested
+      if (capabilities?.capturePerformance) {
+        try {
+          const perfData = await page.evaluate(() => {
+            const timing = performance.timing;
+            const paintEntries = performance.getEntriesByType('paint');
+            const fcp = paintEntries.find(e => e.name === 'first-contentful-paint');
+            const fp = paintEntries.find(e => e.name === 'first-paint');
+            return {
+              loadTime: timing.loadEventEnd - timing.navigationStart,
+              domContentLoaded: timing.domContentLoadedEventEnd - timing.navigationStart,
+              firstPaint: fp ? fp.startTime : null,
+              firstContentfulPaint: fcp ? fcp.startTime : null,
+              timeToInteractive: timing.domInteractive - timing.navigationStart
+            };
+          }) as any;
+          if (perfData) {
+            performanceMetrics = {
+              loadTime: perfData.loadTime > 0 ? perfData.loadTime : undefined,
+              domContentLoaded: perfData.domContentLoaded > 0 ? perfData.domContentLoaded : undefined,
+              firstPaint: perfData.firstPaint > 0 ? perfData.firstPaint : undefined,
+              firstContentfulPaint: perfData.firstContentfulPaint > 0 ? perfData.firstContentfulPaint : undefined,
+              timeToInteractive: perfData.timeToInteractive > 0 ? perfData.timeToInteractive : undefined,
+            };
+            logs.push('Performance metrics captured via Puppeteer');
+          }
+        } catch (e) {
+          logs.push(`Failed to capture performance metrics: ${e}`);
+        }
+      }
 
     } catch (error: any) {
       passed = false;
@@ -957,6 +1026,8 @@ class PuppeteerExecutor implements FrameworkExecutor {
       steps: stepResults,
       screenshot,
       stepScreenshots,
+      networkLogs: networkLogs.length > 0 ? networkLogs : undefined,
+      performanceMetrics,
       errorMessage,
       logs,
     };
@@ -1068,7 +1139,7 @@ class SeleniumExecutor implements FrameworkExecutor {
     }
   }
 
-  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[]): Promise<ExecutionResult> {
+  async executeTest(testCase: TestCase, targetUrl: string, testData?: TestDataParam[], capabilities?: ExecutionCapabilities): Promise<ExecutionResult> {
     const logs: string[] = [];
     const stepResults: TestStepResult[] = [];
     const stepScreenshots: StepScreenshot[] = [];
@@ -1076,11 +1147,15 @@ class SeleniumExecutor implements FrameworkExecutor {
     let passed = true;
     let errorMessage: string | undefined;
     let screenshot: string | undefined;
+    let performanceMetrics: PerformanceMetrics | undefined;
 
     logs.push(`[Selenium] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
     if (testData && testData.length > 0) {
       logs.push(`Test data provided: ${testData.map(d => d.key).join(", ")}`);
+    }
+    if (capabilities) {
+      logs.push(`Capabilities: performance=${capabilities.capturePerformance} (video/network not supported in Selenium)`);
     }
 
     await this.initialize();
@@ -1144,6 +1219,38 @@ class SeleniumExecutor implements FrameworkExecutor {
         screenshot = stepScreenshots[stepScreenshots.length - 1].screenshot;
         logs.push("Using last step screenshot as final screenshot");
       }
+      
+      // Capture performance metrics if requested (Selenium can do this via JS execution)
+      if (capabilities?.capturePerformance) {
+        try {
+          const perfScript = `
+            const timing = performance.timing;
+            const paintEntries = performance.getEntriesByType('paint');
+            const fcp = paintEntries.find(e => e.name === 'first-contentful-paint');
+            const fp = paintEntries.find(e => e.name === 'first-paint');
+            return {
+              loadTime: timing.loadEventEnd - timing.navigationStart,
+              domContentLoaded: timing.domContentLoadedEventEnd - timing.navigationStart,
+              firstPaint: fp ? fp.startTime : null,
+              firstContentfulPaint: fcp ? fcp.startTime : null,
+              timeToInteractive: timing.domInteractive - timing.navigationStart
+            };
+          `;
+          const perfData = await this.driver!.executeScript(perfScript) as any;
+          if (perfData) {
+            performanceMetrics = {
+              loadTime: perfData.loadTime > 0 ? perfData.loadTime : undefined,
+              domContentLoaded: perfData.domContentLoaded > 0 ? perfData.domContentLoaded : undefined,
+              firstPaint: perfData.firstPaint > 0 ? perfData.firstPaint : undefined,
+              firstContentfulPaint: perfData.firstContentfulPaint > 0 ? perfData.firstContentfulPaint : undefined,
+              timeToInteractive: perfData.timeToInteractive > 0 ? perfData.timeToInteractive : undefined,
+            };
+            logs.push('Performance metrics captured via Selenium');
+          }
+        } catch (e) {
+          logs.push(`Failed to capture performance metrics: ${e}`);
+        }
+      }
 
     } catch (error: any) {
       passed = false;
@@ -1169,6 +1276,7 @@ class SeleniumExecutor implements FrameworkExecutor {
       steps: stepResults,
       screenshot,
       stepScreenshots,
+      performanceMetrics,
       errorMessage,
       logs,
     };
