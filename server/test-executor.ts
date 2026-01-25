@@ -4,7 +4,7 @@ import { Builder, type WebDriver, By, until } from "selenium-webdriver";
 import chrome from "selenium-webdriver/chrome";
 import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
-import type { TestCase, TestDataParam } from "@shared/schema";
+import type { TestCase, TestDataParam, PerformanceData } from "@shared/schema";
 
 export type ExecutionFramework = "playwright" | "puppeteer" | "selenium";
 
@@ -146,19 +146,6 @@ interface NetworkLogEntry {
   type?: string;
 }
 
-interface PerformanceData {
-  loadTime?: number;
-  domContentLoaded?: number;
-  firstPaint?: number;
-  firstContentfulPaint?: number;
-  largestContentfulPaint?: number;
-  timeToInteractive?: number;
-  totalBlockingTime?: number;
-  cumulativeLayoutShift?: number;
-  memoryUsed?: number;
-  memoryTotal?: number;
-}
-
 interface ExecutionResult {
   testCaseId: string;
   testCaseTitle: string;
@@ -281,7 +268,7 @@ class PlaywrightExecutor implements FrameworkExecutor {
             try {
               const headers = response.headers();
               entry.size = parseInt(headers['content-length'] || '0', 10);
-              entry.contentType = headers['content-type'];
+              entry.type = headers['content-type'];
             } catch {}
           }
         }
@@ -331,9 +318,11 @@ class PlaywrightExecutor implements FrameworkExecutor {
           logs.push(`Step failed: ${error.message}`);
         }
 
-        // Capture screenshot after EVERY step
+        // Capture screenshot after EVERY step - wait for page to render changes
         try {
           const currentPage = this.execContext.pages[this.execContext.currentPageIndex];
+          // Wait for any animations/transitions to complete before screenshot
+          await currentPage.waitForTimeout(500);
           const screenshotBuffer = await currentPage.screenshot({ fullPage: true });
           const stepScreenshot = screenshotBuffer.toString("base64");
           stepScreenshots.push({
@@ -861,7 +850,7 @@ class PuppeteerExecutor implements FrameworkExecutor {
     let passed = true;
     let errorMessage: string | undefined;
     let screenshot: string | undefined;
-    let performanceMetrics: PerformanceMetrics | undefined;
+    let performanceMetrics: PerformanceData | undefined;
 
     logs.push(`[Puppeteer] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
@@ -901,7 +890,7 @@ class PuppeteerExecutor implements FrameworkExecutor {
             try {
               const headers = response.headers();
               entry.size = parseInt(headers['content-length'] || '0', 10);
-              entry.contentType = headers['content-type'];
+              entry.type = headers['content-type'];
             } catch {}
           }
         }
@@ -941,8 +930,10 @@ class PuppeteerExecutor implements FrameworkExecutor {
           logs.push(`Step failed: ${error.message}`);
         }
 
-        // Capture screenshot after EVERY step
+        // Capture screenshot after EVERY step - wait for page to render changes
         try {
+          // Wait for any animations/transitions to complete before screenshot
+          await new Promise(resolve => setTimeout(resolve, 500));
           const screenshotBuffer = await page.screenshot({ fullPage: true });
           const stepScreenshot = Buffer.from(screenshotBuffer).toString("base64");
           stepScreenshots.push({
@@ -1147,7 +1138,7 @@ class SeleniumExecutor implements FrameworkExecutor {
     let passed = true;
     let errorMessage: string | undefined;
     let screenshot: string | undefined;
-    let performanceMetrics: PerformanceMetrics | undefined;
+    let performanceMetrics: PerformanceData | undefined;
 
     logs.push(`[Selenium] Starting test: ${testCase.title}`);
     logs.push(`Target URL: ${targetUrl}`);
@@ -1193,8 +1184,10 @@ class SeleniumExecutor implements FrameworkExecutor {
           logs.push(`Step failed: ${error.message}`);
         }
 
-        // Capture screenshot after EVERY step
+        // Capture screenshot after EVERY step - wait for page to render changes
         try {
+          // Wait for any animations/transitions to complete before screenshot
+          await this.driver!.sleep(500);
           const screenshotData = await this.driver!.takeScreenshot();
           stepScreenshots.push({
             stepIndex: stepIdx + 1,
