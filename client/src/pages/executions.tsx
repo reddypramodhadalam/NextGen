@@ -587,7 +587,9 @@ export default function Executions() {
                 <div key={execution.id} className="p-4 rounded-lg bg-background border">
                   <div className="flex items-center justify-between mb-3 gap-4 flex-wrap">
                     <div>
-                      <p className="font-medium">{formatExecutionTimestamp(execution.createdAt)}</p>
+                      <p className="font-medium">
+                        {suites.find(s => s.id.toString() === execution.suiteId)?.name || "Unknown Suite"} - {formatExecutionTimestamp(execution.createdAt)}
+                      </p>
                       <p className="text-sm text-muted-foreground capitalize">{execution.environment}</p>
                     </div>
                     <Button
@@ -656,7 +658,9 @@ export default function Executions() {
                   <div className="flex items-center gap-4">
                     <StatusBadge status={execution.status as any} />
                     <div>
-                      <p className="font-medium">{formatExecutionTimestamp(execution.createdAt)}</p>
+                      <p className="font-medium">
+                        {suites.find(s => s.id.toString() === execution.suiteId)?.name || "Unknown Suite"} - {formatExecutionTimestamp(execution.createdAt)}
+                      </p>
                       <p className="text-sm text-muted-foreground capitalize">
                         {execution.framework || "playwright"} - {execution.environment} - {execution.totalTests} tests
                       </p>
