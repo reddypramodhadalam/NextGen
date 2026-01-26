@@ -40,7 +40,13 @@ interface BrowserCommand {
 async function interpretStepWithAI(step: string, expected: string, pageContext: string): Promise<BrowserCommand[]> {
   try {
     const systemPrompt = `You are a test automation expert. Convert natural language test steps into browser commands.
-          
+
+CRITICAL RULES:
+1. The "Step" is the ACTION to perform (click, type, navigate, switch, etc.)
+2. The "Expected" is ONLY for VERIFICATION - it should NEVER trigger navigation actions like switchToNewWindow, switchToIframe, navigate, etc.
+3. Expected results like "verify new window opens" or "verify popup appears" should use "verify" action to check the condition, NOT switchToNewWindow
+4. Only use switchToNewWindow/switchToIframe when the STEP explicitly says to switch (e.g., "Switch to the new window")
+
 Return a JSON array of commands. Each command has:
 - action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, radio, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount, switchToIframe, switchToMainFrame, switchToWindow, switchToNewWindow, closeWindow
 - selector: CSS selector or text content to find element (for iframes: can be name, id, or selector)
@@ -63,7 +69,7 @@ IFRAME ACTIONS (for working with embedded frames):
 
 WINDOW/TAB ACTIONS (for working with popups and multiple tabs):
 - switchToWindow: Switch to a specific window/tab by index (0 is main, 1 is first popup, etc.)
-- switchToNewWindow: Wait for and switch to a newly opened window/popup
+- switchToNewWindow: Wait for and switch to a newly opened window/popup (ONLY when step says to switch)
 - closeWindow: Close the current window and switch back to main
 
 CAPTURE ACTIONS (for getting data from page):
@@ -73,6 +79,7 @@ CAPTURE ACTIONS (for getting data from page):
 
 Examples:
 Step: "Click Login button" → [{"action":"click","selector":"Login","description":"Click Login"}]
+Step: "Click Continue button", Expected: "Verify new window opens" → [{"action":"click","selector":"Continue","description":"Click Continue"},{"action":"verify","selector":"new window","description":"Verify new window opened"}]
 Step: "Enter john@email.com in email" → [{"action":"type","selector":"email","value":"john@email.com","description":"Type email"}]
 Step: "Select USA from country" → [{"action":"select","selector":"country","value":"USA","description":"Select country"}]
 Step: "Switch to the payment iframe" → [{"action":"switchToIframe","selector":"payment-frame","description":"Switch to payment iframe"}]
