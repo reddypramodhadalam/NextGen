@@ -24,7 +24,7 @@ function replaceRuntimeVariables(text: string): string {
 // AI-powered step interpreter - converts natural language to browser commands
 interface BrowserCommand {
   action: "click" | "type" | "select" | "hover" | "doubleClick" | "rightClick" | 
-          "scroll" | "wait" | "pressKey" | "check" | "uncheck" | "clear" | 
+          "scroll" | "wait" | "pressKey" | "check" | "uncheck" | "clear" | "radio" |
           "dragDrop" | "focus" | "acceptDialog" | "dismissDialog" | "navigate" | "verify" |
           "capture" | "captureAttribute" | "captureCount" |
           "switchToIframe" | "switchToMainFrame" | "switchToWindow" | "switchToNewWindow" | "closeWindow";
@@ -42,7 +42,7 @@ async function interpretStepWithAI(step: string, expected: string, pageContext: 
     const systemPrompt = `You are a test automation expert. Convert natural language test steps into browser commands.
           
 Return a JSON array of commands. Each command has:
-- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount, switchToIframe, switchToMainFrame, switchToWindow, switchToNewWindow, closeWindow
+- action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, radio, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount, switchToIframe, switchToMainFrame, switchToWindow, switchToNewWindow, closeWindow
 - selector: CSS selector or text content to find element (for iframes: can be name, id, or selector)
 - value: value to type, option to select, key to press, or scroll direction (top/bottom). Can include $variableName$ to use captured values.
 - targetSelector: for dragDrop, the drop target
@@ -50,6 +50,12 @@ Return a JSON array of commands. Each command has:
 - attributeName: for captureAttribute, which HTML attribute to get (href, src, data-id, etc.)
 - windowIndex: for switchToWindow, which window/tab index (0-based, 0 is main window)
 - description: brief description
+
+FORM CONTROLS:
+- check: Check a checkbox (finds by label text, name, or aria-label)
+- uncheck: Uncheck a checkbox
+- radio: Select a radio button option (finds by label text, value, or aria-label)
+- select: Select from dropdown (works with native select, custom dropdowns, searchable dropdowns)
 
 IFRAME ACTIONS (for working with embedded frames):
 - switchToIframe: Switch context to an iframe (use selector for iframe name, id, or CSS selector)
@@ -82,6 +88,13 @@ Step: "Remember the product link as productUrl" → [{"action":"captureAttribute
 Step: "Count the items in cart as itemCount" → [{"action":"captureCount","selector":"cart-item","variableName":"itemCount","description":"Count cart items"}]
 Step: "Enter the saved order number in search" → [{"action":"type","selector":"search","value":"$orderNum$","description":"Type saved order number"}]
 Step: "Verify the confirmation code matches" → [{"action":"verify","selector":"$confirmCode$","description":"Verify confirmation code"}]
+Step: "Select Male radio button" → [{"action":"radio","selector":"Male","description":"Select Male radio"}]
+Step: "Check the Male radio button" → [{"action":"radio","selector":"Male","description":"Select Male radio"}]
+Step: "Click on Male gender option" → [{"action":"radio","selector":"Male","description":"Select Male radio"}]
+Step: "Select Karnataka from State dropdown" → [{"action":"select","selector":"State","value":"Karnataka","description":"Select state"}]
+Step: "Choose Premium from the plan options" → [{"action":"select","selector":"plan","value":"Premium","description":"Select plan"}]
+Step: "Check the Terms and Conditions checkbox" → [{"action":"check","selector":"Terms and Conditions","description":"Check terms"}]
+Step: "Accept the privacy policy" → [{"action":"check","selector":"privacy policy","description":"Check privacy"}]
 
 Only return the JSON array, no explanation.`;
 
@@ -1300,25 +1313,91 @@ class SeleniumExecutor implements FrameworkExecutor {
           case "click":
             if (cmd.selector) {
               try {
-                // Try multiple ways to find the element
                 let element;
+                const selectorText = cmd.selector.replace(/['"]/g, '');
+                
+                // Comprehensive XPath strategies for finding clickable elements
                 const xpaths = [
-                  `//*[contains(text(), "${cmd.selector}")]`,
-                  `//button[contains(text(), "${cmd.selector}")]`,
-                  `//a[contains(text(), "${cmd.selector}")]`,
-                  `//*[@value="${cmd.selector}"]`,
-                  `//*[contains(@aria-label, "${cmd.selector}")]`,
+                  // Exact text match
+                  `//*[normalize-space(text())="${selectorText}"]`,
+                  `//button[normalize-space(text())="${selectorText}"]`,
+                  `//a[normalize-space(text())="${selectorText}"]`,
+                  // Contains text
+                  `//*[contains(normalize-space(text()), "${selectorText}")]`,
+                  `//button[contains(text(), "${selectorText}")]`,
+                  `//a[contains(text(), "${selectorText}")]`,
+                  // By value attribute
+                  `//*[@value="${selectorText}"]`,
+                  `//input[@value="${selectorText}"]`,
+                  // By aria-label
+                  `//*[contains(@aria-label, "${selectorText}")]`,
+                  // By title
+                  `//*[contains(@title, "${selectorText}")]`,
+                  // By placeholder (for inputs that look like buttons)
+                  `//*[contains(@placeholder, "${selectorText}")]`,
+                  // By data-testid or data-test
+                  `//*[contains(@data-testid, "${selectorText.toLowerCase().replace(/\s+/g, '-')}")]`,
+                  `//*[contains(@data-test, "${selectorText.toLowerCase().replace(/\s+/g, '-')}")]`,
+                  // Span or div containing text inside button/link
+                  `//button//*[contains(text(), "${selectorText}")]`,
+                  `//a//*[contains(text(), "${selectorText}")]`,
+                  // By id or class containing selector
+                  `//*[contains(@id, "${selectorText.toLowerCase().replace(/\s+/g, '')}")]`,
+                  `//*[contains(@class, "${selectorText.toLowerCase().replace(/\s+/g, '-')}")]`,
+                  // List items (ul/li) containing text
+                  `//li[contains(text(), "${selectorText}")]`,
+                  `//li//*[contains(text(), "${selectorText}")]`,
+                  // Dropdown options
+                  `//option[contains(text(), "${selectorText}")]`,
                 ];
+                
                 for (const xpath of xpaths) {
                   try {
-                    element = await this.driver!.findElement(By.xpath(xpath));
-                    break;
+                    const elements = await this.driver!.findElements(By.xpath(xpath));
+                    if (elements.length > 0) {
+                      // Find a visible, enabled element
+                      for (const el of elements) {
+                        const isDisplayed = await el.isDisplayed().catch(() => false);
+                        const isEnabled = await el.isEnabled().catch(() => true);
+                        if (isDisplayed && isEnabled) {
+                          element = el;
+                          break;
+                        }
+                      }
+                      if (element) break;
+                    }
                   } catch { continue; }
                 }
+                
+                // Try CSS selector as fallback
+                if (!element) {
+                  const cssSelectors = [
+                    `[data-testid*="${selectorText.toLowerCase().replace(/\s+/g, '-')}"]`,
+                    `button:contains("${selectorText}")`,
+                    `a:contains("${selectorText}")`,
+                  ];
+                  for (const css of cssSelectors) {
+                    try {
+                      element = await this.driver!.findElement(By.css(css));
+                      if (element) break;
+                    } catch { continue; }
+                  }
+                }
+                
                 if (!element) {
                   throw new Error(`Element not found: ${cmd.selector}`);
                 }
-                await element.click();
+                
+                // Scroll element into view before clicking
+                await this.driver!.executeScript("arguments[0].scrollIntoView({block: 'center'});", element);
+                await this.driver!.sleep(200);
+                
+                try {
+                  await element.click();
+                } catch {
+                  // If regular click fails, try JavaScript click
+                  await this.driver!.executeScript("arguments[0].click();", element);
+                }
                 logs.push(`Clicked: ${cmd.selector}`);
               } catch (e: any) {
                 logs.push(`Click failed: ${e.message}`);
@@ -1367,23 +1446,121 @@ class SeleniumExecutor implements FrameworkExecutor {
             
           case "select":
             if (cmd.selector && cmd.value) {
+              let selected = false;
+              const fieldName = cmd.selector.replace(/['"]/g, '');
+              const optionValue = cmd.value.replace(/['"]/g, '');
+              
+              // Strategy 1: Native HTML <select> element
               try {
-                const selectEl = await this.driver!.findElement(By.css(`select[name*="${cmd.selector}" i], select[id*="${cmd.selector}" i]`));
-                const option = await selectEl.findElement(By.xpath(`./option[contains(text(), "${cmd.value}")]`));
-                await option.click();
-                logs.push(`Selected "${cmd.value}" from ${cmd.selector}`);
-              } catch {
-                // Try clicking dropdown then option
-                try {
-                  const dropdown = await this.driver!.findElement(By.xpath(`//*[contains(text(), "${cmd.selector}")]`));
-                  await dropdown.click();
-                  await this.driver!.sleep(300);
-                  const option = await this.driver!.findElement(By.xpath(`//*[contains(text(), "${cmd.value}")]`));
-                  await option.click();
-                  logs.push(`Selected "${cmd.value}" from ${cmd.selector}`);
-                } catch {
-                  logs.push(`Could not select from: ${cmd.selector}`);
+                const selectXpaths = [
+                  `//select[contains(@name, "${fieldName}")]`,
+                  `//select[contains(@id, "${fieldName}")]`,
+                  `//label[contains(text(), "${fieldName}")]//following::select[1]`,
+                  `//label[contains(text(), "${fieldName}")]//select`,
+                  `//*[contains(text(), "${fieldName}")]//following::select[1]`,
+                ];
+                for (const xpath of selectXpaths) {
+                  try {
+                    const selectEl = await this.driver!.findElement(By.xpath(xpath));
+                    const option = await selectEl.findElement(By.xpath(`./option[contains(text(), "${optionValue}")]`));
+                    await option.click();
+                    logs.push(`Selected "${optionValue}" from native select: ${fieldName}`);
+                    selected = true;
+                    break;
+                  } catch { continue; }
                 }
+              } catch { }
+              
+              // Strategy 2: Custom dropdown (click to open, then click option)
+              if (!selected) {
+                try {
+                  const dropdownXpaths = [
+                    `//*[contains(@class, 'select') or contains(@class, 'dropdown')][.//*[contains(text(), "${fieldName}")] or contains(@aria-label, "${fieldName}")]`,
+                    `//*[contains(@role, 'combobox') or contains(@role, 'listbox')][.//*[contains(text(), "${fieldName}")] or contains(@aria-label, "${fieldName}")]`,
+                    `//label[contains(text(), "${fieldName}")]//following::*[contains(@class, 'select') or contains(@class, 'dropdown')][1]`,
+                    `//*[contains(text(), "${fieldName}")]//following-sibling::*[1]`,
+                    `//*[contains(text(), "${fieldName}")]//parent::*//following-sibling::*[1]`,
+                  ];
+                  
+                  for (const xpath of dropdownXpaths) {
+                    try {
+                      const dropdown = await this.driver!.findElement(By.xpath(xpath));
+                      await this.driver!.executeScript("arguments[0].scrollIntoView({block: 'center'});", dropdown);
+                      await dropdown.click();
+                      await this.driver!.sleep(500);
+                      
+                      // Now find and click the option
+                      const optionXpaths = [
+                        `//*[contains(@role, 'option')][contains(text(), "${optionValue}")]`,
+                        `//li[contains(text(), "${optionValue}")]`,
+                        `//*[contains(@class, 'option')][contains(text(), "${optionValue}")]`,
+                        `//*[contains(text(), "${optionValue}")]`,
+                      ];
+                      
+                      for (const optXpath of optionXpaths) {
+                        try {
+                          const option = await this.driver!.findElement(By.xpath(optXpath));
+                          const isDisplayed = await option.isDisplayed().catch(() => false);
+                          if (isDisplayed) {
+                            await option.click();
+                            logs.push(`Selected "${optionValue}" from custom dropdown: ${fieldName}`);
+                            selected = true;
+                            break;
+                          }
+                        } catch { continue; }
+                      }
+                      if (selected) break;
+                    } catch { continue; }
+                  }
+                } catch { }
+              }
+              
+              // Strategy 3: Searchable dropdown/combobox (type to filter, then select)
+              if (!selected) {
+                try {
+                  const searchInputXpaths = [
+                    `//input[contains(@class, 'search') or contains(@class, 'combobox') or contains(@role, 'combobox')]`,
+                    `//label[contains(text(), "${fieldName}")]//following::input[1]`,
+                    `//*[contains(text(), "${fieldName}")]//following::input[1]`,
+                  ];
+                  
+                  for (const xpath of searchInputXpaths) {
+                    try {
+                      const searchInput = await this.driver!.findElement(By.xpath(xpath));
+                      await searchInput.click();
+                      await searchInput.clear();
+                      await searchInput.sendKeys(optionValue);
+                      await this.driver!.sleep(500);
+                      
+                      // Click the matching option from filtered list
+                      const option = await this.driver!.findElement(By.xpath(`//*[contains(text(), "${optionValue}")][@role='option' or contains(@class, 'option') or parent::li or self::li]`));
+                      await option.click();
+                      logs.push(`Selected "${optionValue}" from searchable dropdown: ${fieldName}`);
+                      selected = true;
+                      break;
+                    } catch { continue; }
+                  }
+                } catch { }
+              }
+              
+              // Strategy 4: Click label/field first to expand, then select from list
+              if (!selected) {
+                try {
+                  // Click on the field label or container
+                  const trigger = await this.driver!.findElement(By.xpath(`//*[contains(text(), "${fieldName}")]`));
+                  await trigger.click();
+                  await this.driver!.sleep(500);
+                  
+                  // Find option in expanded list
+                  const option = await this.driver!.findElement(By.xpath(`//li[contains(text(), "${optionValue}")] | //*[contains(@class, 'item') or contains(@class, 'option')][contains(text(), "${optionValue}")]`));
+                  await option.click();
+                  logs.push(`Selected "${optionValue}" after clicking: ${fieldName}`);
+                  selected = true;
+                } catch { }
+              }
+              
+              if (!selected) {
+                logs.push(`Could not select "${optionValue}" from: ${fieldName}`);
               }
             }
             break;
@@ -1408,15 +1585,136 @@ class SeleniumExecutor implements FrameworkExecutor {
             
           case "check":
             if (cmd.selector) {
+              const labelText = cmd.selector.replace(/['"]/g, '');
+              let checked = false;
+              
+              // Strategy 1: Find checkbox by label text
+              const checkboxXpaths = [
+                // Checkbox with matching name/id
+                `//input[@type="checkbox"][contains(@name, "${labelText}") or contains(@id, "${labelText}")]`,
+                // Checkbox inside label
+                `//label[contains(text(), "${labelText}")]//input[@type="checkbox"]`,
+                // Checkbox before/after label
+                `//label[contains(text(), "${labelText}")]//preceding::input[@type="checkbox"][1]`,
+                `//label[contains(text(), "${labelText}")]//following::input[@type="checkbox"][1]`,
+                // Checkbox with aria-label
+                `//input[@type="checkbox"][contains(@aria-label, "${labelText}")]`,
+                // Custom checkbox (div/span with role)
+                `//*[@role="checkbox"][contains(text(), "${labelText}") or contains(@aria-label, "${labelText}")]`,
+                `//*[contains(text(), "${labelText}")]//preceding::*[@role="checkbox"][1]`,
+                `//*[contains(text(), "${labelText}")]//following::*[@role="checkbox"][1]`,
+              ];
+              
+              for (const xpath of checkboxXpaths) {
+                try {
+                  const checkbox = await this.driver!.findElement(By.xpath(xpath));
+                  const tagName = await checkbox.getTagName();
+                  
+                  if (tagName.toLowerCase() === 'input') {
+                    const isChecked = await checkbox.isSelected();
+                    if (!isChecked) {
+                      await this.driver!.executeScript("arguments[0].scrollIntoView({block: 'center'});", checkbox);
+                      try {
+                        await checkbox.click();
+                      } catch {
+                        await this.driver!.executeScript("arguments[0].click();", checkbox);
+                      }
+                    }
+                  } else {
+                    // Custom checkbox - just click it
+                    await checkbox.click();
+                  }
+                  logs.push(`Checked: ${labelText}`);
+                  checked = true;
+                  break;
+                } catch { continue; }
+              }
+              
+              // Strategy 2: Click the label itself (which toggles the checkbox)
+              if (!checked) {
+                try {
+                  const label = await this.driver!.findElement(By.xpath(`//label[contains(text(), "${labelText}")]`));
+                  await label.click();
+                  logs.push(`Checked via label click: ${labelText}`);
+                  checked = true;
+                } catch { }
+              }
+              
+              if (!checked) {
+                logs.push(`Could not check: ${labelText}`);
+              }
+            }
+            break;
+            
+          case "uncheck":
+            if (cmd.selector) {
+              const labelText = cmd.selector.replace(/['"]/g, '');
               try {
-                const checkbox = await this.driver!.findElement(By.xpath(`//input[@type="checkbox"][contains(@name, "${cmd.selector}")] | //label[contains(text(), "${cmd.selector}")]//input[@type="checkbox"] | //label[contains(text(), "${cmd.selector}")]//preceding::input[@type="checkbox"][1] | //label[contains(text(), "${cmd.selector}")]//following::input[@type="checkbox"][1]`));
+                const checkbox = await this.driver!.findElement(By.xpath(`//input[@type="checkbox"][contains(@name, "${labelText}") or contains(@id, "${labelText}")] | //label[contains(text(), "${labelText}")]//input[@type="checkbox"] | //label[contains(text(), "${labelText}")]//following::input[@type="checkbox"][1]`));
                 const isChecked = await checkbox.isSelected();
-                if (!isChecked) {
+                if (isChecked) {
                   await checkbox.click();
                 }
-                logs.push(`Checked: ${cmd.selector}`);
+                logs.push(`Unchecked: ${labelText}`);
               } catch {
-                logs.push(`Could not check: ${cmd.selector}`);
+                logs.push(`Could not uncheck: ${labelText}`);
+              }
+            }
+            break;
+            
+          case "radio":
+            // Handle radio button selection
+            if (cmd.selector) {
+              const labelText = cmd.selector.replace(/['"]/g, '');
+              let selected = false;
+              
+              const radioXpaths = [
+                // Radio with matching value
+                `//input[@type="radio"][@value="${labelText}"]`,
+                // Radio with matching name/id containing the text
+                `//input[@type="radio"][contains(@name, "${labelText}") or contains(@id, "${labelText}")]`,
+                // Radio inside label
+                `//label[contains(text(), "${labelText}")]//input[@type="radio"]`,
+                // Radio before/after label text
+                `//label[contains(text(), "${labelText}")]//preceding::input[@type="radio"][1]`,
+                `//label[contains(text(), "${labelText}")]//following::input[@type="radio"][1]`,
+                // Radio with aria-label
+                `//input[@type="radio"][contains(@aria-label, "${labelText}")]`,
+                // Custom radio (role="radio")
+                `//*[@role="radio"][contains(text(), "${labelText}") or contains(@aria-label, "${labelText}")]`,
+                `//*[contains(text(), "${labelText}")]//ancestor::label//input[@type="radio"]`,
+              ];
+              
+              for (const xpath of radioXpaths) {
+                try {
+                  const radio = await this.driver!.findElement(By.xpath(xpath));
+                  await this.driver!.executeScript("arguments[0].scrollIntoView({block: 'center'});", radio);
+                  const isSelected = await radio.isSelected().catch(() => false);
+                  if (!isSelected) {
+                    try {
+                      await radio.click();
+                    } catch {
+                      await this.driver!.executeScript("arguments[0].click();", radio);
+                    }
+                  }
+                  logs.push(`Selected radio: ${labelText}`);
+                  selected = true;
+                  break;
+                } catch { continue; }
+              }
+              
+              // Try clicking the label
+              if (!selected) {
+                try {
+                  const label = await this.driver!.findElement(By.xpath(`//label[contains(text(), "${labelText}")]`));
+                  await label.click();
+                  logs.push(`Selected radio via label: ${labelText}`);
+                  selected = true;
+                } catch { }
+              }
+              
+              if (!selected) {
+                logs.push(`Could not select radio: ${labelText}`);
               }
             }
             break;
