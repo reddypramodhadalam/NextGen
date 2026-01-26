@@ -1805,22 +1805,40 @@ class SeleniumExecutor implements FrameworkExecutor {
             
           case "switchToNewWindow":
             try {
-              const originalWindow = await this.driver!.getWindowHandle();
-              const originalWindows = await this.driver!.getAllWindowHandles();
+              const currentWindow = await this.driver!.getWindowHandle();
+              let allWindows = await this.driver!.getAllWindowHandles();
               
-              // Wait for new window to appear
-              await this.driver!.wait(async () => {
-                const windows = await this.driver!.getAllWindowHandles();
-                return windows.length > originalWindows.length;
-              }, 10000);
-              
-              const allWindows = await this.driver!.getAllWindowHandles();
-              // Find the new window (one that wasn't in the original list)
-              for (const handle of allWindows) {
-                if (!originalWindows.includes(handle)) {
-                  await this.driver!.switchTo().window(handle);
-                  logs.push(`Switched to new window`);
-                  break;
+              // Check if popup is already open (more than 1 window)
+              if (allWindows.length > 1) {
+                // Switch to a different window (not the current one)
+                for (const handle of allWindows) {
+                  if (handle !== currentWindow) {
+                    await this.driver!.switchTo().window(handle);
+                    logs.push(`Switched to popup window (already open)`);
+                    break;
+                  }
+                }
+              } else {
+                // Wait for new window to appear (max 15 seconds with polling)
+                let found = false;
+                for (let i = 0; i < 30; i++) {
+                  await this.driver!.sleep(500);
+                  allWindows = await this.driver!.getAllWindowHandles();
+                  if (allWindows.length > 1) {
+                    for (const handle of allWindows) {
+                      if (handle !== currentWindow) {
+                        await this.driver!.switchTo().window(handle);
+                        logs.push(`Switched to new popup window`);
+                        found = true;
+                        break;
+                      }
+                    }
+                    if (found) break;
+                  }
+                }
+                if (!found) {
+                  logs.push(`No new window appeared after 15 seconds`);
+                  return false;
                 }
               }
             } catch (e: any) {
