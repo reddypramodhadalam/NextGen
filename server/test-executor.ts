@@ -1792,13 +1792,31 @@ class SeleniumExecutor implements FrameworkExecutor {
                   switched = true;
                 } catch { }
                 
-                // Try by finding iframe element
+                // Try by finding iframe element with multiple selector strategies
                 if (!switched) {
+                  // Extract actual value if selector contains attribute syntax like [@title='...'] or [title='...']
+                  let searchValue = cmd.selector;
+                  const attrMatch = cmd.selector.match(/\[@?(\w+)=['"]([^'"]+)['"]\]/);
+                  if (attrMatch) {
+                    searchValue = attrMatch[2]; // Extract the actual value
+                    logs.push(`DEBUG: Extracted search value "${searchValue}" from selector`);
+                  }
+                  
                   try {
-                    const iframe = await this.driver!.findElement(By.css(`iframe[name="${cmd.selector}"], iframe[id="${cmd.selector}"], iframe[title*="${cmd.selector}"]`));
+                    // Try CSS selector with the extracted/original value
+                    const iframe = await this.driver!.findElement(By.css(`iframe[name="${searchValue}"], iframe[id="${searchValue}"], iframe[title*="${searchValue}"]`));
                     await this.driver!.switchTo().frame(iframe);
                     switched = true;
                   } catch { }
+                  
+                  // Try XPath if CSS didn't work
+                  if (!switched) {
+                    try {
+                      const iframe = await this.driver!.findElement(By.xpath(`//iframe[@title='${searchValue}' or @name='${searchValue}' or @id='${searchValue}' or contains(@title, '${searchValue}')]`));
+                      await this.driver!.switchTo().frame(iframe);
+                      switched = true;
+                    } catch { }
+                  }
                 }
                 
                 // Try by index if selector is a number
@@ -1809,17 +1827,43 @@ class SeleniumExecutor implements FrameworkExecutor {
                   } catch { }
                 }
                 
-                // Try finding iframe by partial title match
+                // Try finding iframe by partial title/name/id match - iterate through all iframes
                 if (!switched) {
+                  // Use the extracted value for matching
+                  let matchValue = cmd.selector;
+                  const attrMatch2 = cmd.selector.match(/\[@?(\w+)=['"]([^'"]+)['"]\]/);
+                  if (attrMatch2) {
+                    matchValue = attrMatch2[2];
+                  }
+                  
                   try {
                     const iframes = await this.driver!.findElements(By.tagName("iframe"));
                     for (const iframe of iframes) {
-                      const title = await iframe.getAttribute("title");
-                      if (title && title.toLowerCase().includes(cmd.selector.toLowerCase())) {
+                      const title = await iframe.getAttribute("title") || "";
+                      const name = await iframe.getAttribute("name") || "";
+                      const id = await iframe.getAttribute("id") || "";
+                      const matchLower = matchValue.toLowerCase();
+                      
+                      if (title.toLowerCase().includes(matchLower) || 
+                          name.toLowerCase().includes(matchLower) || 
+                          id.toLowerCase().includes(matchLower)) {
                         await this.driver!.switchTo().frame(iframe);
                         switched = true;
+                        logs.push(`Matched iframe by attribute containing "${matchValue}"`);
                         break;
                       }
+                    }
+                  } catch { }
+                }
+                
+                // Last resort: try switching to the first iframe if only one exists
+                if (!switched) {
+                  try {
+                    const iframes = await this.driver!.findElements(By.tagName("iframe"));
+                    if (iframes.length === 1) {
+                      await this.driver!.switchTo().frame(iframes[0]);
+                      switched = true;
+                      logs.push(`Switched to the only iframe on page`);
                     }
                   } catch { }
                 }
