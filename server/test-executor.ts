@@ -355,6 +355,12 @@ class PlaywrightExecutor implements FrameworkExecutor {
         }
 
         stepResults.push(stepResult);
+        
+        // Stop execution on first failed step (fail-fast behavior)
+        if (!stepResult.passed) {
+          logs.push(`Stopping execution: Step ${stepIdx + 1} failed`);
+          break;
+        }
       }
 
       // Capture final screenshot if all steps passed
@@ -965,6 +971,12 @@ class PuppeteerExecutor implements FrameworkExecutor {
         }
 
         stepResults.push(stepResult);
+        
+        // Stop execution on first failed step (fail-fast behavior)
+        if (!stepResult.passed) {
+          logs.push(`Stopping execution: Step ${stepIdx + 1} failed`);
+          break;
+        }
       }
 
       // Use last step screenshot as final if all passed
@@ -1218,6 +1230,12 @@ class SeleniumExecutor implements FrameworkExecutor {
         }
 
         stepResults.push(stepResult);
+        
+        // Stop execution on first failed step (fail-fast behavior)
+        if (!stepResult.passed) {
+          logs.push(`Stopping execution: Step ${stepIdx + 1} failed`);
+          break;
+        }
       }
 
       // Use last step screenshot as final if all passed
