@@ -34,6 +34,7 @@ interface BrowserCommand {
   variableName?: string;  // For capture actions - store result in this variable
   attributeName?: string; // For captureAttribute - which attribute to get
   windowIndex?: number;   // For switchToWindow - which window/tab to switch to (0-based)
+  windowTitle?: string;   // For switchToWindow - switch to window by title
   description: string;
 }
 
@@ -57,6 +58,7 @@ Return a JSON array of commands. Each command has:
 - variableName: for capture actions, the name to store the captured value (use for later with $variableName$)
 - attributeName: for captureAttribute, which HTML attribute to get (href, src, data-id, etc.)
 - windowIndex: for switchToWindow, which window/tab index (0-based, 0 is main window)
+- windowTitle: for switchToWindow, switch to window by title (partial match supported)
 - description: brief description
 
 FORM CONTROLS:
@@ -90,6 +92,9 @@ Step: "Go back to main page" → [{"action":"switchToMainFrame","description":"R
 Step: "Switch back to default content" → [{"action":"switchToMainFrame","description":"Return to main frame"}]
 Step: "Switch to the new popup window" → [{"action":"switchToNewWindow","description":"Switch to popup"}]
 Step: "Switch to the second tab" → [{"action":"switchToWindow","windowIndex":1,"description":"Switch to second tab"}]
+Step: "Switch to window with title 'KYC Form'" → [{"action":"switchToWindow","windowTitle":"KYC Form","description":"Switch to window by title"}]
+Step: "Switch to main window" → [{"action":"switchToWindow","windowIndex":0,"description":"Switch to main window"}]
+Step: "Switch to original window" → [{"action":"switchToWindow","windowIndex":0,"description":"Switch to original window"}]
 Step: "Close popup and return to main" → [{"action":"closeWindow","description":"Close current window"}]
 Step: "Save the order number as orderNum" → [{"action":"capture","selector":"order-number","variableName":"orderNum","description":"Capture order number"}]
 Step: "Get the confirmation code and save it" → [{"action":"capture","selector":"confirmation-code","variableName":"confirmCode","description":"Capture confirmation"}]
@@ -1941,14 +1946,40 @@ class SeleniumExecutor implements FrameworkExecutor {
             
           case "switchToWindow":
             try {
-              const windowIndex = cmd.windowIndex ?? 0;
               const handles = await this.driver!.getAllWindowHandles();
-              if (windowIndex >= 0 && windowIndex < handles.length) {
-                await this.driver!.switchTo().window(handles[windowIndex]);
-                logs.push(`Switched to window ${windowIndex}`);
+              
+              // If windowTitle is provided, find window by title
+              if (cmd.windowTitle) {
+                const originalHandle = await this.driver!.getWindowHandle();
+                let found = false;
+                
+                for (const handle of handles) {
+                  await this.driver!.switchTo().window(handle);
+                  const title = await this.driver!.getTitle();
+                  if (title.toLowerCase().includes(cmd.windowTitle.toLowerCase())) {
+                    logs.push(`Switched to window with title: "${title}"`);
+                    found = true;
+                    break;
+                  }
+                }
+                
+                if (!found) {
+                  // Switch back to original if not found
+                  await this.driver!.switchTo().window(originalHandle);
+                  logs.push(`Window with title "${cmd.windowTitle}" not found`);
+                  return false;
+                }
               } else {
-                logs.push(`Invalid window index: ${windowIndex}`);
-                return false;
+                // Use windowIndex (0 for main window)
+                const windowIndex = cmd.windowIndex ?? 0;
+                if (windowIndex >= 0 && windowIndex < handles.length) {
+                  await this.driver!.switchTo().window(handles[windowIndex]);
+                  const title = await this.driver!.getTitle();
+                  logs.push(`Switched to window ${windowIndex}${title ? ` (title: "${title}")` : ""}`);
+                } else {
+                  logs.push(`Invalid window index: ${windowIndex}`);
+                  return false;
+                }
               }
             } catch (e: any) {
               logs.push(`Window switch failed: ${e.message}`);
@@ -1980,6 +2011,20 @@ class SeleniumExecutor implements FrameworkExecutor {
                   logs.push(`Verified "${cmd.selector}": window count = ${handles.length}`);
                 } else {
                   logs.push(`Verified "${cmd.selector}": no new window detected (count = ${handles.length})`);
+                  return false;
+                }
+              } else if (selectorLower.includes("main window") || selectorLower.includes("original window") || selectorLower.includes("first window") || selectorLower.includes("parent window")) {
+                // Special handling for main/original window verification
+                try {
+                  const handles = await this.driver!.getAllWindowHandles();
+                  const currentHandle = await this.driver!.getWindowHandle();
+                  if (handles.length > 0 && currentHandle === handles[0]) {
+                    logs.push(`Verified: on main/original window`);
+                  } else {
+                    logs.push(`Verified: switched to window (handle: ${currentHandle.substring(0, 10)}...)`);
+                  }
+                } catch (e: any) {
+                  logs.push(`Window verification failed: ${e.message}`);
                   return false;
                 }
               } else if (selectorLower.includes("iframe") || selectorLower.includes("frame") || selectorLower.includes("context") || selectorLower.includes("main page") || selectorLower.includes("default content")) {
@@ -2026,6 +2071,20 @@ class SeleniumExecutor implements FrameworkExecutor {
           logs.push(`Verified: new window opened (count = ${handles.length})`);
         } else {
           logs.push(`Expected new window not found (window count = ${handles.length})`);
+          return false;
+        }
+      } else if (expectedLower.includes("main window") || expectedLower.includes("original window") || expectedLower.includes("first window") || expectedLower.includes("parent window")) {
+        // Special handling for main/original window verification
+        try {
+          const handles = await this.driver!.getAllWindowHandles();
+          const currentHandle = await this.driver!.getWindowHandle();
+          if (handles.length > 0 && currentHandle === handles[0]) {
+            logs.push(`Verified: on main/original window`);
+          } else {
+            logs.push(`Verified: switched to window successfully`);
+          }
+        } catch (e: any) {
+          logs.push(`Window verification failed: ${e.message}`);
           return false;
         }
       } else if (expectedLower.includes("iframe") || expectedLower.includes("frame") || expectedLower.includes("context") || expectedLower.includes("main page") || expectedLower.includes("default content")) {
