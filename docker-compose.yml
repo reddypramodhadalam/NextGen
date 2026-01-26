@@ -1,0 +1,131 @@
+# AITAS - AI Test Automation System
+# Docker Compose configuration for self-hosted deployment
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: aitas-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aitas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aitas_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-aitas}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aitas} -d ${POSTGRES_DB:-aitas}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aitas-network
+
+  # AITAS Application
+  aitas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aitas-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database connection
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aitas}:${POSTGRES_PASSWORD:-aitas_secure_password}@postgres:5432/${POSTGRES_DB:-aitas}
+      
+      # Session management
+      SESSION_SECRET: ${SESSION_SECRET:-change_this_to_a_secure_random_string}
+      
+      # OpenAI API configuration (maps to internal variable names)
+      # The app internally uses AI_INTEGRATIONS_OPENAI_* but we map from simpler names
+      AI_INTEGRATIONS_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AI_INTEGRATIONS_OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      
+      # Alternative: Custom LLM configuration (optional - for Azure OpenAI, local LLMs, etc.)
+      # When set, these override the OpenAI settings above
+      LLM_API_URL: ${LLM_API_URL:-}
+      LLM_BEARER_TOKEN: ${LLM_BEARER_TOKEN:-}
+      
+      # Application settings
+      NODE_ENV: production
+      PORT: 5000
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    volumes:
+      # Persist uploaded files and generated reports
+      - aitas_data:/app/data
+    networks:
+      - aitas-network
+    # Required for browser automation
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+
+  # Optional: Selenium Grid for distributed testing
+  selenium-hub:
+    image: selenium/hub:4.15.0
+    container_name: aitas-selenium-hub
+    restart: unless-stopped
+    ports:
+      - "${SELENIUM_HUB_PORT:-4444}:4444"
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+    networks:
+      - aitas-network
+    profiles:
+      - selenium
+
+  # Selenium Chrome Node
+  selenium-chrome:
+    image: selenium/node-chrome:4.15.0
+    container_name: aitas-selenium-chrome
+    restart: unless-stopped
+    depends_on:
+      - selenium-hub
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+      SE_NODE_MAX_SESSIONS: 4
+    shm_size: 2gb
+    networks:
+      - aitas-network
+    profiles:
+      - selenium
+
+  # Selenium Firefox Node
+  selenium-firefox:
+    image: selenium/node-firefox:4.15.0
+    container_name: aitas-selenium-firefox
+    restart: unless-stopped
+    depends_on:
+      - selenium-hub
+    environment:
+      SE_EVENT_BUS_HOST: selenium-hub
+      SE_EVENT_BUS_PUBLISH_PORT: 4442
+      SE_EVENT_BUS_SUBSCRIBE_PORT: 4443
+      SE_NODE_MAX_SESSIONS: 4
+    shm_size: 2gb
+    networks:
+      - aitas-network
+    profiles:
+      - selenium
+
+volumes:
+  postgres_data:
+    driver: local
+  aitas_data:
+    driver: local
+
+networks:
+  aitas-network:
+    driver: bridge

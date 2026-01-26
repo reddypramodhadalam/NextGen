@@ -219,6 +219,7 @@ Pre-built integration modules in `server/replit_integrations/`:
 
 ### API Endpoints
 Key endpoints include:
+- GET /api/health - Health check endpoint for Docker/Kubernetes
 - POST /api/generate-tests - AI test case generation from requirements
 - POST /api/generate-script - AI script generation for Playwright/Cypress/Selenium/Puppeteer
 - POST /api/executions - Start test execution with target URL
@@ -227,3 +228,23 @@ Key endpoints include:
 - POST /api/settings/bulk - Bulk save platform settings
 - GET/POST /api/roles - RBAC role management
 - GET /api/cicd/config/:provider - CI/CD config generation
+
+### Self-Hosted Deployment (Latest)
+AITAS supports self-hosted deployment for testing applications behind network firewalls:
+- **Docker Support**: Multi-stage Dockerfile for production builds
+- **docker-compose.yml**: Orchestrates app, PostgreSQL, and optional Selenium Grid
+- **Health Check**: /api/health endpoint for container health probes
+- **Selenium Grid Profile**: Optional distributed testing with Chrome/Firefox nodes
+- **Configuration**: .env.example with all environment variables documented
+- **Deployment Guide**: DEPLOYMENT.md with step-by-step instructions
+
+Key deployment files:
+- Dockerfile - Multi-stage build with Playwright browsers
+- docker-compose.yml - Full stack orchestration
+- .env.example - Environment configuration template
+- DEPLOYMENT.md - Comprehensive deployment documentation
+
+LLM Configuration options:
+- OpenAI API (via OPENAI_API_KEY)
+- Azure OpenAI (via LLM_API_URL + LLM_BEARER_TOKEN)
+- Custom/Local LLM (via LLM_API_URL + LLM_BEARER_TOKEN)

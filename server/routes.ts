@@ -88,7 +88,37 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // Setup authentication before other routes
+  // Health check endpoints MUST be registered BEFORE auth middleware
+  // to ensure they are publicly accessible for container orchestration
+  
+  // Liveness probe - lightweight check that app is running (no auth, no DB)
+  app.get("/api/health", (req: Request, res: Response) => {
+    res.json({ 
+      status: "healthy", 
+      timestamp: new Date().toISOString(),
+      version: "1.0.0"
+    });
+  });
+
+  // Readiness probe - verifies app is ready to accept traffic (checks DB)
+  app.get("/api/ready", async (req: Request, res: Response) => {
+    try {
+      // Quick DB connectivity check
+      await storage.getAllTestSuites();
+      res.json({ 
+        status: "ready", 
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(503).json({ 
+        status: "not_ready", 
+        timestamp: new Date().toISOString(),
+        error: "Database connection failed"
+      });
+    }
+  });
+
+  // Setup authentication after health endpoints
   await setupAuth(app);
 
   // Test Suites
