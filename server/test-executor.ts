@@ -2003,9 +2003,14 @@ class SeleniumExecutor implements FrameworkExecutor {
           case "verify":
             if (cmd.selector) {
               const selectorLower = cmd.selector.toLowerCase();
+              const descLower = (cmd.description || "").toLowerCase();
+              
+              // Helper to check if either selector or description contains keywords
+              const matchesKeywords = (...keywords: string[]) => 
+                keywords.some(kw => selectorLower.includes(kw) || descLower.includes(kw));
               
               // Special handling for window/popup verification
-              if (selectorLower.includes("new window") || selectorLower.includes("popup") || selectorLower.includes("new tab")) {
+              if (matchesKeywords("new window", "popup", "new tab")) {
                 const handles = await this.driver!.getAllWindowHandles();
                 if (handles.length > 1) {
                   logs.push(`Verified "${cmd.selector}": window count = ${handles.length}`);
@@ -2013,7 +2018,7 @@ class SeleniumExecutor implements FrameworkExecutor {
                   logs.push(`Verified "${cmd.selector}": no new window detected (count = ${handles.length})`);
                   return false;
                 }
-              } else if (selectorLower.includes("main window") || selectorLower.includes("original window") || selectorLower.includes("first window") || selectorLower.includes("parent window")) {
+              } else if (matchesKeywords("main window", "original window", "first window", "parent window")) {
                 // Special handling for main/original window verification
                 try {
                   const handles = await this.driver!.getAllWindowHandles();
@@ -2027,7 +2032,7 @@ class SeleniumExecutor implements FrameworkExecutor {
                   logs.push(`Window verification failed: ${e.message}`);
                   return false;
                 }
-              } else if (selectorLower.includes("iframe") || selectorLower.includes("frame") || selectorLower.includes("context") || selectorLower.includes("main page") || selectorLower.includes("default content")) {
+              } else if (matchesKeywords("iframe", "frame", "context", "main page", "default content", "switched to")) {
                 // Special handling for iframe/frame context verification - just verify we can get page source (meaning we're in a valid context)
                 try {
                   const pageSource = await this.driver!.getPageSource();
