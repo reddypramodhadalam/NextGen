@@ -1911,10 +1911,24 @@ class SeleniumExecutor implements FrameworkExecutor {
             
           case "verify":
             if (cmd.selector) {
-              const pageSource = await this.driver!.getPageSource();
-              const found = pageSource.toLowerCase().includes(cmd.selector.toLowerCase());
-              logs.push(`Verified "${cmd.selector}": ${found ? "found" : "not found"}`);
-              if (!found) return false;
+              const selectorLower = cmd.selector.toLowerCase();
+              
+              // Special handling for window/popup verification
+              if (selectorLower.includes("new window") || selectorLower.includes("popup") || selectorLower.includes("new tab")) {
+                const handles = await this.driver!.getAllWindowHandles();
+                if (handles.length > 1) {
+                  logs.push(`Verified "${cmd.selector}": window count = ${handles.length}`);
+                } else {
+                  logs.push(`Verified "${cmd.selector}": no new window detected (count = ${handles.length})`);
+                  return false;
+                }
+              } else {
+                // Standard text verification
+                const pageSource = await this.driver!.getPageSource();
+                const found = pageSource.toLowerCase().includes(selectorLower);
+                logs.push(`Verified "${cmd.selector}": ${found ? "found" : "not found"}`);
+                if (!found) return false;
+              }
             }
             break;
             
@@ -1929,16 +1943,29 @@ class SeleniumExecutor implements FrameworkExecutor {
     
     // Verify expected result
     try {
-      const pageSource = await this.driver!.getPageSource();
-      // Check for common verification patterns in expected
-      const verifyMatch = expected.match(/verify\s+["']?(.+?)["']?\s*(?:is\s+)?(?:displayed|visible|present|shown)/i);
-      if (verifyMatch) {
-        const textToFind = verifyMatch[1];
-        if (!pageSource.toLowerCase().includes(textToFind.toLowerCase())) {
-          logs.push(`Expected text not found: ${textToFind}`);
+      const expectedLower = expected.toLowerCase();
+      
+      // Special handling for window/popup verification in expected result
+      if (expectedLower.includes("new window") || expectedLower.includes("popup") || expectedLower.includes("new tab")) {
+        const handles = await this.driver!.getAllWindowHandles();
+        if (handles.length > 1) {
+          logs.push(`Verified: new window opened (count = ${handles.length})`);
+        } else {
+          logs.push(`Expected new window not found (window count = ${handles.length})`);
           return false;
         }
-        logs.push(`Verified: ${textToFind}`);
+      } else {
+        const pageSource = await this.driver!.getPageSource();
+        // Check for common verification patterns in expected
+        const verifyMatch = expected.match(/verify\s+["']?(.+?)["']?\s*(?:is\s+)?(?:displayed|visible|present|shown)/i);
+        if (verifyMatch) {
+          const textToFind = verifyMatch[1];
+          if (!pageSource.toLowerCase().includes(textToFind.toLowerCase())) {
+            logs.push(`Expected text not found: ${textToFind}`);
+            return false;
+          }
+          logs.push(`Verified: ${textToFind}`);
+        }
       }
     } catch { }
     
