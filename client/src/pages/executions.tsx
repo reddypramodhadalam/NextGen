@@ -348,11 +348,11 @@ export default function Executions() {
               Run Tests
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-h-[85vh] overflow-hidden flex flex-col">
             <DialogHeader>
               <DialogTitle>Start Test Execution</DialogTitle>
             </DialogHeader>
-            <div className="space-y-4 pt-4">
+            <div className="space-y-4 pt-4 overflow-y-auto flex-1 pr-2">
               <div className="space-y-2">
                 <Label htmlFor="exec-url">Target URL</Label>
                 <div className="relative">
@@ -477,8 +477,8 @@ export default function Executions() {
                   </p>
                 )}
                 {testData.length > 0 && (
-                  <ScrollArea className="max-h-40">
-                    <div className="space-y-2">
+                  <ScrollArea className="max-h-60">
+                    <div className="space-y-2 pr-3">
                       {testData.map((param, index) => (
                         <div key={index} className="flex items-center gap-2" data-testid={`test-data-row-${index}`}>
                           <Input
