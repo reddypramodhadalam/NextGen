@@ -1276,68 +1276,306 @@ class SeleniumExecutor implements FrameworkExecutor {
   }
 
   private async executeStep(stepAction: string, expected: string, logs: string[]): Promise<boolean> {
-    const actionLower = stepAction.toLowerCase();
-
-    if (actionLower.includes("navigate") || actionLower.includes("go to")) {
-      const urlMatch = stepAction.match(/(?:navigate|go)\s+to\s+(\S+)/i);
-      if (urlMatch) {
-        await this.driver!.get(urlMatch[1]);
-        logs.push(`Navigated to ${urlMatch[1]}`);
-        return true;
-      }
-    }
-
-    if (actionLower.includes("click")) {
-      const buttonMatch = stepAction.match(/click\s+(?:on\s+)?(?:the\s+)?["']?([^"']+?)["']?\s*(?:button|link|element)?$/i);
-      if (buttonMatch) {
-        const buttonText = buttonMatch[1].trim();
-        try {
-          const xpath = `//*[contains(text(), "${buttonText}") or @value="${buttonText}" or contains(@class, "${buttonText.toLowerCase().replace(/\s+/g, "-")}")]`;
-          const element = await this.driver!.findElement(By.xpath(xpath));
-          await element.click();
-          logs.push(`Clicked: ${buttonText}`);
-          return true;
-        } catch {
-          logs.push(`Could not find element to click: ${buttonText}`);
-          return false;
+    logs.push(`Executing step: ${stepAction}`);
+    
+    // Get page context for AI
+    const pageTitle = await this.driver!.getTitle();
+    const pageUrl = await this.driver!.getCurrentUrl();
+    const pageContext = `Title: ${pageTitle}, URL: ${pageUrl}`;
+    
+    // Use AI to interpret the step (same as Playwright)
+    logs.push("AI interpreting step...");
+    const commands = await interpretStepWithAI(stepAction, expected, pageContext);
+    logs.push(`AI generated ${commands.length} command(s)`);
+    
+    for (const cmd of commands) {
+      try {
+        logs.push(`Executing: ${cmd.action} - ${cmd.description}`);
+        
+        switch (cmd.action) {
+          case "navigate":
+            logs.push(`Page loaded, checking expected: ${expected}`);
+            break;
+            
+          case "click":
+            if (cmd.selector) {
+              try {
+                // Try multiple ways to find the element
+                let element;
+                const xpaths = [
+                  `//*[contains(text(), "${cmd.selector}")]`,
+                  `//button[contains(text(), "${cmd.selector}")]`,
+                  `//a[contains(text(), "${cmd.selector}")]`,
+                  `//*[@value="${cmd.selector}"]`,
+                  `//*[contains(@aria-label, "${cmd.selector}")]`,
+                ];
+                for (const xpath of xpaths) {
+                  try {
+                    element = await this.driver!.findElement(By.xpath(xpath));
+                    break;
+                  } catch { continue; }
+                }
+                if (!element) {
+                  throw new Error(`Element not found: ${cmd.selector}`);
+                }
+                await element.click();
+                logs.push(`Clicked: ${cmd.selector}`);
+              } catch (e: any) {
+                logs.push(`Click failed: ${e.message}`);
+                return false;
+              }
+            }
+            break;
+            
+          case "type":
+            if (cmd.selector && cmd.value) {
+              const valueToType = replaceRuntimeVariables(cmd.value);
+              const selectors = [
+                `input[name*="${cmd.selector}" i]`,
+                `input[placeholder*="${cmd.selector}" i]`,
+                `input[id*="${cmd.selector}" i]`,
+                `textarea[name*="${cmd.selector}" i]`,
+                `[aria-label*="${cmd.selector}" i]`,
+              ];
+              let typed = false;
+              for (const sel of selectors) {
+                try {
+                  const elements = await this.driver!.findElements(By.css(sel));
+                  if (elements.length > 0) {
+                    await elements[0].clear();
+                    await elements[0].sendKeys(valueToType);
+                    logs.push(`Typed "${valueToType}" in ${cmd.selector}`);
+                    typed = true;
+                    break;
+                  }
+                } catch { continue; }
+              }
+              // Also try by placeholder text or label
+              if (!typed) {
+                try {
+                  const xpath = `//input[contains(@placeholder, "${cmd.selector}")] | //textarea[contains(@placeholder, "${cmd.selector}")] | //label[contains(text(), "${cmd.selector}")]//following::input[1] | //label[contains(text(), "${cmd.selector}")]//following::textarea[1]`;
+                  const element = await this.driver!.findElement(By.xpath(xpath));
+                  await element.clear();
+                  await element.sendKeys(valueToType);
+                  logs.push(`Typed "${valueToType}" in ${cmd.selector}`);
+                  typed = true;
+                } catch { }
+              }
+              if (!typed) logs.push(`Could not find field: ${cmd.selector}`);
+            }
+            break;
+            
+          case "select":
+            if (cmd.selector && cmd.value) {
+              try {
+                const selectEl = await this.driver!.findElement(By.css(`select[name*="${cmd.selector}" i], select[id*="${cmd.selector}" i]`));
+                const option = await selectEl.findElement(By.xpath(`./option[contains(text(), "${cmd.value}")]`));
+                await option.click();
+                logs.push(`Selected "${cmd.value}" from ${cmd.selector}`);
+              } catch {
+                // Try clicking dropdown then option
+                try {
+                  const dropdown = await this.driver!.findElement(By.xpath(`//*[contains(text(), "${cmd.selector}")]`));
+                  await dropdown.click();
+                  await this.driver!.sleep(300);
+                  const option = await this.driver!.findElement(By.xpath(`//*[contains(text(), "${cmd.value}")]`));
+                  await option.click();
+                  logs.push(`Selected "${cmd.value}" from ${cmd.selector}`);
+                } catch {
+                  logs.push(`Could not select from: ${cmd.selector}`);
+                }
+              }
+            }
+            break;
+            
+          case "wait":
+            if (cmd.selector) {
+              try {
+                await this.driver!.wait(until.elementLocated(By.xpath(`//*[contains(text(), "${cmd.selector}")]`)), 10000);
+                logs.push(`Waited for: ${cmd.selector}`);
+              } catch {
+                logs.push(`Wait timeout for: ${cmd.selector}`);
+              }
+            } else if (cmd.value) {
+              const seconds = parseInt(cmd.value) || 2;
+              await this.driver!.sleep(seconds * 1000);
+              logs.push(`Waited ${seconds} seconds`);
+            } else {
+              await this.driver!.sleep(2000);
+              logs.push("Waited 2 seconds");
+            }
+            break;
+            
+          case "check":
+            if (cmd.selector) {
+              try {
+                const checkbox = await this.driver!.findElement(By.xpath(`//input[@type="checkbox"][contains(@name, "${cmd.selector}")] | //label[contains(text(), "${cmd.selector}")]//input[@type="checkbox"] | //label[contains(text(), "${cmd.selector}")]//preceding::input[@type="checkbox"][1] | //label[contains(text(), "${cmd.selector}")]//following::input[@type="checkbox"][1]`));
+                const isChecked = await checkbox.isSelected();
+                if (!isChecked) {
+                  await checkbox.click();
+                }
+                logs.push(`Checked: ${cmd.selector}`);
+              } catch {
+                logs.push(`Could not check: ${cmd.selector}`);
+              }
+            }
+            break;
+            
+          case "switchToIframe":
+            if (cmd.selector) {
+              try {
+                // Try by name, id, or finding by title/content
+                let switched = false;
+                
+                // Try by name
+                try {
+                  await this.driver!.switchTo().frame(cmd.selector);
+                  switched = true;
+                } catch { }
+                
+                // Try by finding iframe element
+                if (!switched) {
+                  try {
+                    const iframe = await this.driver!.findElement(By.css(`iframe[name="${cmd.selector}"], iframe[id="${cmd.selector}"], iframe[title*="${cmd.selector}"]`));
+                    await this.driver!.switchTo().frame(iframe);
+                    switched = true;
+                  } catch { }
+                }
+                
+                // Try by index if selector is a number
+                if (!switched && !isNaN(parseInt(cmd.selector))) {
+                  try {
+                    await this.driver!.switchTo().frame(parseInt(cmd.selector));
+                    switched = true;
+                  } catch { }
+                }
+                
+                // Try finding iframe by partial title match
+                if (!switched) {
+                  try {
+                    const iframes = await this.driver!.findElements(By.tagName("iframe"));
+                    for (const iframe of iframes) {
+                      const title = await iframe.getAttribute("title");
+                      if (title && title.toLowerCase().includes(cmd.selector.toLowerCase())) {
+                        await this.driver!.switchTo().frame(iframe);
+                        switched = true;
+                        break;
+                      }
+                    }
+                  } catch { }
+                }
+                
+                if (switched) {
+                  logs.push(`Switched to iframe: ${cmd.selector}`);
+                } else {
+                  logs.push(`Could not find iframe: ${cmd.selector}`);
+                  return false;
+                }
+              } catch (e: any) {
+                logs.push(`Iframe switch failed: ${e.message}`);
+                return false;
+              }
+            }
+            break;
+            
+          case "switchToMainFrame":
+            try {
+              await this.driver!.switchTo().defaultContent();
+              logs.push("Switched to main frame/default content");
+            } catch (e: any) {
+              logs.push(`Failed to switch to main frame: ${e.message}`);
+            }
+            break;
+            
+          case "switchToNewWindow":
+            try {
+              const originalWindow = await this.driver!.getWindowHandle();
+              const originalWindows = await this.driver!.getAllWindowHandles();
+              
+              // Wait for new window to appear
+              await this.driver!.wait(async () => {
+                const windows = await this.driver!.getAllWindowHandles();
+                return windows.length > originalWindows.length;
+              }, 10000);
+              
+              const allWindows = await this.driver!.getAllWindowHandles();
+              // Find the new window (one that wasn't in the original list)
+              for (const handle of allWindows) {
+                if (!originalWindows.includes(handle)) {
+                  await this.driver!.switchTo().window(handle);
+                  logs.push(`Switched to new window`);
+                  break;
+                }
+              }
+            } catch (e: any) {
+              logs.push(`Failed to switch to new window: ${e.message}`);
+              return false;
+            }
+            break;
+            
+          case "switchToWindow":
+            try {
+              const windowIndex = cmd.windowIndex ?? 0;
+              const handles = await this.driver!.getAllWindowHandles();
+              if (windowIndex >= 0 && windowIndex < handles.length) {
+                await this.driver!.switchTo().window(handles[windowIndex]);
+                logs.push(`Switched to window ${windowIndex}`);
+              } else {
+                logs.push(`Invalid window index: ${windowIndex}`);
+                return false;
+              }
+            } catch (e: any) {
+              logs.push(`Window switch failed: ${e.message}`);
+              return false;
+            }
+            break;
+            
+          case "closeWindow":
+            try {
+              await this.driver!.close();
+              const handles = await this.driver!.getAllWindowHandles();
+              if (handles.length > 0) {
+                await this.driver!.switchTo().window(handles[0]);
+              }
+              logs.push("Closed window and switched to main");
+            } catch (e: any) {
+              logs.push(`Close window failed: ${e.message}`);
+            }
+            break;
+            
+          case "verify":
+            if (cmd.selector) {
+              const pageSource = await this.driver!.getPageSource();
+              const found = pageSource.toLowerCase().includes(cmd.selector.toLowerCase());
+              logs.push(`Verified "${cmd.selector}": ${found ? "found" : "not found"}`);
+              if (!found) return false;
+            }
+            break;
+            
+          default:
+            logs.push(`Unknown action: ${cmd.action}`);
         }
-      }
-    }
-
-    if (actionLower.includes("enter") || actionLower.includes("type") || actionLower.includes("input")) {
-      const inputMatch = stepAction.match(/(?:enter|type|input)\s+(?:a\s+)?(?:valid\s+|invalid\s+)?(\w+)/i);
-      if (inputMatch) {
-        const fieldType = inputMatch[1].toLowerCase();
-        const selectors = [
-          `input[type="${fieldType}"]`,
-          `input[name*="${fieldType}"]`,
-          `input[placeholder*="${fieldType}"]`,
-          `input[id*="${fieldType}"]`,
-        ];
-
-        for (const selector of selectors) {
-          try {
-            const element = await this.driver!.findElement(By.css(selector));
-            const testValue = fieldType === "email" ? "test@example.com" : "testpassword123";
-            await element.sendKeys(testValue);
-            logs.push(`Entered ${fieldType}: ${testValue}`);
-            return true;
-          } catch {
-            continue;
-          }
-        }
-        logs.push(`Could not find input field for: ${fieldType}`);
+      } catch (error: any) {
+        logs.push(`Command failed: ${error.message}`);
         return false;
       }
     }
-
-    if (actionLower.includes("verify") || actionLower.includes("check") || actionLower.includes("assert")) {
+    
+    // Verify expected result
+    try {
       const pageSource = await this.driver!.getPageSource();
-      logs.push(`Verification check: ${expected}`);
-      return true;
-    }
-
-    logs.push(`Generic step executed: ${stepAction} -> Expected: ${expected}`);
+      // Check for common verification patterns in expected
+      const verifyMatch = expected.match(/verify\s+["']?(.+?)["']?\s*(?:is\s+)?(?:displayed|visible|present|shown)/i);
+      if (verifyMatch) {
+        const textToFind = verifyMatch[1];
+        if (!pageSource.toLowerCase().includes(textToFind.toLowerCase())) {
+          logs.push(`Expected text not found: ${textToFind}`);
+          return false;
+        }
+        logs.push(`Verified: ${textToFind}`);
+      }
+    } catch { }
+    
     return true;
   }
 }
