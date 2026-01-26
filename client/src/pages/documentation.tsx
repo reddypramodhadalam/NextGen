@@ -68,6 +68,24 @@ const sections: Section[] = [
     ],
   },
   {
+    id: "writing-steps",
+    title: "Writing Test Steps",
+    icon: <FileText className="h-4 w-4" />,
+    subsections: [
+      { id: "step-basics", title: "Step Basics" },
+      { id: "navigation-actions", title: "Navigation" },
+      { id: "click-actions", title: "Clicks & Interactions" },
+      { id: "form-actions", title: "Form Inputs" },
+      { id: "dropdown-actions", title: "Dropdowns & Selects" },
+      { id: "checkbox-actions", title: "Checkboxes & Radio Buttons" },
+      { id: "window-actions", title: "Windows & Popups" },
+      { id: "iframe-actions", title: "Iframes" },
+      { id: "verification-actions", title: "Verifications" },
+      { id: "advanced-actions", title: "Advanced Actions" },
+      { id: "test-data-params", title: "Using Test Data" },
+    ],
+  },
+  {
     id: "script-generation",
     title: "Script Generation",
     icon: <Code2 className="h-4 w-4" />,
@@ -415,6 +433,536 @@ function SectionContent({ sectionId }: { sectionId: string }) {
   ]
 }`}
             />
+          </div>
+        </div>
+      );
+
+    case "writing-steps":
+      return (
+        <div className="space-y-8">
+          <div>
+            <h1 className="text-3xl font-bold mb-4" id="step-basics">Step Basics</h1>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              AITAS uses AI to interpret natural language test steps and convert them into browser automation commands.
+              Each test step has two parts:
+            </p>
+            <ul className="space-y-2 text-muted-foreground mb-4">
+              <li className="flex items-start gap-2">
+                <ChevronRight className="h-4 w-4 mt-1 text-primary" />
+                <span><strong>Action:</strong> What to do (e.g., "click Login button", "enter email in username field")</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <ChevronRight className="h-4 w-4 mt-1 text-primary" />
+                <span><strong>Expected Result:</strong> What should happen (e.g., "verify dashboard is displayed", "verify success message appears")</span>
+              </li>
+            </ul>
+            <div className="mt-4 p-4 rounded-lg bg-green-500/10 border border-green-500/20">
+              <div className="flex gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+                <div>
+                  <p className="font-medium text-green-500">Best Practice</p>
+                  <p className="text-sm text-muted-foreground">Write steps in simple, clear language. Include identifying information like button text, field labels, or element IDs.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="navigation-actions">Navigation</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Navigate to URLs or pages:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>Navigate to https://example.com</code></td>
+                    <td className="px-4 py-2"><code>verify "Welcome" is displayed</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>Go to the login page</code></td>
+                    <td className="px-4 py-2"><code>verify login form is visible</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>Open https://myapp.com/dashboard</code></td>
+                    <td className="px-4 py-2"><code>verify dashboard loads successfully</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="click-actions">Clicks & Interactions</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Click buttons, links, and interactive elements:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>click Login button</code></td>
+                    <td className="px-4 py-2"><code>verify user is logged in</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>click on "Submit" button</code></td>
+                    <td className="px-4 py-2"><code>verify form is submitted</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>double-click on the image</code></td>
+                    <td className="px-4 py-2"><code>verify image preview opens</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>right-click on the file</code></td>
+                    <td className="px-4 py-2"><code>verify context menu appears</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>hover over the profile icon</code></td>
+                    <td className="px-4 py-2"><code>verify dropdown menu shows</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="form-actions">Form Inputs</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Enter text into input fields:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>enter "john@test.com" in Email field</code></td>
+                    <td className="px-4 py-2"><code>verify email is entered</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>type "password123" in password field</code></td>
+                    <td className="px-4 py-2"><code>verify password field is filled</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>fill username with "testuser"</code></td>
+                    <td className="px-4 py-2"><code>verify username contains "testuser"</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>clear the search field</code></td>
+                    <td className="px-4 py-2"><code>verify search field is empty</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>press Enter key</code></td>
+                    <td className="px-4 py-2"><code>verify form submits</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 p-4 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <div className="flex gap-2">
+                <AlertCircle className="h-5 w-5 text-amber-500 shrink-0" />
+                <div>
+                  <p className="font-medium text-amber-500">Tip</p>
+                  <p className="text-sm text-muted-foreground">Use field labels or placeholder text to identify input fields (e.g., "Email", "Password", "Search").</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="dropdown-actions">Dropdowns & Selects</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Select options from dropdown menus:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>select "California" from State dropdown</code></td>
+                    <td className="px-4 py-2"><code>verify California is selected</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>choose "Monthly" in billing frequency</code></td>
+                    <td className="px-4 py-2"><code>verify Monthly is selected</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>select option "Premium" from plan dropdown</code></td>
+                    <td className="px-4 py-2"><code>verify Premium plan is selected</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="checkbox-actions">Checkboxes & Radio Buttons</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Interact with checkboxes and radio buttons:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>check the "I agree to terms" checkbox</code></td>
+                    <td className="px-4 py-2"><code>verify checkbox is checked</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>uncheck "Subscribe to newsletter"</code></td>
+                    <td className="px-4 py-2"><code>verify checkbox is unchecked</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>select "Male" radio button</code></td>
+                    <td className="px-4 py-2"><code>verify Male is selected</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>click on "Credit Card" radio option</code></td>
+                    <td className="px-4 py-2"><code>verify Credit Card is selected</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="window-actions">Windows & Popups</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Handle browser windows, popups, and tabs:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to new window</code></td>
+                    <td className="px-4 py-2"><code>verify new window is active</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to popup window</code></td>
+                    <td className="px-4 py-2"><code>verify popup content is displayed</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to window with title "Payment"</code></td>
+                    <td className="px-4 py-2"><code>verify on payment window</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to main window</code></td>
+                    <td className="px-4 py-2"><code>verify browser is on main window</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to original window</code></td>
+                    <td className="px-4 py-2"><code>verify original window is active</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>close popup and return to main</code></td>
+                    <td className="px-4 py-2"><code>verify popup is closed</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="iframe-actions">Iframes</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Work with embedded iframes:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to iframe with title "KYC Form"</code></td>
+                    <td className="px-4 py-2"><code>verify browser context is switched to iframe</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to iframe named "payment-frame"</code></td>
+                    <td className="px-4 py-2"><code>verify in payment frame context</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to the checkout iframe</code></td>
+                    <td className="px-4 py-2"><code>verify checkout iframe is active</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch to default content</code></td>
+                    <td className="px-4 py-2"><code>verify browser context is switched to main page</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>switch back to main page</code></td>
+                    <td className="px-4 py-2"><code>verify main page content is visible</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 p-4 rounded-lg bg-green-500/10 border border-green-500/20">
+              <div className="flex gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+                <div>
+                  <p className="font-medium text-green-500">Pro Tip</p>
+                  <p className="text-sm text-muted-foreground">Use iframe title, name, or ID for reliable switching. The AI will find the iframe using multiple strategies.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="verification-actions">Verifications</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Verify page content and element states:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Expected Result Examples</th>
+                    <th className="px-4 py-2 text-left border-b">What It Verifies</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>verify "Welcome" is displayed</code></td>
+                    <td className="px-4 py-2">Text "Welcome" exists on page</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>verify login form is visible</code></td>
+                    <td className="px-4 py-2">Login form element is visible</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>verify new window opens</code></td>
+                    <td className="px-4 py-2">New browser window/tab opened</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>verify browser is on main window</code></td>
+                    <td className="px-4 py-2">Browser switched to main window</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>verify context switched to iframe</code></td>
+                    <td className="px-4 py-2">Browser is in iframe context</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>verify form submitted successfully</code></td>
+                    <td className="px-4 py-2">Success message or redirect</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="advanced-actions">Advanced Actions</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Additional advanced interactions:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>scroll to bottom of page</code></td>
+                    <td className="px-4 py-2"><code>verify footer is visible</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>scroll to top</code></td>
+                    <td className="px-4 py-2"><code>verify header is visible</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>wait 3 seconds</code></td>
+                    <td className="px-4 py-2"><code>verify page is loaded</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>drag item to cart</code></td>
+                    <td className="px-4 py-2"><code>verify item added to cart</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>focus on the search field</code></td>
+                    <td className="px-4 py-2"><code>verify search field is focused</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>accept the dialog</code></td>
+                    <td className="px-4 py-2"><code>verify dialog is closed</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>dismiss the alert</code></td>
+                    <td className="px-4 py-2"><code>verify alert is dismissed</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4" id="test-data-params">Using Test Data Parameters</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Use placeholders in test steps for dynamic data:
+            </p>
+            <CodeBlock
+              language="text"
+              code={`Action: enter {{username}} in email field
+Expected: verify email is entered
+
+Action: type {{password}} in password field
+Expected: verify password is filled
+
+Action: navigate to {{baseUrl}}/login
+Expected: verify login page loads`}
+            />
+            <p className="text-muted-foreground leading-relaxed mt-4 mb-4">
+              When starting execution, provide values for each placeholder:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">Key</th>
+                    <th className="px-4 py-2 text-left border-b">Value</th>
+                    <th className="px-4 py-2 text-left border-b">Type</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>username</code></td>
+                    <td className="px-4 py-2">john@example.com</td>
+                    <td className="px-4 py-2">Email</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>password</code></td>
+                    <td className="px-4 py-2">MySecurePass123</td>
+                    <td className="px-4 py-2">Password</td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2"><code>baseUrl</code></td>
+                    <td className="px-4 py-2">https://staging.myapp.com</td>
+                    <td className="px-4 py-2">URL</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-4 p-4 rounded-lg bg-green-500/10 border border-green-500/20">
+              <div className="flex gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-500 shrink-0" />
+                <div>
+                  <p className="font-medium text-green-500">Best Practice</p>
+                  <p className="text-sm text-muted-foreground">Use test data parameters for sensitive data like passwords, environment-specific URLs, and data that changes between test runs.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-2xl font-semibold mb-4">Complete Example Test Case</h2>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              Here's a complete KYC form test case demonstrating various step types:
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border rounded-lg">
+                <thead className="bg-muted">
+                  <tr>
+                    <th className="px-4 py-2 text-left border-b">#</th>
+                    <th className="px-4 py-2 text-left border-b">Action</th>
+                    <th className="px-4 py-2 text-left border-b">Expected Result</th>
+                  </tr>
+                </thead>
+                <tbody className="text-muted-foreground">
+                  <tr className="border-b">
+                    <td className="px-4 py-2">1</td>
+                    <td className="px-4 py-2"><code>Navigate to {"{{baseUrl}}"}</code></td>
+                    <td className="px-4 py-2"><code>verify "Welcome" is displayed</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">2</td>
+                    <td className="px-4 py-2"><code>click Continue button</code></td>
+                    <td className="px-4 py-2"><code>verify new window opens</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">3</td>
+                    <td className="px-4 py-2"><code>switch to new window</code></td>
+                    <td className="px-4 py-2"><code>verify browser switched to new window</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">4</td>
+                    <td className="px-4 py-2"><code>switch to iframe with title "KYC Form"</code></td>
+                    <td className="px-4 py-2"><code>verify context is switched to iframe</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">5</td>
+                    <td className="px-4 py-2"><code>enter {"{{fullName}}"} in Full Name</code></td>
+                    <td className="px-4 py-2"><code>verify name is entered</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">6</td>
+                    <td className="px-4 py-2"><code>select "Male" radio button</code></td>
+                    <td className="px-4 py-2"><code>verify Male is selected</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">7</td>
+                    <td className="px-4 py-2"><code>type {"{{email}}"} in Email Address</code></td>
+                    <td className="px-4 py-2"><code>verify email is entered</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">8</td>
+                    <td className="px-4 py-2"><code>select {"{{state}}"} in State dropdown</code></td>
+                    <td className="px-4 py-2"><code>verify state is selected</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">9</td>
+                    <td className="px-4 py-2"><code>switch to default content</code></td>
+                    <td className="px-4 py-2"><code>verify context switched to main page</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">10</td>
+                    <td className="px-4 py-2"><code>click Submit button</code></td>
+                    <td className="px-4 py-2"><code>verify form submitted successfully</code></td>
+                  </tr>
+                  <tr className="border-b">
+                    <td className="px-4 py-2">11</td>
+                    <td className="px-4 py-2"><code>switch to main window</code></td>
+                    <td className="px-4 py-2"><code>verify browser is on main window</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       );
