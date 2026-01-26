@@ -1767,6 +1767,22 @@ class SeleniumExecutor implements FrameworkExecutor {
           case "switchToIframe":
             if (cmd.selector) {
               try {
+                // Wait for page to stabilize before looking for iframes
+                await this.driver!.sleep(2000);
+                
+                // Log available iframes for debugging
+                const allIframes = await this.driver!.findElements(By.tagName("iframe"));
+                logs.push(`DEBUG: Found ${allIframes.length} iframe(s) on page`);
+                for (let i = 0; i < allIframes.length; i++) {
+                  try {
+                    const name = await allIframes[i].getAttribute("name") || "";
+                    const id = await allIframes[i].getAttribute("id") || "";
+                    const title = await allIframes[i].getAttribute("title") || "";
+                    const src = await allIframes[i].getAttribute("src") || "";
+                    logs.push(`DEBUG: iframe[${i}]: name="${name}", id="${id}", title="${title}", src="${src.substring(0, 50)}..."`);
+                  } catch { }
+                }
+                
                 // Try by name, id, or finding by title/content
                 let switched = false;
                 
