@@ -45,6 +45,8 @@ import {
   Camera,
   Video,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -110,6 +112,8 @@ export default function Executions() {
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selfHealing, setSelfHealing] = useState<boolean>(false);
   const [maxRetries, setMaxRetries] = useState<number>(2);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 10;
 
   const addTestDataParam = () => {
     setTestData([...testData, { key: "", value: "", type: "text" }]);
@@ -140,6 +144,20 @@ export default function Executions() {
   const { data: executions = [], isLoading } = useQuery<TestExecution[]>({
     queryKey: ["/api/executions"],
   });
+
+  // Sort executions by createdAt descending (latest first) and paginate
+  const sortedExecutions = [...executions].sort((a, b) => {
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA;
+  });
+  
+  const completedExecutions = sortedExecutions.filter(e => e.status !== "running" && e.status !== "pending");
+  const totalPages = Math.ceil(completedExecutions.length / itemsPerPage);
+  const paginatedExecutions = completedExecutions.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
   // Auto-detect placeholders when suite is selected
   useEffect(() => {
@@ -291,7 +309,7 @@ export default function Executions() {
   };
 
   const onlineAgents = agents.filter((a) => a.status === "online");
-  const runningExecutions = executions.filter((e) => e.status === "running");
+  const runningExecutions = sortedExecutions.filter((e) => e.status === "running" || e.status === "pending");
 
   const formatDuration = (ms: number | null) => {
     if (!ms) return "-";
@@ -650,7 +668,7 @@ export default function Executions() {
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
-              {executions.map((execution) => (
+              {paginatedExecutions.map((execution) => (
                 <div
                   key={execution.id}
                   className="flex items-center justify-between p-4 rounded-lg bg-muted/50 hover-elevate gap-4 flex-wrap"
@@ -713,6 +731,40 @@ export default function Executions() {
                 </div>
               ))}
             </div>
+            
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                <p className="text-sm text-muted-foreground">
+                  Showing {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, completedExecutions.length)} of {completedExecutions.length} executions
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    data-testid="button-prev-page"
+                  >
+                    <ChevronLeft className="h-4 w-4 mr-1" />
+                    Previous
+                  </Button>
+                  <span className="text-sm px-2">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    data-testid="button-next-page"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
