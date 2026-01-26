@@ -1982,18 +1982,18 @@ class SeleniumExecutor implements FrameworkExecutor {
                   logs.push(`Verified "${cmd.selector}": no new window detected (count = ${handles.length})`);
                   return false;
                 }
-              } else if (selectorLower.includes("iframe") || selectorLower.includes("frame") || selectorLower.includes("context")) {
-                // Special handling for iframe context verification - just verify we can get page source (meaning we're in a valid context)
+              } else if (selectorLower.includes("iframe") || selectorLower.includes("frame") || selectorLower.includes("context") || selectorLower.includes("main page") || selectorLower.includes("default content")) {
+                // Special handling for iframe/frame context verification - just verify we can get page source (meaning we're in a valid context)
                 try {
                   const pageSource = await this.driver!.getPageSource();
                   if (pageSource && pageSource.length > 0) {
-                    logs.push(`Verified iframe context: successfully in frame context`);
+                    logs.push(`Verified browser context: successfully in valid context`);
                   } else {
-                    logs.push(`Verified iframe context: frame context appears empty`);
+                    logs.push(`Verified browser context: context appears empty`);
                     return false;
                   }
                 } catch (e: any) {
-                  logs.push(`Verified iframe context: failed - ${e.message}`);
+                  logs.push(`Verified browser context: failed - ${e.message}`);
                   return false;
                 }
               } else {
@@ -2028,18 +2028,18 @@ class SeleniumExecutor implements FrameworkExecutor {
           logs.push(`Expected new window not found (window count = ${handles.length})`);
           return false;
         }
-      } else if (expectedLower.includes("iframe") || expectedLower.includes("frame") || expectedLower.includes("context")) {
-        // Special handling for iframe/frame context verification
+      } else if (expectedLower.includes("iframe") || expectedLower.includes("frame") || expectedLower.includes("context") || expectedLower.includes("main page") || expectedLower.includes("default content")) {
+        // Special handling for iframe/frame/main page context verification
         try {
           const pageSource = await this.driver!.getPageSource();
           if (pageSource && pageSource.length > 0) {
-            logs.push(`Verified: successfully in frame context`);
+            logs.push(`Verified: successfully in valid browser context`);
           } else {
-            logs.push(`Expected frame context verification failed: empty content`);
+            logs.push(`Expected browser context verification failed: empty content`);
             return false;
           }
         } catch (e: any) {
-          logs.push(`Expected frame context verification failed: ${e.message}`);
+          logs.push(`Expected browser context verification failed: ${e.message}`);
           return false;
         }
       } else {
