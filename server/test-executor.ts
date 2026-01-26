@@ -1149,6 +1149,9 @@ class SeleniumExecutor implements FrameworkExecutor {
       options.addArguments("--disable-setuid-sandbox");
       options.addArguments("--disable-dev-shm-usage");
       options.addArguments("--window-size=1280,720");
+      options.addArguments("--disable-popup-blocking");
+      options.addArguments("--disable-web-security");
+      options.addArguments("--allow-running-insecure-content");
       
       this.driver = await new Builder()
         .forBrowser("chrome")
@@ -1419,12 +1422,27 @@ class SeleniumExecutor implements FrameworkExecutor {
                 await this.driver!.executeScript("arguments[0].scrollIntoView({block: 'center'});", element);
                 await this.driver!.sleep(200);
                 
+                // Get window handles before click for popup detection
+                const handlesBefore = await this.driver!.getAllWindowHandles();
+                logs.push(`DEBUG: Window handles before click: ${handlesBefore.length}`);
+                
                 try {
                   await element.click();
                 } catch {
                   // If regular click fails, try JavaScript click
                   await this.driver!.executeScript("arguments[0].click();", element);
                 }
+                
+                // Wait for potential popup to open
+                await this.driver!.sleep(1000);
+                
+                // Check if new window opened
+                const handlesAfter = await this.driver!.getAllWindowHandles();
+                logs.push(`DEBUG: Window handles after click: ${handlesAfter.length}`);
+                if (handlesAfter.length > handlesBefore.length) {
+                  logs.push(`DEBUG: New popup window detected!`);
+                }
+                
                 logs.push(`Clicked: ${cmd.selector}`);
               } catch (e: any) {
                 logs.push(`Click failed: ${e.message}`);
