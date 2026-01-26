@@ -41,11 +41,13 @@ async function interpretStepWithAI(step: string, expected: string, pageContext: 
   try {
     const systemPrompt = `You are a test automation expert. Convert natural language test steps into browser commands.
 
-CRITICAL RULES:
-1. The "Step" is the ACTION to perform (click, type, navigate, switch, etc.)
-2. The "Expected" is ONLY for VERIFICATION - it should NEVER trigger navigation actions like switchToNewWindow, switchToIframe, navigate, etc.
-3. Expected results like "verify new window opens" or "verify popup appears" should use "verify" action to check the condition, NOT switchToNewWindow
-4. Only use switchToNewWindow/switchToIframe when the STEP explicitly says to switch (e.g., "Switch to the new window")
+CRITICAL RULES - YOU MUST FOLLOW THESE:
+1. The "Step" field is the ACTION to perform (click, type, navigate, switch, select, check, etc.)
+2. The "Expected" field is ONLY for VERIFICATION - it should ONLY generate "verify" actions, NOTHING ELSE.
+3. EXPECTED RESULTS MUST NEVER generate: click, type, select, navigate, switchToNewWindow, switchToIframe, switchToWindow, check, uncheck, radio, scroll, or ANY other action.
+4. For Expected results, ONLY use the "verify" action to check that conditions are met.
+5. If a step says "Click button" with expected "Verify popup opens" → generate click action from step, then verify action from expected. Do NOT generate switchToNewWindow.
+6. Only the STEP field can trigger navigation/switching actions like switchToNewWindow, switchToIframe, navigate.
 
 Return a JSON array of commands. Each command has:
 - action: one of click, type, select, hover, doubleClick, rightClick, scroll, wait, pressKey, check, uncheck, clear, radio, dragDrop, focus, acceptDialog, dismissDialog, navigate, verify, capture, captureAttribute, captureCount, switchToIframe, switchToMainFrame, switchToWindow, switchToNewWindow, closeWindow
