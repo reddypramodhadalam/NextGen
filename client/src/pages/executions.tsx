@@ -69,6 +69,23 @@ function extractPlaceholders(testCases: TestCase[]): string[] {
   return Array.from(placeholders);
 }
 
+// Helper to format timestamp as ddMMMyyyy HH:MM:SS
+function formatExecutionTimestamp(date: Date | string | null | undefined): string {
+  if (!date) return "Unknown";
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (isNaN(d.getTime())) return "Unknown";
+  
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const day = String(d.getDate()).padStart(2, "0");
+  const month = months[d.getMonth()];
+  const year = d.getFullYear();
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const seconds = String(d.getSeconds()).padStart(2, "0");
+  
+  return `${day}${month}${year} ${hours}:${minutes}:${seconds}`;
+}
+
 // Helper to guess input type from placeholder key name
 function guessInputType(key: string): "text" | "password" | "email" | "url" | "number" {
   const keyLower = key.toLowerCase();
@@ -570,7 +587,7 @@ export default function Executions() {
                 <div key={execution.id} className="p-4 rounded-lg bg-background border">
                   <div className="flex items-center justify-between mb-3 gap-4 flex-wrap">
                     <div>
-                      <p className="font-medium">Execution #{execution.id.slice(0, 8)}</p>
+                      <p className="font-medium">{formatExecutionTimestamp(execution.createdAt)}</p>
                       <p className="text-sm text-muted-foreground capitalize">{execution.environment}</p>
                     </div>
                     <Button
@@ -639,7 +656,7 @@ export default function Executions() {
                   <div className="flex items-center gap-4">
                     <StatusBadge status={execution.status as any} />
                     <div>
-                      <p className="font-medium">Execution #{execution.id.slice(0, 8)}</p>
+                      <p className="font-medium">{formatExecutionTimestamp(execution.createdAt)}</p>
                       <p className="text-sm text-muted-foreground capitalize">
                         {execution.framework || "playwright"} - {execution.environment} - {execution.totalTests} tests
                       </p>

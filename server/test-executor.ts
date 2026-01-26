@@ -1807,6 +1807,7 @@ class SeleniumExecutor implements FrameworkExecutor {
             try {
               const currentWindow = await this.driver!.getWindowHandle();
               let allWindows = await this.driver!.getAllWindowHandles();
+              logs.push(`DEBUG: Current windows count: ${allWindows.length}, current handle: ${currentWindow.slice(0, 10)}...`);
               
               // Check if popup is already open (more than 1 window)
               if (allWindows.length > 1) {
@@ -1814,21 +1815,25 @@ class SeleniumExecutor implements FrameworkExecutor {
                 for (const handle of allWindows) {
                   if (handle !== currentWindow) {
                     await this.driver!.switchTo().window(handle);
-                    logs.push(`Switched to popup window (already open)`);
+                    logs.push(`Switched to popup window (already open, handle: ${handle.slice(0, 10)}...)`);
                     break;
                   }
                 }
               } else {
-                // Wait for new window to appear (max 15 seconds with polling)
+                // Wait for new window to appear (max 20 seconds with polling)
+                logs.push(`DEBUG: Only 1 window, waiting for popup to appear...`);
                 let found = false;
-                for (let i = 0; i < 30; i++) {
+                for (let i = 0; i < 40; i++) {
                   await this.driver!.sleep(500);
                   allWindows = await this.driver!.getAllWindowHandles();
+                  if (i % 4 === 0) {
+                    logs.push(`DEBUG: Check ${i+1}/40 - windows count: ${allWindows.length}`);
+                  }
                   if (allWindows.length > 1) {
                     for (const handle of allWindows) {
                       if (handle !== currentWindow) {
                         await this.driver!.switchTo().window(handle);
-                        logs.push(`Switched to new popup window`);
+                        logs.push(`Switched to new popup window (handle: ${handle.slice(0, 10)}...)`);
                         found = true;
                         break;
                       }
@@ -1837,7 +1842,7 @@ class SeleniumExecutor implements FrameworkExecutor {
                   }
                 }
                 if (!found) {
-                  logs.push(`No new window appeared after 15 seconds`);
+                  logs.push(`No new window appeared after 20 seconds. Window count remained at ${allWindows.length}`);
                   return false;
                 }
               }
