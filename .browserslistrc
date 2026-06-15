@@ -1,0 +1,7 @@
+# Browserslist for autoprefixer configuration
+# This helps PostCSS know which browsers to target
+
+> 1%
+last 2 versions
+not dead
+not ie 11

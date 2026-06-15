@@ -47,6 +47,7 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  AlertTriangle,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -110,9 +111,11 @@ export default function Executions() {
   const [detectedPlaceholders, setDetectedPlaceholders] = useState<string[]>([]);
   const [viewingExecution, setViewingExecution] = useState<TestExecution | null>(null);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
-  const [selfHealing, setSelfHealing] = useState<boolean>(false);
-  const [maxRetries, setMaxRetries] = useState<number>(2);
+  const [selfHealing, setSelfHealing] = useState<boolean>(true);
+  const [maxRetries, setMaxRetries] = useState<number>(3);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [executionToDelete, setExecutionToDelete] = useState<string | null>(null);
   const itemsPerPage = 10;
 
   const addTestDataParam = () => {
@@ -225,8 +228,8 @@ export default function Executions() {
       setTargetUrl("");
       setSelectedFramework("playwright");
       setTestData([]);
-      setSelfHealing(false);
-      setMaxRetries(2);
+      setSelfHealing(true);
+      setMaxRetries(3);
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to start execution.", variant: "destructive" });
@@ -271,6 +274,21 @@ export default function Executions() {
     },
     onError: (error: any) => {
       toast({ title: "Error", description: error.message || "Failed to rerun execution.", variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (executionId: string) => {
+      await apiRequest("DELETE", `/api/executions/${executionId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
+      toast({ title: "Success", description: "Execution deleted successfully." });
+      setDeleteConfirmOpen(false);
+      setExecutionToDelete(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to delete execution.", variant: "destructive" });
     },
   });
 
@@ -324,22 +342,27 @@ export default function Executions() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          </div>
+          <p className="text-sm text-muted-foreground font-medium">Loading executions...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 animate-fade-in">
       <div className="flex items-center justify-between flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Play className="h-6 w-6 text-primary" />
-            Test Executions
-          </h1>
-          <p className="text-muted-foreground">
-            Run and monitor your automated tests
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg">
+            <Play className="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Test Executions</h1>
+            <p className="text-sm text-muted-foreground">Run and monitor your automated tests in real browsers</p>
+          </div>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
@@ -727,6 +750,22 @@ export default function Executions() {
                         Rerun
                       </Button>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setExecutionToDelete(execution.id);
+                        setDeleteConfirmOpen(true);
+                      }}
+                      disabled={deleteMutation.isPending && deleteMutation.variables === execution.id}
+                      data-testid={`button-delete-execution-${execution.id}`}
+                    >
+                      {deleteMutation.isPending && deleteMutation.variables === execution.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-destructive" />
+                      ) : (
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      )}
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -768,6 +807,49 @@ export default function Executions() {
           </CardContent>
         </Card>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Confirm Deletion
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to delete this execution record? This action cannot be undone.
+            </p>
+            <div className="bg-destructive/10 border border-destructive/30 rounded-lg p-3">
+              <p className="text-sm font-medium text-destructive">
+                This will permanently remove the execution record and all associated data (results, screenshots, videos, logs).
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteConfirmOpen(false)}
+              disabled={deleteMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (executionToDelete) {
+                  deleteMutation.mutate(executionToDelete);
+                }
+              }}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Delete Execution
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* View Execution Dialog */}
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
@@ -839,7 +921,7 @@ export default function Executions() {
               {/* Test Results */}
               <div className="flex-1 overflow-hidden">
                 <p className="text-sm font-medium mb-2">Test Results</p>
-                <ScrollArea className="h-[300px] border rounded-lg">
+                <ScrollArea className="h-[500px] border rounded-lg">
                   {executionResults.length === 0 ? (
                     <div className="p-4 text-center text-muted-foreground">
                       No test results available
@@ -877,26 +959,35 @@ export default function Executions() {
                                 Step-by-Step Screenshots ({result.stepScreenshots.length} steps)
                               </summary>
                               <div className="mt-2 space-y-3">
-                                {result.stepScreenshots.map((stepShot: any, idx: number) => (
-                                  <div key={idx} className={`border rounded-lg p-3 ${stepShot.passed ? 'border-green-500/30 bg-green-50/50 dark:bg-green-950/20' : 'border-red-500/50 bg-red-50/50 dark:bg-red-950/20'}`}>
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <Badge variant={stepShot.passed ? "default" : "destructive"} className="text-xs">
-                                        Step {stepShot.stepIndex}
-                                      </Badge>
-                                      <span className={`text-xs font-medium ${stepShot.passed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                                        {stepShot.passed ? '✓ PASS' : '✗ FAIL'}
-                                      </span>
+                                {result.stepScreenshots.map((stepShot: any, idx: number) => {
+                                  // Support both old and new field names
+                                  const isPassed = stepShot.status === "passed" || stepShot.passed === true;
+                                  const stepNum = stepShot.stepNumber || stepShot.stepIndex || (idx + 1);
+                                  const stepName = stepShot.action || stepShot.stepName || `Step ${stepNum}`;
+                                  
+                                  return (
+                                    <div key={idx} className={`border rounded-lg p-3 ${isPassed ? 'border-green-500/30 bg-green-50/50 dark:bg-green-950/20' : 'border-red-500/50 bg-red-50/50 dark:bg-red-950/20'}`}>
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <Badge variant={isPassed ? "default" : "destructive"} className="text-xs">
+                                          Step {stepNum}
+                                        </Badge>
+                                        <span className={`text-xs font-medium ${isPassed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                          {isPassed ? '✓ PASS' : '✗ FAIL'}
+                                        </span>
+                                      </div>
+                                      <p className="text-xs text-muted-foreground mb-2 truncate" title={stepName}>
+                                        {stepName}
+                                      </p>
+                                      {stepShot.screenshot && (
+                                        <img 
+                                          src={stepShot.screenshot.startsWith('data:') ? stepShot.screenshot : `data:image/png;base64,${stepShot.screenshot}`}
+                                          alt={`Step ${stepNum} screenshot`}
+                                          className="rounded border max-w-full shadow-sm"
+                                        />
+                                      )}
                                     </div>
-                                    <p className="text-xs text-muted-foreground mb-2 truncate" title={stepShot.stepName}>
-                                      {stepShot.stepName}
-                                    </p>
-                                    <img 
-                                      src={stepShot.screenshot.startsWith('data:') ? stepShot.screenshot : `data:image/png;base64,${stepShot.screenshot}`}
-                                      alt={`Step ${stepShot.stepIndex} screenshot`}
-                                      className="rounded border max-w-full shadow-sm"
-                                    />
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </details>
                           )}
@@ -941,11 +1032,11 @@ export default function Executions() {
                                 <BarChart3 className="h-4 w-4" />
                                 Performance Metrics
                               </summary>
-                              <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-3" data-testid={`metrics-grid-${result.id}`}>
-                                {result.performanceMetrics.loadTime && (
+                              <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-3" data-testid={`metrics-grid-${result.id}`}>
+                                {(result.performanceMetrics.pageLoadTime || result.performanceMetrics.loadTime) && (
                                   <div className="bg-muted p-2 rounded text-center" data-testid={`metric-loadtime-${result.id}`}>
                                     <p className="text-xs text-muted-foreground">Page Load</p>
-                                    <p className="font-bold text-lg">{result.performanceMetrics.loadTime}ms</p>
+                                    <p className="font-bold text-lg">{result.performanceMetrics.pageLoadTime || result.performanceMetrics.loadTime}ms</p>
                                   </div>
                                 )}
                                 {result.performanceMetrics.domContentLoaded && (
@@ -954,16 +1045,40 @@ export default function Executions() {
                                     <p className="font-bold text-lg">{result.performanceMetrics.domContentLoaded}ms</p>
                                   </div>
                                 )}
+                                {result.performanceMetrics.firstPaint && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-fp-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">First Paint</p>
+                                    <p className="font-bold text-lg">{result.performanceMetrics.firstPaint}ms</p>
+                                  </div>
+                                )}
                                 {result.performanceMetrics.firstContentfulPaint && (
                                   <div className="bg-muted p-2 rounded text-center" data-testid={`metric-fcp-${result.id}`}>
-                                    <p className="text-xs text-muted-foreground">First Paint</p>
+                                    <p className="text-xs text-muted-foreground">First Contentful Paint</p>
                                     <p className="font-bold text-lg">{Math.round(result.performanceMetrics.firstContentfulPaint)}ms</p>
+                                  </div>
+                                )}
+                                {result.performanceMetrics.largestContentfulPaint && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-lcp-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">Largest Contentful Paint</p>
+                                    <p className="font-bold text-lg">{Math.round(result.performanceMetrics.largestContentfulPaint)}ms</p>
                                   </div>
                                 )}
                                 {result.performanceMetrics.timeToInteractive && (
                                   <div className="bg-muted p-2 rounded text-center" data-testid={`metric-tti-${result.id}`}>
                                     <p className="text-xs text-muted-foreground">Interactive</p>
                                     <p className="font-bold text-lg">{Math.round(result.performanceMetrics.timeToInteractive)}ms</p>
+                                  </div>
+                                )}
+                                {result.performanceMetrics.memoryUsed && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-memory-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">Memory Used</p>
+                                    <p className="font-bold text-lg">{Math.round(result.performanceMetrics.memoryUsed / 1024 / 1024)}MB</p>
+                                  </div>
+                                )}
+                                {result.performanceMetrics.resourceCount && (
+                                  <div className="bg-muted p-2 rounded text-center" data-testid={`metric-resources-${result.id}`}>
+                                    <p className="text-xs text-muted-foreground">Resources</p>
+                                    <p className="font-bold text-lg">{result.performanceMetrics.resourceCount}</p>
                                   </div>
                                 )}
                               </div>

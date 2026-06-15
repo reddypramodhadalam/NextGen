@@ -18,10 +18,21 @@ import Agents from "@/pages/agents";
 import Settings from "@/pages/settings";
 import Environments from "@/pages/environments";
 import Projects from "@/pages/projects";
+import AppProfiles from "@/pages/app-profiles";
+import EnterpriseExecutions from "@/pages/enterprise-executions";
+import AIHealer from "@/pages/ai-healer";
+import PerformancePage from "@/pages/performance";
+import TestDataFactoryPage from "@/pages/test-data-factory";
+import CICDPage from "@/pages/cicd";
+import CoveragePage from "@/pages/coverage";
+import AdminPage from "@/pages/admin";
 import Landing from "@/pages/landing";
 import Login from "@/pages/login";
 import ChangePassword from "@/pages/change-password";
 import Documentation from "@/pages/documentation";
+import UploadTestCases from "@/pages/upload";
+import MultiAgentPage from "@/pages/multi-agent";
+import LocalAgentSetup from "@/pages/local-agent-setup";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedRouter() {
@@ -34,8 +45,19 @@ function AuthenticatedRouter() {
       <Route path="/executions" component={Executions} />
       <Route path="/reports" component={Reports} />
       <Route path="/agents" component={Agents} />
+      <Route path="/agents/setup" component={LocalAgentSetup} />
       <Route path="/environments" component={Environments} />
       <Route path="/projects" component={Projects} />
+      <Route path="/app-profiles" component={AppProfiles} />
+      <Route path="/enterprise" component={EnterpriseExecutions} />
+      <Route path="/healer" component={AIHealer} />
+      <Route path="/performance" component={PerformancePage} />
+      <Route path="/data-factory" component={TestDataFactoryPage} />
+      <Route path="/cicd" component={CICDPage} />
+      <Route path="/coverage" component={CoveragePage} />
+      <Route path="/admin" component={AdminPage} />
+      <Route path="/upload" component={UploadTestCases} />
+      <Route path="/multi-agent" component={MultiAgentPage} />
       <Route path="/settings" component={Settings} />
       <Route path="/docs" component={Documentation} />
       <Route component={NotFound} />
@@ -51,12 +73,21 @@ function AuthenticatedApp() {
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full">
+      <div className="flex h-screen w-full bg-background">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
-          <header className="flex items-center justify-between gap-4 px-4 py-3 border-b shrink-0">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+          <header className="flex items-center justify-between gap-4 px-4 py-2.5 border-b shrink-0 bg-background/80 backdrop-blur-sm sticky top-0 z-10">
+            <SidebarTrigger
+              data-testid="button-sidebar-toggle"
+              className="hover:bg-primary/10 hover:text-primary transition-colors"
+            />
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                <span className="h-1.5 w-1.5 rounded-full neon-dot-green" />
+                <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">System Online</span>
+              </div>
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-y-auto">
             <AuthenticatedRouter />

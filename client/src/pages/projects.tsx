@@ -286,7 +286,7 @@ export default function Projects() {
       </div>
 
       {user?.isSuperAdmin && (
-        <Card className="border-primary/20 bg-primary/5">
+        <Card colorSeed="projects-super-admin" className="border-primary/20 bg-primary/5">
           <CardContent className="py-3">
             <div className="flex items-center gap-2 text-sm">
               <Shield className="h-4 w-4 text-primary" />
@@ -300,7 +300,7 @@ export default function Projects() {
       )}
 
       {projects && projects.length === 0 ? (
-        <Card>
+        <Card colorSeed="projects-empty">
           <CardContent className="py-12">
             <div className="text-center space-y-4">
               <FolderKanban className="h-12 w-12 mx-auto text-muted-foreground" />
@@ -320,7 +320,7 @@ export default function Projects() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {projects?.map((project) => (
-            <Card key={project.id} className="hover-elevate" data-testid={`card-project-${project.id}`}>
+            <Card key={project.id} colorSeed={`project-${project.id}`} className="hover-elevate" data-testid={`card-project-${project.id}`}>
               <CardHeader className="pb-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2">

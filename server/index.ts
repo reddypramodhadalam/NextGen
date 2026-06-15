@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -13,14 +14,23 @@ declare module "http" {
 }
 
 app.use(
-  express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    },
-  }),
+  (req, res, next) => {
+    // Skip body parsing entirely for multipart file uploads — multer handles those
+    const ct = req.headers["content-type"] || "";
+    if (ct.startsWith("multipart/form-data")) return next();
+    express.json({
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })(req, res, next);
+  }
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use((req, res, next) => {
+  const ct = req.headers["content-type"] || "";
+  if (ct.startsWith("multipart/form-data")) return next();
+  express.urlencoded({ extended: false })(req, res, next);
+});
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -47,12 +57,19 @@ app.use((req, res, next) => {
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      // Only log if request took more than 100ms or is not a polling endpoint
+      const isPollingEndpoint = path === "/api/executions" || path.includes("/results");
+      const shouldLog = duration > 100 || !isPollingEndpoint;
+      
+      if (shouldLog) {
+        let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+        // Only show response body for errors or non-GET requests, truncated
+        if (capturedJsonResponse && (res.statusCode >= 400 || req.method !== "GET")) {
+          const jsonStr = JSON.stringify(capturedJsonResponse);
+          logLine += ` :: ${jsonStr.length > 200 ? jsonStr.substring(0, 200) + '...' : jsonStr}`;
+        }
+        log(logLine);
       }
-
-      log(logLine);
     }
   });
 
@@ -61,6 +78,16 @@ app.use((req, res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
+
+  // Start agent health monitor
+  const { agentHealthMonitor } = await import("./agent-health-monitor");
+  agentHealthMonitor.start();
+  log("Agent health monitor started", "agent-health");
+
+  // Start system health monitor periodic checks
+  const { healthMonitor } = await import("./health-monitor");
+  healthMonitor.startPeriodicChecks(60000);
+  log("System health monitor started", "health");
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -94,7 +121,6 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       log(`serving on port ${port}`);

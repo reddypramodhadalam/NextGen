@@ -283,7 +283,7 @@ export default function Environments() {
           {environments.map((env) => {
             const variableCount = env.variables ? Object.keys(env.variables).length : 0;
             return (
-              <Card key={env.id}>
+              <Card key={env.id} colorSeed={`environment-${env.id}`}>
                 <CardHeader className="flex flex-row items-start justify-between gap-4 pb-2">
                   <div className="flex items-center gap-3">
                     <div className={`p-2 rounded-lg ${

@@ -1,7 +1,5 @@
 import OpenAI from "openai";
-import { db } from "./db";
-import { platformSettings } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { sqliteConnection } from "./db-sqlite";
 
 type AiSettings = {
   useCustomLlm: boolean;
@@ -11,10 +9,9 @@ type AiSettings = {
 };
 
 async function getAiSettings(): Promise<AiSettings> {
-  const settings = await db
-    .select()
-    .from(platformSettings)
-    .where(eq(platformSettings.category, "ai"));
+  const settings = sqliteConnection.prepare(
+    "SELECT * FROM platform_settings WHERE category = ?"
+  ).all("ai") as any[];
 
   const result: AiSettings = {
     useCustomLlm: false,
@@ -43,7 +40,7 @@ async function callCustomLlm(
   messages: Array<{ role: string; content: string }>,
   systemPrompt?: string
 ): Promise<string> {
-  const modelId = settings.bedrockModelId;
+  const modelId = settings.bedrockModelId || "gpt-4";
   const endpoint = settings.bedrockEndpointUrl;
   const accessKey = settings.bedrockAccessKey;
 
@@ -55,24 +52,28 @@ async function callCustomLlm(
     throw new Error("Access key is required");
   }
 
-  // Build the URL - append model path if model ID is provided
-  let url: string;
-  if (modelId) {
-    url = `${endpoint.replace(/\/$/, "")}/model/${encodeURIComponent(modelId)}/invoke`;
-  } else {
-    url = endpoint;
+  // Build the URL for OpenAI-compatible chat completions endpoint
+  const url = `${endpoint.replace(/\/$/, "")}/chat/completions`;
+
+  // Build OpenAI-compatible messages format
+  const openaiMessages: Array<{ role: string; content: string }> = [];
+  
+  if (systemPrompt) {
+    openaiMessages.push({ role: "system", content: systemPrompt });
+  }
+  
+  for (const m of messages) {
+    openaiMessages.push({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    });
   }
 
-  const anthropicMessages = messages.map((m) => ({
-    role: m.role === "assistant" ? "assistant" : "user",
-    content: [{ type: "text", text: m.content }],
-  }));
-
   const requestBody = JSON.stringify({
-    anthropic_version: "bedrock-2023-05-31",
+    model: modelId,
+    messages: openaiMessages,
     max_tokens: 4096,
-    system: systemPrompt || "You are a helpful AI assistant.",
-    messages: anthropicMessages,
+    temperature: 0.7,
   });
 
   const headers: Record<string, string> = {
@@ -80,19 +81,43 @@ async function callCustomLlm(
     "Authorization": `Bearer ${accessKey}`,
   };
 
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    headers,
-    body: requestBody,
-  });
+  // 60-second timeout to prevent indefinite hangs on slow/unavailable LLMs
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: requestBody,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Bedrock API error: ${response.status} - ${errorText}`);
+    let errorText = await response.text();
+    // Sanitize error: if the remote API returned a JSON error, extract the message
+    try {
+      const errJson = JSON.parse(errorText);
+      errorText = errJson.message || errJson.error || errorText;
+    } catch {
+      // errorText is plain text — use as-is but truncate if very long
+      if (errorText.length > 300) errorText = errorText.substring(0, 300) + "...";
+    }
+    throw new Error(`LLM API error: ${response.status} - ${errorText}`);
   }
 
   const data = await response.json();
 
+  // Handle OpenAI-compatible response format
+  if (data.choices && Array.isArray(data.choices) && data.choices.length > 0) {
+    return data.choices[0]?.message?.content || "";
+  }
+
+  // Fallback for Anthropic-style response
   if (data.content && Array.isArray(data.content) && data.content.length > 0) {
     return data.content[0].text || "";
   }
@@ -112,15 +137,28 @@ export interface AiClient {
 
 class OpenAiClient implements AiClient {
   private client: OpenAI;
+  private hasApiKey: boolean;
 
   constructor() {
+    // Check all common OpenAI key env var names
+    const apiKey =
+      process.env.AI_INTEGRATIONS_OPENAI_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.OPENAI_KEY;
+
+    this.hasApiKey = !!apiKey;
     this.client = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      apiKey: apiKey || "sk-missing", // Placeholder to avoid errors in constructor
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL,
     });
   }
 
   async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
+    // If no API key, reject immediately so fallback kicks in
+    if (!this.hasApiKey) {
+      throw new Error("Missing credentials: OPENAI_API_KEY not configured");
+    }
+
     const openaiMessages: Array<{ role: "user" | "assistant" | "system"; content: string }> = [];
 
     if (systemPrompt) {
@@ -165,6 +203,7 @@ class CustomLlmClient implements AiClient {
 export async function getAiClient(): Promise<AiClient> {
   const settings = await getAiSettings();
 
+  // 1. DB-configured custom LLM (set via Settings UI)
   if (
     settings.useCustomLlm &&
     settings.bedrockEndpointUrl &&
@@ -173,6 +212,30 @@ export async function getAiClient(): Promise<AiClient> {
     return new CustomLlmClient(settings);
   }
 
+  // 2. Environment-variable custom LLM (LLM_API_URL + LLM_BEARER_TOKEN)
+  const envLlmUrl   = process.env.LLM_API_URL;
+  const envLlmToken = process.env.LLM_BEARER_TOKEN;
+  const envLlmModel = process.env.LLM_MODEL_ID || process.env.LLM_APP_NAME || process.env.LLM_APPLICATION;
+  if (envLlmUrl && envLlmToken) {
+    if (!envLlmModel) {
+      console.warn("[AI] LLM_API_URL and LLM_BEARER_TOKEN are set but LLM_MODEL_ID is missing. Add LLM_MODEL_ID=<your-app-name> to .env");
+    }
+    return new CustomLlmClient({
+      useCustomLlm:       true,
+      bedrockEndpointUrl: envLlmUrl,
+      bedrockAccessKey:   envLlmToken,
+      bedrockModelId:     envLlmModel || "gpt-4o",
+    });
+  }
+
+  // 3. Standard OpenAI key from env (OPENAI_API_KEY or AI_INTEGRATIONS_OPENAI_API_KEY)
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  
+  // If no API key is configured, log it and return a client that will timeout quickly
+  if (!apiKey) {
+    console.warn("[AI] No OPENAI_API_KEY configured. AI features will use rule-based fallback.");
+  }
+  
   return new OpenAiClient();
 }
 

@@ -21,6 +21,7 @@ import {
   RefreshCw,
   TestTube2,
   Sparkles,
+  Info,
 } from "lucide-react";
 import type { TestCase, GeneratedScript } from "@shared/schema";
 
@@ -36,6 +37,7 @@ const languages = [
   { value: "javascript", label: "JavaScript" },
   { value: "python", label: "Python" },
   { value: "java", label: "Java" },
+  { value: "csharp", label: "C#" },
 ];
 
 export default function Scripts() {
@@ -44,6 +46,7 @@ export default function Scripts() {
   const [selectedFramework, setSelectedFramework] = useState<string>("playwright");
   const [selectedLanguage, setSelectedLanguage] = useState<string>("typescript");
   const [generatedCode, setGeneratedCode] = useState<string>("");
+  const [usedFallback, setUsedFallback] = useState(false);
 
   const { data: testCases = [], isLoading: testCasesLoading } = useQuery<TestCase[]>({
     queryKey: ["/api/test-cases"],
@@ -58,18 +61,22 @@ export default function Scripts() {
       const res = await apiRequest("POST", "/api/generate-script", data);
       return res.json();
     },
-    onSuccess: (data: { code: string }) => {
+    onSuccess: (data: { code: string; generatedBy?: string }) => {
       setGeneratedCode(data.code);
+      const isFallback = data.generatedBy === "rule-based";
+      setUsedFallback(isFallback);
       queryClient.invalidateQueries({ queryKey: ["/api/scripts"] });
       toast({
-        title: "Script Generated",
-        description: "Production-ready test script has been generated.",
+        title: isFallback ? "Script Generated (Rule-Based)" : "Script Generated",
+        description: isFallback
+          ? "Generated using built-in templates. Add an AI API key in Settings for AI-powered scripts."
+          : "Production-ready test script has been generated.",
       });
     },
     onError: () => {
       toast({
         title: "Generation Failed",
-        description: "Failed to generate script. Please try again.",
+        description: "Could not generate script. Please check your connection and try again.",
         variant: "destructive",
       });
     },
@@ -93,7 +100,12 @@ export default function Scripts() {
 
   const handleDownload = () => {
     if (!generatedCode) return;
-    const ext = selectedLanguage === "typescript" ? "ts" : selectedLanguage === "javascript" ? "js" : selectedLanguage === "python" ? "py" : "java";
+    const ext =
+      selectedLanguage === "typescript" ? "ts" :
+      selectedLanguage === "javascript" ? "js" :
+      selectedLanguage === "python" ? "py" :
+      selectedLanguage === "csharp" ? "cs" :
+      "java";
     const blob = new Blob([generatedCode], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -118,7 +130,7 @@ export default function Scripts() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
+        <Card colorSeed="scripts-configuration" className="lg:col-span-1">
           <CardHeader>
             <CardTitle className="text-base">Configuration</CardTitle>
             <CardDescription>
@@ -215,7 +227,7 @@ export default function Scripts() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-2">
+        <Card colorSeed="scripts-generated-script" className="lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between gap-4">
             <div>
               <CardTitle className="text-base">Generated Script</CardTitle>
@@ -245,6 +257,15 @@ export default function Scripts() {
             )}
           </CardHeader>
           <CardContent>
+            {usedFallback && generatedCode && (
+              <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/8 px-3.5 py-2.5 text-xs text-amber-700 dark:text-amber-400">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <div>
+                  <span className="font-semibold">Rule-based script</span> — No AI API key configured.
+                  {" "}<a href="/settings" className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-300">Add one in Settings</a> for AI-powered, context-aware code generation.
+                </div>
+              </div>
+            )}
             {generatedCode ? (
               <CodeBlock
                 code={generatedCode}
@@ -271,7 +292,7 @@ export default function Scripts() {
       </div>
 
       {scripts.length > 0 && (
-        <Card>
+        <Card colorSeed="scripts-recent-scripts">
           <CardHeader>
             <CardTitle className="text-base">Recent Scripts</CardTitle>
             <CardDescription>Previously generated automation scripts</CardDescription>

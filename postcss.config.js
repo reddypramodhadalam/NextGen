@@ -3,4 +3,7 @@ export default {
     tailwindcss: {},
     autoprefixer: {},
   },
+  map: {
+    from: 'client/src/styles/globals.css',
+  },
 }

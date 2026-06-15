@@ -68,7 +68,7 @@ export default function ChangePassword() {
       </header>
 
       <main className="flex-1 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
+        <Card colorSeed="change-password-main" className="w-full max-w-md">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">Change Password</CardTitle>
             <CardDescription>

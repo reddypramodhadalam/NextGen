@@ -10,6 +10,14 @@ interface CodeBlockProps {
   showLineNumbers?: boolean;
 }
 
+const LANGUAGE_LABELS: Record<string, string> = {
+  typescript: "TypeScript",
+  javascript: "JavaScript",
+  python: "Python",
+  java: "Java",
+  csharp: "C#",
+};
+
 export function CodeBlock({ code, language = "typescript", className, showLineNumbers = true }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
@@ -20,6 +28,7 @@ export function CodeBlock({ code, language = "typescript", className, showLineNu
   };
 
   const lines = code.split("\n");
+  const displayLabel = LANGUAGE_LABELS[language] ?? language.toUpperCase();
 
   return (
     <div className={cn("relative group rounded-lg bg-muted overflow-hidden", className)}>
@@ -45,7 +54,7 @@ export function CodeBlock({ code, language = "typescript", className, showLineNu
         </Button>
       </div>
       <div className="flex items-center justify-between px-4 py-2 border-b border-border/50">
-        <span className="text-xs font-medium text-muted-foreground uppercase">{language}</span>
+        <span className="text-xs font-medium text-muted-foreground uppercase">{displayLabel}</span>
       </div>
       <div className="overflow-x-auto p-4">
         <pre className="font-mono text-sm">

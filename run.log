@@ -1,0 +1,257 @@
+
+> rest-express@1.0.0 dev
+> cross-env NODE_ENV=development tsx server/index.ts
+
+[SQLite] Connecting to database at: C:\Users\gaddamr\Downloads\AITAS\AITAS\aitas.db
+[SQLite] Database connected successfully
+[SQLite] Initializing database tables...
+[SQLite] Database tables initialized successfully
+[Scheduler] Started with 0 active schedules
+7:19:35 PM [health] Health monitor started
+7:19:37 PM [express] serving on port 5000
+
+A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+7:26:54 PM [express] GET /api/auth/user 304 in 12ms
+7:26:54 PM [express] GET /api/test-suites 304 in 2ms
+7:26:54 PM [express] GET /api/test-cases 304 in 2ms
+7:26:54 PM [express] GET /api/agents 304 in 2ms
+[Upload] Parsed 1 test cases from test2.xlsx
+7:28:37 PM [express] POST /api/upload/parse-excel 200 in 765ms :: {"testCases":[{"title":"Create Login Account For Gmail","priority":"medium","tags":[],"steps":[{"step":"Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsu...
+7:28:46 PM [express] POST /api/test-cases 201 in 16ms :: {"id":"0e7c3057-30f6-45a7-b4d5-9d0096c1e25c","suiteId":"1baef17f-a806-4a98-bfcc-84cc8445e8d5","title":"Create Login Account For Gmail","description":null,"preconditions":null,"targetUrl":null,"steps":...
+7:29:03 PM [express] POST /api/generate-script 200 in 7678ms :: {"code":"```typescript\nimport { test, expect, Page } from \"@playwright/test\";\n\ninterface LoginTestConfig {\n  url: string;\n  timeout: number;\n}\n\nconst config: LoginTestConfig = {\n  url: \"ht...
+[AIExecutor] ▶ STARTING EXECUTION: 79c8a83e-883d-4221-b510-d7548e6bcb8f
+[AIExecutor] Framework: playwright (Selenium primary, Playwright backup)
+[AIExecutor] Self-healing: true, Max retries: 3
+[AIExecutor] ℹ️  No test data provided for this execution
+
+[AIExecutor] Initializing Selenium Chrome...
+7:29:12 PM [express] POST /api/executions 201 in 1018ms :: {"id":"79c8a83e-883d-4221-b510-d7548e6bcb8f","suiteId":"1baef17f-a806-4a98-bfcc-84cc8445e8d5","agentId":null,"status":"pending","environment":"staging","targetUrl":"https://accounts.google.com/v3/sign...
+7:29:13 PM [express] GET /api/test-cases 200 in 3ms
+[AIExecutor] Selenium Chrome initialized successfully
+[AIExecutor] Sending step to AI: Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0
+[AIExecutor] Elements found: [33m9[39m
+[AIExecutor] AI response length: [33m1078[39m
+[AIExecutor] AI response preview: ```json
+{
+  "action": {
+    "type": "navigate",
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-95294
+[AIExecutor] Parsed plan: {
+  "action": {
+    "type": "navigate",
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0",
+    "description": "Navigate to Google Sign-in page with the provided URL"
+  },
+  "verification": {
+    "type": "urlContains",
+    "expectedValue": "accounts.google.com/v3/signin/identifier",
+    "description": "Verify that the Google Sign-in page has loaded successfully"
+  },
+  "confidence": 95,
+  "reasoning": "The step explicitly requires navigating to the provided URL. The navigate action is the appropriate choice to load the page. The verification checks that the URL contains the expected path to confirm the page has launched successfully. The page state already shows we're on a similar Google Sign-in page, so navigating to this specific URL should load the requested page."
+}
+[AIExecutor] Step 1 result: passed=true, error=undefined
+[AIExecutor] Step 1 screenshot status: passed
+[AIExecutor] ✓ PASSED: Create Login Account For Gmail
+[AIExecutor] 🏁 EXECUTION COMPLETE: PASSED (1 passed, 0 failed) in 13s
+7:31:37 PM [express] GET /api/app-profiles 304 in 5ms
+7:31:44 PM [express] GET /api/multi-agent/memory 304 in 4ms
+7:31:44 PM [express] GET /api/suites 304 in 3ms
+7:40:50 PM [express] GET /api/test-suites 304 in 1ms
+[Upload] Parsed 1 test cases from test2.xlsx
+7:41:03 PM [express] POST /api/upload/parse-excel 200 in 73ms :: {"testCases":[{"title":"Create Login Account For Gmail","priority":"medium","tags":[],"steps":[{"step":"Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsu...
+7:41:08 PM [express] POST /api/test-cases 201 in 7ms :: {"id":"bf731049-a256-4b8c-8080-06eeb6ab49e3","suiteId":"1baef17f-a806-4a98-bfcc-84cc8445e8d5","title":"Create Login Account For Gmail","description":null,"preconditions":null,"targetUrl":null,"steps":...
+7:41:25 PM [express] POST /api/generate-script 200 in 4265ms :: {"code":"```javascript\nimport { test, expect } from '@playwright/test';\n\ntest.describe('Gmail Account Creation', () => {\n  test('Create Login Account For Gmail', async ({ page }) => {\n    // Step...
+[AIExecutor] ▶ STARTING EXECUTION: ec211f0e-8064-47f8-80b0-960bdae3ce21
+[AIExecutor] Framework: playwright (Selenium primary, Playwright backup)
+[AIExecutor] Self-healing: true, Max retries: 3
+[AIExecutor] ℹ️  No test data provided for this execution
+
+[AIExecutor] Initializing Selenium Chrome...
+7:41:37 PM [express] POST /api/executions 201 in 578ms :: {"id":"ec211f0e-8064-47f8-80b0-960bdae3ce21","suiteId":"1baef17f-a806-4a98-bfcc-84cc8445e8d5","agentId":null,"status":"pending","environment":"staging","targetUrl":"https://accounts.google.com/v3/sign...
+7:41:37 PM [express] GET /api/agents 304 in 3ms
+7:41:37 PM [express] GET /api/test-cases 200 in 4ms
+[AIExecutor] Selenium Chrome initialized successfully
+[AIExecutor] Sending step to AI: Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0
+[AIExecutor] Elements found: [33m9[39m
+[AIExecutor] AI response length: [33m1078[39m
+[AIExecutor] AI response preview: ```json
+{
+  "action": {
+    "type": "navigate",
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-95294
+[AIExecutor] Parsed plan: {
+  "action": {
+    "type": "navigate",
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0",
+    "description": "Navigate to Google Sign In page"
+  },
+  "verification": {
+    "type": "urlContains",
+    "expectedValue": "accounts.google.com/v3/signin/identifier",
+    "description": "Verify that the Google Sign In page has loaded successfully"
+  },
+  "confidence": 95,
+  "reasoning": "The step requires navigating to a specific URL for the Google Sign In page. The navigate action is the appropriate choice. The verification confirms the URL has been reached by checking that the current URL contains the expected domain and path. Since the page is already loaded in the current PAGE STATE, this navigation action will reload/navigate to the new URL with the updated parameters."
+}
+[AIExecutor] Step 1 result: passed=true, error=undefined
+[AIExecutor] Step 1 screenshot status: passed
+[AIExecutor] ✓ PASSED: Create Login Account For Gmail
+[AIExecutor] Sending step to AI: Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0
+[AIExecutor] Elements found: [33m9[39m
+[AIExecutor] AI response length: [33m1161[39m
+[AIExecutor] AI response preview: ```json
+{
+  "action": {
+    "type": "navigate",
+    "elementXPath": null,
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F5625
+[AIExecutor] Parsed plan: {
+  "action": {
+    "type": "navigate",
+    "elementXPath": null,
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0",
+    "description": "Navigate to Google Sign In page"
+  },
+  "verification": {
+    "type": "titleContains",
+    "elementXPath": null,
+    "expectedValue": "Sign in",
+    "description": "Verify that the Google Sign In page has loaded by checking the page title contains 'Sign in'"
+  },
+  "confidence": 95,
+  "reasoning": "The step explicitly requires navigating to the provided URL. The current page state shows we're already on a Google Sign In page with the title 'Sign in - Google Accounts', but the step specifies a different URL with different parameters. The navigate action will load the new URL. The verification checks that the page title contains 'Sign in' to confirm the URL was successfully loaded and the Sign In page is displayed."
+}
+[AIExecutor] Step 1 result: passed=true, error=undefined
+[AIExecutor] Step 1 screenshot status: passed
+[AIExecutor] ✓ PASSED: Create Login Account For Gmail
+[AIExecutor] 🏁 EXECUTION COMPLETE: PASSED (2 passed, 0 failed) in 23s
+[Upload] Parsed 1 test cases from test2.xlsx
+7:43:12 PM [express] POST /api/upload/parse-excel 200 in 43ms :: {"testCases":[{"title":"Create Login Account For Gmail","priority":"medium","tags":[],"steps":[{"step":"Execute: Create Login Account For Gmail","expected":"Test completes successfully"}],"_rowIndex":...
+7:43:16 PM [express] POST /api/test-cases 201 in 5ms :: {"id":"baf7eefa-1d9b-48bb-9822-e0e445c144e6","suiteId":"1baef17f-a806-4a98-bfcc-84cc8445e8d5","title":"Create Login Account For Gmail","description":null,"preconditions":null,"targetUrl":null,"steps":...
+7:43:32 PM [express] POST /api/generate-script 200 in 6290ms :: {"code":"\n```javascript\nimport { test, expect } from '@playwright/test';\n\ntest('Create Login Account For Gmail', async ({ page }) => {\n  // Navigate to Gmail account creation page\n  await page.g...
+[AIExecutor] ▶ STARTING EXECUTION: 2ced9d15-4576-4d38-826c-f9ea15d23fcd
+[AIExecutor] Framework: playwright (Selenium primary, Playwright backup)
+[AIExecutor] Self-healing: true, Max retries: 3
+[AIExecutor] ℹ️  No test data provided for this execution
+
+[AIExecutor] Initializing Selenium Chrome...
+7:43:49 PM [express] POST /api/executions 201 in 622ms :: {"id":"2ced9d15-4576-4d38-826c-f9ea15d23fcd","suiteId":"1baef17f-a806-4a98-bfcc-84cc8445e8d5","agentId":null,"status":"pending","environment":"staging","targetUrl":"https://accounts.google.com/v3/sign...
+7:43:49 PM [express] GET /api/test-cases 200 in 4ms
+[AIExecutor] Selenium Chrome initialized successfully
+[AIExecutor] Sending step to AI: Execute: Create Login Account For Gmail
+[AIExecutor] Elements found: [33m9[39m
+[AIExecutor] AI response length: [33m1077[39m
+[AIExecutor] AI response preview: ```json
+{
+  "action": {
+    "type": "click",
+    "elementXPath": "//*[@id='yDmH0d']/c-wiz[1]/main[1]/div[3]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/button[1]",
+    "value": "",
+    "description": "C
+[AIExecutor] Parsed plan: {
+  "action": {
+    "type": "click",
+    "elementXPath": "//*[@id='yDmH0d']/c-wiz[1]/main[1]/div[3]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/button[1]",
+    "value": "",
+    "description": "Click the 'Create account' button to initiate the account creation process"
+  },
+  "verification": {
+    "type": "elementVisible",
+    "elementXPath": "//*[@id='yDmH0d']/c-wiz[1]/main[1]/div[3]/div[1]/div[2]/div[1]/div[1]/div[1]/div[1]/button[1]",
+    "expectedValue": "true",
+    "description": "Verify that the Create account button is visible and clickable on the Google Sign In page"
+  },
+  "confidence": 75,
+  "reasoning": "The step 'Create Login Account For Gmail' indicates the user wants to create a new Gmail account. On the Google Sign In page, the most appropriate action is to click the 'Create account' button which will navigate to the account creation flow. This button is clearly visible in the interactive elements list. The verification confirms the button is present and visible before clicking, ensuring the page state is correct for account creation."
+}
+[AIExecutor] Step 1 result: passed=true, error=undefined
+[AIExecutor] Step 1 screenshot status: passed
+[AIExecutor] ✓ PASSED: Create Login Account For Gmail
+[AIExecutor] Sending step to AI: Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0
+[AIExecutor] Elements found: [33m9[39m
+[AIExecutor] AI response length: [33m1410[39m
+[AIExecutor] AI response preview: ```json
+{
+  "action": {
+    "type": "navigate",
+    "elementXPath": null,
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F5625
+[AIExecutor] Parsed plan: {
+  "action": {
+    "type": "navigate",
+    "elementXPath": null,
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0",
+    "description": "Navigate to the Google Sign-in page with the provided URL"
+  },
+  "verification": {
+    "type": "urlEquals",
+    "elementXPath": null,
+    "expectedValue": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0",
+    "description": "Verify that the URL has been successfully navigated to"
+  },
+  "confidence": 95,
+  "reasoning": "This is a straightforward navigation step. The action type is 'navigate' with the exact URL provided in the step. The verification confirms the URL was loaded correctly by checking that the current URL matches the target URL. The page is already loaded based on the PAGE STATE, but this step explicitly requires navigating to this URL, so a fresh navigation is appropriate."
+}
+[AIExecutor] Step 1 result: passed=true, error=undefined
+[AIExecutor] Step 1 screenshot status: passed
+[AIExecutor] ✓ PASSED: Create Login Account For Gmail
+[AIExecutor] Sending step to AI: Step 1: Navigate URL = https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0
+[AIExecutor] Elements found: [33m9[39m
+[AIExecutor] AI response length: [33m1076[39m
+[AIExecutor] AI response preview: ```json
+{
+  "action": {
+    "type": "navigate",
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-95294
+[AIExecutor] Parsed plan: {
+  "action": {
+    "type": "navigate",
+    "value": "https://accounts.google.com/v3/signin/identifier?continue=http%3A%2F%2Fsupport.google.com%2Fmail%2Fanswer%2F56256%3Fhl%3Den-EN&dsh=S-952949858%3A1781331125598525&ec=GAZAdQ&flowEntry=AccountChooser&flowName=GlifWebSignIn&hl=en-EN&ifkv=AcDsRvz1mxDgMAcxIl0XkLKGnYfs-cWUrQA39Gw6yDwY3v_pOI3HBHZvr_CtyATipd2Sj-SyzNf0pA&pstMsg=0",
+    "description": "Navigate to Google Sign-in page with specified URL"
+  },
+  "verification": {
+    "type": "urlContains",
+    "expectedValue": "accounts.google.com/v3/signin/identifier",
+    "description": "Verify that the Google Sign-in page has loaded successfully"
+  },
+  "confidence": 95,
+  "reasoning": "The step explicitly requires navigating to a specific URL. The navigate action will load the page. The verification checks that the URL contains the expected domain and path to confirm the page launched successfully. The presence of interactive elements like the email input field and Next button in the page state confirms the page is already loaded in the current state."
+}
+[AIExecutor] Step 1 result: passed=true, error=undefined
+[AIExecutor] Step 1 screenshot status: passed
+[AIExecutor] ✓ PASSED: Create Login Account For Gmail
+[AIExecutor] 🏁 EXECUTION COMPLETE: PASSED (3 passed, 0 failed) in 31s
+7:50:02 PM [express] GET /api/suites 304 in 6ms
+7:50:02 PM [express] GET /api/multi-agent/memory 304 in 6ms
+7:50:12 PM [express] POST /api/multi-agent/capture-dom 500 in 244ms :: {"error":"browserType.launch: Executable doesn't exist at C:\\Users\\gaddamr\\AppData\\Local\\ms-playwright\\chromium_headless_shell-1223\\chrome-headless-shell-win64\\chrome-headless-shell.exe\n╔════...
+[Orchestrator] ▶ Session session_1781360536275_d7o5t8 starting
+[Orchestrator] Target: https://www.naukri.com/nlogin/login
+[Orchestrator] Steps: 3
+[Orchestrator] Launching Playwright browser...
+7:52:16 PM [express] POST /api/multi-agent/sessions 201 in 14ms :: {"sessionId":"session_1781360536275_d7o5t8","status":"started","message":"Multi-agent session started"}
+[Orchestrator] Fatal error: browserType.launch: Executable doesn't exist at C:\Users\gaddamr\AppData\Local\ms-playwright\chromium-1223\chrome-win64\chrome.exe
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     npx playwright install                                 ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+7:53:43 PM [express] POST /api/multi-agent/capture-dom 500 in 14ms :: {"error":"browserType.launch: Executable doesn't exist at C:\\Users\\gaddamr\\AppData\\Local\\ms-playwright\\chromium_headless_shell-1223\\chrome-headless-shell-win64\\chrome-headless-shell.exe\n╔════...
+7:54:45 PM [express] GET /api/schedules/frequencies 304 in 5ms
+7:54:45 PM [express] GET /api/schedules 304 in 2ms
+7:54:52 PM [express] GET /api/scripts 200 in 10ms
+7:55:07 PM [express] POST /api/generate-script 200 in 8291ms :: {"code":"\n```typescript\nimport { test, expect, Page } from \"@playwright/test\";\n\ninterface GmailTestConfig {\n  baseUrl: string;\n  timeout: number;\n}\n\nconst config: GmailTestConfig = {\n  bas...
+7:55:07 PM [express] GET /api/scripts 200 in 4ms
+7:55:29 PM [express] DELETE /api/test-suites/2ec1caa1-b402-4aef-b76b-263fe591a85a 204 in 10ms
+7:55:29 PM [express] GET /api/test-suites 200 in 3ms
+7:55:29 PM [express] GET /api/test-cases 304 in 3ms
+7:55:56 PM [express] GET /api/auth/user 304 in 5ms
+7:55:56 PM [express] GET /api/agents 304 in 5ms
+7:56:31 PM [express] GET /api/app-profiles 304 in 5ms
+11:38:15 PM [express] GET /api/auth/user 304 in 4ms
+11:38:16 PM [express] GET /api/test-cases 304 in 3ms
+11:38:16 PM [express] GET /api/scripts 304 in 4ms
+11:39:38 PM [express] GET /api/test-suites 304 in 3ms

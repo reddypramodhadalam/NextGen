@@ -205,8 +205,7 @@ Original steps: ${JSON.stringify(testCase.steps)}`;
 
       let result;
       try {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        result = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+        result = extractJsonFromResponse<{ canHeal: boolean; healedStep?: string; explanation?: string }>(content) ?? { canHeal: false };
       } catch {
         result = { canHeal: false };
       }
@@ -231,3 +230,77 @@ Original steps: ${JSON.stringify(testCase.steps)}`;
 }
 
 export const autonomousRunner = new AutonomousAgentRunner();
+
+// ============================================================================
+// ROBUST JSON EXTRACTION HELPERS
+// ============================================================================
+
+function extractJsonFromResponse<T>(response: string): T | null {
+  try {
+    // Try 1: Direct parse
+    try {
+      return JSON.parse(response) as T;
+    } catch {
+      // continue
+    }
+
+    // Try 2: Extract from markdown code block ```json ... ```
+    const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) {
+      try {
+        return JSON.parse(codeBlockMatch[1].trim()) as T;
+      } catch {
+        // continue
+      }
+    }
+
+    // Try 3: Find the outermost balanced braces
+    const jsonStr = extractBalancedJson(response);
+    if (jsonStr) {
+      return JSON.parse(jsonStr) as T;
+    }
+
+    // Try 4: Greedy regex with progressive trimming
+    const greedyMatch = response.match(/\{[\s\S]*\}/);
+    if (greedyMatch) {
+      let candidate = greedyMatch[0];
+      while (candidate.length > 2) {
+        try {
+          return JSON.parse(candidate) as T;
+        } catch {
+          const lastBrace = candidate.lastIndexOf('}');
+          if (lastBrace <= 0) break;
+          candidate = candidate.substring(0, lastBrace + 1);
+        }
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function extractBalancedJson(text: string): string | null {
+  const startIdx = text.indexOf('{');
+  if (startIdx === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = startIdx; i < text.length; i++) {
+    const char = text[i];
+    if (escape) { escape = false; continue; }
+    if (char === '\\' && inString) { escape = true; continue; }
+    if (char === '"' && !escape) { inString = !inString; continue; }
+    if (!inString) {
+      if (char === '{') depth++;
+      else if (char === '}') {
+        depth--;
+        if (depth === 0) return text.substring(startIdx, i + 1);
+      }
+    }
+  }
+  return null;
+}

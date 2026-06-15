@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -30,6 +31,11 @@ import {
   Key,
   Eye,
   EyeOff,
+  Slack,
+  Mail,
+  MessageSquare,
+  Send,
+  AlertCircle,
 } from "lucide-react";
 import type { PlatformSetting } from "@shared/schema";
 
@@ -37,9 +43,16 @@ type SettingsState = {
   notifications: {
     email: boolean;
     slack: boolean;
+    teams: boolean;
     executionComplete: boolean;
     executionFailed: boolean;
     dailyDigest: boolean;
+    notify_on_pass: boolean;
+    notify_on_fail: boolean;
+    slack_webhook_url: string;
+    teams_webhook_url: string;
+    email_recipients: string;
+    email_api_key: string;
   };
   execution: {
     defaultEnvironment: string;
@@ -67,11 +80,18 @@ type SettingsState = {
 
 const defaultSettings: SettingsState = {
   notifications: {
-    email: true,
+    email: false,
     slack: false,
+    teams: false,
     executionComplete: true,
     executionFailed: true,
     dailyDigest: false,
+    notify_on_pass: false,
+    notify_on_fail: true,
+    slack_webhook_url: "",
+    teams_webhook_url: "",
+    email_recipients: "",
+    email_api_key: "",
   },
   execution: {
     defaultEnvironment: "staging",
@@ -222,6 +242,39 @@ export default function Settings() {
     setHasChanges(true);
   };
 
+  const [testingChannel, setTestingChannel] = useState<string | null>(null);
+
+  const testNotificationMutation = useMutation({
+    mutationFn: async ({ channel, config }: { channel: string; config: Record<string, string> }) => {
+      const res = await apiRequest("POST", "/api/notifications/test", { channel, config });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setTestingChannel(null);
+      toast({
+        title: data.success ? "Test Sent!" : "Test Failed",
+        description: data.message,
+        variant: data.success ? "default" : "destructive",
+      });
+    },
+    onError: () => {
+      setTestingChannel(null);
+      toast({ title: "Error", description: "Failed to send test notification", variant: "destructive" });
+    },
+  });
+
+  const handleTestNotification = (channel: "slack" | "teams" | "email") => {
+    setTestingChannel(channel);
+    const config: Record<string, string> = {};
+    if (channel === "slack") config.webhookUrl = settings.notifications.slack_webhook_url;
+    if (channel === "teams") config.webhookUrl = settings.notifications.teams_webhook_url;
+    if (channel === "email") {
+      config.to = settings.notifications.email_recipients;
+      config.apiKey = settings.notifications.email_api_key;
+    }
+    testNotificationMutation.mutate({ channel, config });
+  };
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-6">
@@ -287,77 +340,183 @@ export default function Settings() {
               <Bell className="h-4 w-4 text-primary" />
               Notifications
             </CardTitle>
-            <CardDescription>Configure how you receive updates</CardDescription>
+            <CardDescription>Configure Slack, Teams, and Email alerts for test results</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="email-notifications">Email Notifications</Label>
-                <p className="text-sm text-muted-foreground">Receive updates via email</p>
-              </div>
-              <Switch
-                id="email-notifications"
-                checked={settings.notifications.email}
-                onCheckedChange={(v) => updateNotification("email", v)}
-                data-testid="switch-email-notifications"
-              />
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="slack-notifications">Slack Integration</Label>
-                <p className="text-sm text-muted-foreground">Send alerts to Slack channel</p>
-              </div>
-              <Switch
-                id="slack-notifications"
-                checked={settings.notifications.slack}
-                onCheckedChange={(v) => updateNotification("slack", v)}
-                data-testid="switch-slack-notifications"
-              />
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="exec-complete">Execution Complete</Label>
-                <p className="text-sm text-muted-foreground">Notify when tests finish</p>
-              </div>
-              <Switch
-                id="exec-complete"
-                checked={settings.notifications.executionComplete}
-                onCheckedChange={(v) => updateNotification("executionComplete", v)}
-                data-testid="switch-exec-complete"
-              />
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="exec-failed">Execution Failed</Label>
-                <p className="text-sm text-muted-foreground">Notify on test failures</p>
-              </div>
-              <Switch
-                id="exec-failed"
-                checked={settings.notifications.executionFailed}
-                onCheckedChange={(v) => updateNotification("executionFailed", v)}
-                data-testid="switch-exec-failed"
-              />
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <div>
-                <Label htmlFor="daily-digest">Daily Digest</Label>
-                <p className="text-sm text-muted-foreground">Daily summary report</p>
-              </div>
-              <Switch
-                id="daily-digest"
-                checked={settings.notifications.dailyDigest}
-                onCheckedChange={(v) => updateNotification("dailyDigest", v)}
-                data-testid="switch-daily-digest"
-              />
-            </div>
+          <CardContent>
+            <Tabs defaultValue="slack">
+              <TabsList className="mb-4">
+                <TabsTrigger value="slack" className="gap-1.5"><Slack className="h-3.5 w-3.5" />Slack</TabsTrigger>
+                <TabsTrigger value="teams" className="gap-1.5"><MessageSquare className="h-3.5 w-3.5" />Teams</TabsTrigger>
+                <TabsTrigger value="email" className="gap-1.5"><Mail className="h-3.5 w-3.5" />Email</TabsTrigger>
+                <TabsTrigger value="rules">Rules</TabsTrigger>
+              </TabsList>
+
+              {/* Slack */}
+              <TabsContent value="slack" className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable Slack Notifications</Label>
+                    <p className="text-xs text-muted-foreground">Send test results to a Slack channel</p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.slack}
+                    onCheckedChange={(v) => updateNotification("slack" as any, v)}
+                  />
+                </div>
+                {settings.notifications.slack && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Slack Webhook URL</Label>
+                      <Input
+                        placeholder="https://hooks.slack.com/services/T.../B.../..."
+                        value={settings.notifications.slack_webhook_url}
+                        onChange={(e) => updateNotification("slack_webhook_url" as any, e.target.value as any)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Create an Incoming Webhook in your Slack workspace settings.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-2"
+                      disabled={!settings.notifications.slack_webhook_url || testingChannel === "slack"}
+                      onClick={() => handleTestNotification("slack")}
+                    >
+                      {testingChannel === "slack" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      Send Test Message
+                    </Button>
+                  </>
+                )}
+              </TabsContent>
+
+              {/* Teams */}
+              <TabsContent value="teams" className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable Teams Notifications</Label>
+                    <p className="text-xs text-muted-foreground">Send test results to a Teams channel</p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.teams}
+                    onCheckedChange={(v) => updateNotification("teams" as any, v)}
+                  />
+                </div>
+                {settings.notifications.teams && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Teams Webhook URL</Label>
+                      <Input
+                        placeholder="https://outlook.office.com/webhook/..."
+                        value={settings.notifications.teams_webhook_url}
+                        onChange={(e) => updateNotification("teams_webhook_url" as any, e.target.value as any)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Create an Incoming Webhook connector in your Teams channel.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-2"
+                      disabled={!settings.notifications.teams_webhook_url || testingChannel === "teams"}
+                      onClick={() => handleTestNotification("teams")}
+                    >
+                      {testingChannel === "teams" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      Send Test Message
+                    </Button>
+                  </>
+                )}
+              </TabsContent>
+
+              {/* Email */}
+              <TabsContent value="email" className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable Email Notifications</Label>
+                    <p className="text-xs text-muted-foreground">Send HTML reports via email</p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.email}
+                    onCheckedChange={(v) => updateNotification("email", v)}
+                  />
+                </div>
+                {settings.notifications.email && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Recipient Email(s)</Label>
+                      <Input
+                        placeholder="qa-team@company.com"
+                        value={settings.notifications.email_recipients}
+                        onChange={(e) => updateNotification("email_recipients" as any, e.target.value as any)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Resend API Key (optional)</Label>
+                      <Input
+                        type="password"
+                        placeholder="re_..."
+                        value={settings.notifications.email_api_key}
+                        onChange={(e) => updateNotification("email_api_key" as any, e.target.value as any)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Get a free API key at resend.com. Leave blank to log emails to console.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-2"
+                      disabled={!settings.notifications.email_recipients || testingChannel === "email"}
+                      onClick={() => handleTestNotification("email")}
+                    >
+                      {testingChannel === "email" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      Send Test Email
+                    </Button>
+                  </>
+                )}
+              </TabsContent>
+
+              {/* Rules */}
+              <TabsContent value="rules" className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Notify on Pass</Label>
+                    <p className="text-xs text-muted-foreground">Send notification when all tests pass</p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.notify_on_pass}
+                    onCheckedChange={(v) => updateNotification("notify_on_pass" as any, v)}
+                  />
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Notify on Fail</Label>
+                    <p className="text-xs text-muted-foreground">Send notification when tests fail (recommended)</p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.notify_on_fail}
+                    onCheckedChange={(v) => updateNotification("notify_on_fail" as any, v)}
+                  />
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Daily Digest</Label>
+                    <p className="text-xs text-muted-foreground">Daily summary of all test runs</p>
+                  </div>
+                  <Switch
+                    checked={settings.notifications.dailyDigest}
+                    onCheckedChange={(v) => updateNotification("dailyDigest", v)}
+                  />
+                </div>
+              </TabsContent>
+            </Tabs>
           </CardContent>
         </Card>
 
-        <Card>
+        <Card colorSeed="settings-execution">
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Clock className="h-4 w-4 text-primary" />
@@ -458,7 +617,7 @@ export default function Settings() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card colorSeed="settings-reporting">
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Database className="h-4 w-4 text-primary" />
@@ -537,7 +696,7 @@ export default function Settings() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-2">
+        <Card className="lg:col-span-2" colorSeed="settings-ai">
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Brain className="h-4 w-4 text-primary" />
@@ -633,7 +792,7 @@ export default function Settings() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card colorSeed="settings-security">
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Shield className="h-4 w-4 text-primary" />

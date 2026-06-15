@@ -443,7 +443,7 @@ export default function Agents() {
         </div>
       )}
 
-      <Card className="bg-gradient-to-r from-primary/10 via-accent/10 to-primary/10 border-primary/20">
+      <Card colorSeed="agents-local-setup" className="bg-gradient-to-r from-primary/10 via-accent/10 to-primary/10 border-primary/20">
         <CardContent className="p-6">
           <div className="flex items-center gap-4 flex-wrap">
             <div className="h-12 w-12 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
@@ -489,7 +489,7 @@ function AgentCard({
   const isRunning = agent.status === "running" || agent.status === "online";
 
   return (
-    <Card className="hover-elevate">
+    <Card colorSeed={`agent-card-${agent.id}`} className="hover-elevate">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="flex items-center gap-3">
