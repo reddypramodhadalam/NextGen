@@ -1959,6 +1959,7 @@ export async function registerRoutes(
   });
 
   // Generate full compliance report (JSON format for PDF generation)
+  app.post("/api/compliance/report", async (req: Request, res: Response) => {
     try {
       const { dateRange, environment } = req.body;
       const user = (req as any).user;
