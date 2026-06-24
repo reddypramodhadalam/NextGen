@@ -311,7 +311,7 @@ class ExecutionQueueManager extends EventEmitter {
       if (execution.status !== "QUEUED") continue;
       if (execution.group !== agent.group) continue;
       if (!this.agentManager.canAgentExecute(agent, execution)) continue;
-      if (execution.previousAgents.includes(agent.agentId)) continue; // Avoid re-assigning to failed agent
+      if (execution.previousAgents?.includes(agent.agentId)) continue; // Avoid re-assigning to failed agent
 
       return execution;
     }
@@ -779,9 +779,10 @@ export class EnterpriseAgentManager extends EventEmitter {
   }
 
   selectBestAgent(execution: QueuedExecution): EnterpriseAgent | null {
+    const previousAgents = execution.previousAgents ?? [];
     const eligibleAgents = this.getOnlineAgents(execution.group)
       .filter(a => this.canAgentExecute(a, execution))
-      .filter(a => !execution.previousAgents.includes(a.agentId));
+      .filter(a => !previousAgents.includes(a.agentId));
 
     if (eligibleAgents.length === 0) {
       return null;
