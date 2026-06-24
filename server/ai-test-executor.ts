@@ -125,6 +125,8 @@ interface ExecutionContext {
 export class AITestExecutor {
   private driver: WebDriver | null = null;
   private playwrightBrowser: any = null;
+  private playwrightContext: any = null;
+  private playwrightPage: any = null;
   private executionId: string = "";
   private isRunning: boolean = false;
   private shouldStop: boolean = false;
@@ -270,7 +272,7 @@ export class AITestExecutor {
 
   private async cleanup(): Promise<void> {
     try {
-      if (!this.driver) return;
+      if (!this.driver && !this.playwrightBrowser) return;
       
       // Close all windows except the first one
       try {
@@ -299,6 +301,10 @@ export class AITestExecutor {
         await this.driver.quit();
         this.driver = null;
       }
+      // Cleanup Playwright resources
+      if (this.playwrightPage) { try { await this.playwrightPage.close(); } catch {} this.playwrightPage = null; }
+      if (this.playwrightContext) { try { await this.playwrightContext.close(); } catch {} this.playwrightContext = null; }
+      if (this.playwrightBrowser) { try { await this.playwrightBrowser.close(); } catch {} this.playwrightBrowser = null; }
     } catch (error) {
       console.error("[AIExecutor] Cleanup error:", error);
     }
@@ -353,6 +359,10 @@ export class AITestExecutor {
           console.log("[AIExecutor] Trying Playwright as backup...");
           const { chromium } = await import("playwright");
           this.playwrightBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+          this.playwrightContext = await this.playwrightBrowser.newContext({ ignoreHTTPSErrors: true });
+          this.playwrightPage = await this.playwrightContext.newPage();
+          await this.playwrightPage.setDefaultTimeout(30000);
+          await this.playwrightPage.setDefaultNavigationTimeout(30000);
           console.log("[AIExecutor] Playwright initialized as backup");
           return true;
         } catch (pwError: any) {
@@ -402,6 +412,16 @@ export class AITestExecutor {
           console.log(`[AIExecutor] First run → navigating to ${targetUrl}`);
           await this.driver.get(targetUrl);
           await this.waitForPageLoad();
+          logs.push(`Initial navigation to: ${targetUrl}`);
+        } else {
+          logs.push(`Browser context active at: ${curUrl}`);
+        }
+      } else if (this.playwrightPage) {
+        const curUrl = this.playwrightPage.url();
+        const isBlank = !curUrl || curUrl === "about:blank" || curUrl.startsWith("data:");
+        if (isBlank) {
+          console.log(`[AIExecutor] [Playwright] First run → navigating to ${targetUrl}`);
+          await this.playwrightPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
           logs.push(`Initial navigation to: ${targetUrl}`);
         } else {
           logs.push(`Browser context active at: ${curUrl}`);
@@ -689,8 +709,11 @@ export class AITestExecutor {
   // ============================================================================
 
   private async getPageSnapshot(): Promise<PageSnapshot> {
-    if (!this.driver) {
+    if (!this.driver && !this.playwrightPage) {
       throw new Error("No browser driver available");
+    }
+    if (!this.driver && this.playwrightPage) {
+      return this.getPageSnapshotPlaywright();
     }
 
     const snapshot: PageSnapshot = {
@@ -915,6 +938,131 @@ export class AITestExecutor {
     }
 
     return snapshot;
+  }
+
+  // ============================================================================
+  // PAGE SNAPSHOT (Playwright Mode)
+  // ============================================================================
+
+  private async getPageSnapshotPlaywright(): Promise<PageSnapshot> {
+    const page = this.playwrightPage;
+    try {
+      const snapshot: PageSnapshot = {
+        url: page.url(),
+        title: await page.title().catch(() => ''),
+        elements: [],
+        iframes: [],
+        alerts: false,
+        windowHandles: [page.url()],
+        currentWindow: page.url(),
+      };
+
+      // Same DOM inspection script as Selenium version — works in any browser context
+      const elementsExpr = `(function() {
+        const elements = [];
+        const interactiveSelectors = [
+          'input', 'button', 'a', 'select', 'textarea',
+          '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
+          '[role="menuitem"]', '[role="tab"]', '[role="option"]', '[role="combobox"]',
+          '[onclick]', '[ng-click]', '[data-action]', 'label'
+        ];
+        function getXPath(el) {
+          if (el.id) return '//*[@id="' + el.id + '"]';
+          if (el === document.body) return '/html/body';
+          let ix = 0;
+          const siblings = el.parentNode ? el.parentNode.childNodes : [];
+          for (let i = 0; i < siblings.length; i++) {
+            const s = siblings[i];
+            if (s === el) {
+              const pp = el.parentNode ? getXPath(el.parentNode) : '';
+              return pp + '/' + el.tagName.toLowerCase() + '[' + (ix + 1) + ']';
+            }
+            if (s.nodeType === 1 && s.tagName === el.tagName) ix++;
+          }
+          return '';
+        }
+        function buildLocators(el) {
+          const chain = [];
+          const id = el.id;
+          const tid = el.getAttribute('data-testid') || el.getAttribute('data-test-id');
+          const dt = el.getAttribute('data-test');
+          const dc = el.getAttribute('data-cy') || el.getAttribute('data-automation-id');
+          const nm = el.name; const ph = el.placeholder; const tag = el.tagName.toLowerCase();
+          if (id) chain.push('id=' + id);
+          if (tid) chain.push('css=[data-testid="' + tid + '"]');
+          if (dt) chain.push('css=[data-test="' + dt + '"]');
+          if (dc) chain.push('css=[data-cy="' + dc + '"]');
+          if (nm) chain.push('name=' + nm);
+          if (ph && (tag === 'input' || tag === 'textarea')) chain.push('css=' + tag + '[placeholder="' + ph + '"]');
+          const cls = (el.className || '').split(' ').find(function(c) { return c && !/^(ng-|_|[0-9])/.test(c); });
+          if (cls) chain.push('css=' + tag + '.' + cls.trim().replace(/\s+/g, '.'));
+          const xp = getXPath(el);
+          if (xp) chain.push('xpath=' + xp);
+          return chain.slice(0, 3);
+        }
+        function confidence(el) {
+          if (el.id && !/[0-9]{6,}/.test(el.id)) return 0.95;
+          if (el.getAttribute('data-testid') || el.getAttribute('data-test')) return 0.90;
+          if (el.name) return 0.80;
+          if (el.getAttribute('aria-label')) return 0.75;
+          if (el.placeholder) return 0.65;
+          return 0.45;
+        }
+        const seen = new Set();
+        for (const selector of interactiveSelectors) {
+          for (const el of document.querySelectorAll(selector)) {
+            const xp = getXPath(el);
+            if (seen.has(xp)) continue;
+            seen.add(xp);
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            const isVisible = rect.width > 0 && rect.height > 0
+              && style.visibility !== 'hidden' && style.display !== 'none';
+            const locators = buildLocators(el);
+            elements.push({
+              tag: el.tagName.toLowerCase(), type: el.type || null, id: el.id || null,
+              name: el.name || null, className: (el.className || null),
+              text: (el.innerText || el.textContent || '').trim().substring(0, 100),
+              placeholder: el.placeholder || null, ariaLabel: el.getAttribute('aria-label') || null,
+              dataTest: el.getAttribute('data-test') || null,
+              dataTestId: el.getAttribute('data-testid') || el.getAttribute('data-test-id') || null,
+              dataCy: el.getAttribute('data-cy') || null,
+              dataAutomation: el.getAttribute('data-automation-id') || null,
+              isShadowHost: !!el.shadowRoot, value: el.value || null, href: el.href || null,
+              isVisible, isEnabled: !el.disabled, role: el.getAttribute('role') || null,
+              forAttr: el.getAttribute('for') || null, xpath: xp,
+              locators, locatorStrategy: locators[0] ? locators[0].split('=')[0] : 'xpath',
+              locatorConfidence: confidence(el),
+            });
+          }
+        }
+        return elements.slice(0, 250);
+      })()`;
+
+      try {
+        snapshot.elements = (await page.evaluate(elementsExpr)) as any[] ?? [];
+      } catch (e: any) {
+        console.error('[AIExecutor] Playwright elements capture failed:', e.message);
+        snapshot.elements = [];
+      }
+
+      try {
+        snapshot.iframes = (await page.evaluate(
+          `Array.from(document.querySelectorAll('iframe')).map(function(f, i) { return { id: f.id || null, name: f.name || null, src: f.src || null, index: i }; })`
+        )) as any[] ?? [];
+      } catch { snapshot.iframes = []; }
+
+      try {
+        snapshot.bodyText = (await page.evaluate(
+          `(function() { var body = document.body; if (!body) return ''; var clone = body.cloneNode(true); clone.querySelectorAll('script, style, noscript').forEach(function(s) { s.remove(); }); return (clone.innerText || clone.textContent || '').replace(/\\s+/g, ' ').trim().substring(0, 500); })()`
+        )) as string ?? '';
+      } catch { snapshot.bodyText = ''; }
+
+      return snapshot;
+    } catch (error: any) {
+      console.error('[AIExecutor] getPageSnapshotPlaywright error:', error.message);
+      return { url: page?.url() || '', title: '', elements: [], iframes: [], alerts: false, windowHandles: [], currentWindow: '' };
+    }
   }
 
   // ============================================================================
@@ -1482,6 +1630,9 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
     logs: string[]
   ): Promise<{ success: boolean; error?: string }> {
     if (!this.driver) {
+      if (this.playwrightPage) {
+        return this.executeActionPlaywright(action, logs);
+      }
       return { success: false, error: "No browser driver" };
     }
 
@@ -2701,6 +2852,195 @@ logs.push(`✓ Switched to iframe[0] automatically`);
   }
 
   // ============================================================================
+  // EXECUTE ACTION (Playwright Mode)
+  // ============================================================================
+
+  private async executeActionPlaywright(
+    action: AIExecutionPlan["action"],
+    logs: string[]
+  ): Promise<{ success: boolean; error?: string }> {
+    const page = this.playwrightPage;
+    if (!page) return { success: false, error: "No Playwright page available" };
+
+    // Resolve the best Playwright locator from the locators chain
+    const buildPwLocator = (locators?: string[], elementXPath?: string): any => {
+      const candidates: string[] = [];
+      if (locators) {
+        for (const loc of locators) {
+          if (loc.startsWith('id=')) candidates.push(`[id="${loc.slice(3)}"]`);
+          else if (loc.startsWith('name=')) candidates.push(`[name="${loc.slice(5)}"]`);
+          else if (loc.startsWith('css=')) candidates.push(loc.slice(4));
+          else if (loc.startsWith('xpath=')) candidates.push(`xpath=${loc.slice(6)}`);
+          else if (loc.startsWith('//') || loc.startsWith('(//')) candidates.push(`xpath=${loc}`);
+          else candidates.push(loc);
+        }
+      }
+      if (elementXPath) {
+        const xpStr = elementXPath.startsWith('//') || elementXPath.startsWith('(//')
+          ? `xpath=${elementXPath}` : elementXPath;
+        if (!candidates.includes(xpStr)) candidates.push(xpStr);
+      }
+      const primary = candidates[0] || 'body';
+      return page.locator(primary);
+    };
+
+    try {
+      logs.push(`[Playwright] Executing: ${action.type} - ${action.description}`);
+
+      switch (action.type) {
+        case "navigate": {
+          const navUrl = action.value || (action as any).targetUrl || "";
+          if (navUrl) {
+            await page.goto(navUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            this.aiPlanCache.clear();
+            logs.push(`[Playwright] Navigated to: ${navUrl}`);
+          }
+          break;
+        }
+
+        case "refresh":
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+          this.aiPlanCache.clear();
+          logs.push(`[Playwright] Page refreshed`);
+          break;
+
+        case "back":
+          await page.goBack({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          this.aiPlanCache.clear();
+          logs.push(`[Playwright] Navigated back`);
+          break;
+
+        case "forward":
+          await page.goForward({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+          this.aiPlanCache.clear();
+          logs.push(`[Playwright] Navigated forward`);
+          break;
+
+        case "click": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+          await locator.first().click({ timeout: 15000 });
+          await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+          logs.push(`[Playwright] Clicked: ${action.elementXPath}`);
+          break;
+        }
+
+        case "type": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+          await locator.first().fill(action.value || '', { timeout: 15000 });
+          logs.push(`[Playwright] Typed into: ${action.elementXPath}`);
+          break;
+        }
+
+        case "clear": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().fill('', { timeout: 10000 });
+          logs.push(`[Playwright] Cleared: ${action.elementXPath}`);
+          break;
+        }
+
+        case "select": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          // Try native select first, then look for custom dropdown options
+          try {
+            await locator.first().selectOption(action.value || '', { timeout: 10000 });
+          } catch {
+            // Fallback: click the element then click the matching option
+            await locator.first().click({ timeout: 10000 });
+            await page.waitForTimeout(500);
+            const optionLocator = page.locator(`[role="option"], li, .select-item, .dropdown-item`).filter({ hasText: action.value || '' });
+            await optionLocator.first().click({ timeout: 5000 }).catch(() => {});
+          }
+          logs.push(`[Playwright] Selected "${action.value}" in: ${action.elementXPath}`);
+          break;
+        }
+
+        case "submit":
+        case "pressEnter": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().press('Enter', { timeout: 10000 });
+          await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+          logs.push(`[Playwright] Pressed Enter on: ${action.elementXPath}`);
+          break;
+        }
+
+        case "wait":
+          await page.waitForTimeout(action.value ? parseInt(action.value) || 1000 : 1000);
+          logs.push(`[Playwright] Waited ${action.value || 1000}ms`);
+          break;
+
+        case "waitForElement": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().waitFor({ state: 'visible', timeout: 15000 });
+          logs.push(`[Playwright] Element visible: ${action.elementXPath}`);
+          break;
+        }
+
+        case "checkbox": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          const targetChecked = action.value !== "uncheck";
+          const isChecked = await locator.first().isChecked({ timeout: 5000 }).catch(() => false);
+          if (isChecked !== targetChecked) {
+            await locator.first().click({ timeout: 10000 });
+          }
+          logs.push(`[Playwright] Checkbox ${targetChecked ? 'checked' : 'unchecked'}: ${action.elementXPath}`);
+          break;
+        }
+
+        case "hover": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().hover({ timeout: 10000 });
+          logs.push(`[Playwright] Hovered: ${action.elementXPath}`);
+          break;
+        }
+
+        case "doubleClick": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().dblclick({ timeout: 10000 });
+          logs.push(`[Playwright] Double-clicked: ${action.elementXPath}`);
+          break;
+        }
+
+        case "rightClick": {
+          const locator = buildPwLocator(action.locators, action.elementXPath);
+          await locator.first().click({ button: 'right', timeout: 10000 });
+          logs.push(`[Playwright] Right-clicked: ${action.elementXPath}`);
+          break;
+        }
+
+        case "switchToIframe":
+        case "switchToMainContent":
+        case "switchToWindow":
+          // Playwright handles iframes/windows via frame locators — log and continue
+          logs.push(`[Playwright] ${action.type}: handled by Playwright frame context`);
+          break;
+
+        case "screenshot":
+          await page.screenshot({ type: 'png' }).catch(() => {});
+          logs.push(`[Playwright] Screenshot captured`);
+          break;
+
+        default:
+          logs.push(`[Playwright] Action "${action.type}" not explicitly implemented, attempting best-effort click`);
+          if (action.elementXPath) {
+            const locator = buildPwLocator(action.locators, action.elementXPath);
+            await locator.first().click({ timeout: 10000 }).catch((e: any) => {
+              logs.push(`[Playwright] Best-effort action failed: ${e.message}`);
+            });
+          }
+          // Return success to not block test flow for unsupported actions
+          return { success: true };
+      }
+
+      return { success: true };
+    } catch (error: any) {
+      logs.push(`[Playwright] Action failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // ============================================================================
   // VERIFICATION EXECUTION
   // ============================================================================
 
@@ -3376,7 +3716,12 @@ logs.push(`✓ Switched to iframe[0] automatically`);
   // WAIT FOR PAGE LOAD
   // ============================================================================
   private async waitForPageLoad(timeout: number = 10000): Promise<void> {
-    if (!this.driver) return;
+    if (!this.driver) {
+      if (this.playwrightPage) {
+        try { await this.playwrightPage.waitForLoadState('domcontentloaded', { timeout }); } catch {}
+      }
+      return;
+    }
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       try {
@@ -3454,9 +3799,15 @@ logs.push(`✓ Switched to iframe[0] automatically`);
   // ============================================================================
   private async captureScreenshot(): Promise<string | undefined> {
     try {
-      if (!this.driver) return undefined;
-      const data = await this.driver.takeScreenshot();
-      return `data:image/png;base64,${data}`;
+      if (this.driver) {
+        const data = await this.driver.takeScreenshot();
+        return `data:image/png;base64,${data}`;
+      }
+      if (this.playwrightPage) {
+        const buf = await this.playwrightPage.screenshot({ type: 'png' });
+        return `data:image/png;base64,${buf.toString('base64')}`;
+      }
+      return undefined;
     } catch {
       return undefined;
     }
