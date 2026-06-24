@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useState, useCallback, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,6 +26,7 @@ import {
   Zap, FileCode, GitMerge, ChevronDown, Info, Brain, Shield, AlertTriangle,
   Target, BarChart3, Bot, Settings2, ChevronRight, Code2, Users, Cpu,
   Network, Activity, CheckCircle2, XCircle, Clock, TrendingUp,
+  Upload, FileUp, RefreshCw, X, Wand2, BookOpen, FileSearch,
 } from "lucide-react";
 import type { TestSuite } from "@shared/schema";
 
@@ -44,14 +45,26 @@ interface GeneratedTestCase {
 interface CoverageSummary {
   totalTestCases: number;
   byType: Record<string, number>;
-  coverageAreas: string[];
-  gapAreas: string[];
+  coverageAreas?: string[];
+  gapAreas?: string[];
+  // JDE-specific coverage properties
+  objectsCovered?: string[];
+  tablesCovered?: string[];
+  modulesCovered?: string[];
 }
 interface RiskArea {
   area: string; severity: string; mitigation: string;
 }
 interface AutomationCandidate {
   testCaseId: string; reason: string; suggestedFramework: string;
+}
+interface SpecParseResult {
+  filename: string; size: number; pages: number; truncated: boolean;
+  charCount: number; sections: string[]; summary: string; text: string;
+  // JDE-specific fields from parse-spec
+  isJDEDocument?: boolean;
+  jdeObjects?: string[];
+  structuredDocument?: any;
 }
 interface GenerationResult {
   testCases: GeneratedTestCase[];
@@ -210,10 +223,17 @@ export default function Generator() {
   const [selectedTests, setSelectedTests] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState("tests");
 
+  // Spec upload
+  const [specResult, setSpecResult] = useState<SpecParseResult | null>(null);
+  const [isParsingSpec, setIsParsingSpec] = useState(false);
+  const [specDragging, setSpecDragging] = useState(false);
+  const [showSpecUpload, setShowSpecUpload] = useState(true);
+  const specInputRef = useRef<HTMLInputElement>(null);
+
   const { data: suites = [] } = useQuery<TestSuite[]>({ queryKey: ["/api/test-suites"] });
-  const { data: profilesData } = useQuery<{ profiles: AppProfile[] }>({ queryKey: ["/api/app-profiles"] });
-  const profiles = profilesData?.profiles || [];
-  const selectedProfile = profiles.find(p => p.type === selectedAppType);
+  const { data: profilesResponse } = useQuery<{ profiles: AppProfile[], categories: Record<string, string[]> }>({ queryKey: ["/api/app-profiles"] });
+  const profiles = profilesResponse?.profiles || [];
+  const selectedProfile = profiles.find((p: AppProfile) => p.type === selectedAppType);
   const profileColors = selectedProfile ? (COLOR_CLASSES[selectedProfile.color] || COLOR_CLASSES.blue) : COLOR_CLASSES.blue;
 
   const contextFieldCount = [appName, moduleName, businessUseCase, userRoles, appContext,
@@ -223,34 +243,106 @@ export default function Generator() {
   const generateMutation = useMutation({
     mutationFn: async () => {
       const payload: any = {
-        title: requirementTitle || "Untitled Requirement",
-        description: requirement,
-        appType: selectedAppType,
-        appHints: selectedProfile?.aiPromptHints,
-        includeE2E,
-        testDepth,
-        appName: appName || undefined,
-        moduleName: moduleName || undefined,
-        businessUseCase: businessUseCase || undefined,
-        userRoles: userRoles || undefined,
-        appContext: appContext || undefined,
-        functionalRequirements: functionalRequirements || undefined,
-        nonFunctionalRequirements: nonFunctionalRequirements || undefined,
-        apiDetails: apiDetails || undefined,
-        uiWorkflow: uiWorkflow || undefined,
-        dataVariations: dataVariations || undefined,
-        environment: environment || undefined,
+        // Core fields — aligned with /api/generate-tests schema
+        title:                    requirementTitle || "Untitled Requirement",
+        description:              requirement,                        // was 'requirements' — FIXED
+        appType:                  selectedAppType,                    // ADD
+        appHints:                 selectedProfile?.aiPromptHints || "", // ADD
+        testDepth,                                                    // was numberOfTestCases — FIXED
+        includeE2E,                                                   // ADD
+        // Architect context — all as separate fields (server schema supports all)
+        appName,
+        moduleName,
+        businessUseCase,
+        userRoles,
+        appContext,               // ADD (was missing from payload)
+        functionalRequirements,
+        nonFunctionalRequirements,
+        apiDetails,
+        uiWorkflow,
+        dataVariations,
+        environment,
       };
-      const res = await apiRequest("POST", "/api/generate-tests", payload);
-      return res.json();
+      
+      // For JDE, include spec document data for better test generation
+      if (selectedAppType === "jde" && specResult) {
+        payload.specText = specResult.text;
+        payload.structuredDocument = specResult.structuredDocument;
+        payload.jdeObjects = specResult.jdeObjects;
+        console.log("[Generator] JDE spec data included:", {
+          hasSpecText: !!payload.specText,
+          hasStructuredDocument: !!payload.structuredDocument,
+          jdeObjects: payload.jdeObjects || []
+        });
+      }
+      
+      // Use JDE-specific endpoint for Oracle JDE to get accurate JDE test cases
+      const endpoint = selectedAppType === "jde" ? "/api/generate-jde-tests" : "/api/generate-tests";
+      console.log("[Generator] Using endpoint:", endpoint, "for appType:", selectedAppType);
+      
+      try {
+        const res = await apiRequest("POST", endpoint, payload);
+        return res.json();
+      } catch (fetchError: any) {
+        console.error("[Generator] API request failed:", fetchError);
+        // Check if the error message contains HTML (indicates server returning error page)
+        if (fetchError.message?.includes("<!DOCTYPE") || fetchError.message?.includes("<html")) {
+          throw new Error("Server returned an error page. Please check if the server is running correctly.");
+        }
+        throw fetchError;
+      }
     },
-    onSuccess: (data: GenerationResult) => {
-      setResult(data);
-      setSelectedTests(new Set(data.testCases.map((_, i) => i)));
+    onSuccess: (data: any) => {
+      const rawCases: any[] = data.testCases || [];
+
+      const mapped: GeneratedTestCase[] = rawCases.map((tc: any, i: number) => {
+        // Normalise steps — handle string arrays, object arrays, or missing
+        let steps: { step: string; expected: string }[] = [];
+        if (Array.isArray(tc.steps) && tc.steps.length > 0) {
+          steps = tc.steps
+            .map((s: any) => ({
+              step:     typeof s === "string" ? s : (s.step || (s.action && s.target ? `${s.action}: ${s.target}` : s.action) || s.description || ""),
+              expected: typeof s === "object" ? (s.expected || s.expectedResult || "Completed successfully") : "Completed successfully",
+            }))
+            .filter((s: any) => s.step.trim());
+        }
+        if (steps.length === 0) {
+          steps = [{ step: tc.description || `Execute ${tc.title}`, expected: "Completed successfully" }];
+        }
+        return {
+          testCaseId:       tc.testCaseId  || `TC_${String(i + 1).padStart(3, "0")}`,
+          title:            tc.title       || `Test Case ${i + 1}`,
+          description:      tc.description || "",
+          priority:         tc.priority    || "medium",
+          preconditions:    Array.isArray(tc.preconditions) ? tc.preconditions.join("; ") : (tc.preconditions || "N/A"),
+          steps,
+          testType:         tc.testType         || "functional",
+          confidenceScore:  tc.confidenceScore  ?? 85,
+          riskLevel:        tc.riskLevel        || "low",
+          automationSuitable: tc.automationSuitable ?? (tc.testType === "functional" || tc.testType === "smoke"),
+          reasoning:        tc.reasoning || "",
+        };
+      });
+
+      const generationResult: GenerationResult = {
+        testCases:            mapped,
+        coverageSummary:      data.coverageSummary || {
+          totalTestCases: mapped.length,
+          byType:         { functional: mapped.length },
+          coverageAreas:  ["Core Functionality", "User Workflows", "Data Validation"],
+          gapAreas:       [],
+        },
+        riskAreas:            data.riskAreas            || [],
+        automationCandidates: data.automationCandidates || [],
+        assumptions:          data.assumptions          || [],
+      };
+
+      setResult(generationResult);
+      setSelectedTests(new Set(mapped.map((_, i) => i)));
       setActiveTab("tests");
       toast({
-        title: `${data.testCases.length} Test Cases Generated`,
-        description: `Coverage: ${Object.entries(data.coverageSummary?.byType || {}).filter(([,v]) => (v as number) > 0).map(([k,v]) => `${v} ${k}`).join(", ")}`,
+        title:       `✅ ${mapped.length} Test Cases Generated`,
+        description: `Coverage: ${Object.keys(generationResult.coverageSummary?.byType || {}).filter(k => (generationResult.coverageSummary!.byType[k] as number) > 0).join(", ") || "functional"} · ${data.generatedBy === "ai" ? "AI-powered" : "Rule-based"} generation`,
       });
     },
     onError: (err: any) => {
@@ -298,6 +390,69 @@ export default function Generator() {
     setSelectedTests(n);
   };
 
+  // ── Spec upload handlers ────────────────────────────────────────────────
+  const parseSpec = useCallback(async (file: File) => {
+    setIsParsingSpec(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/generate/parse-spec", { method: "POST", body: formData });
+      const rawText = await res.text();
+      let data: any;
+      try { data = JSON.parse(rawText); } catch { throw new Error("Invalid response from server"); }
+      if (!res.ok) throw new Error(data.error || "Spec parsing failed");
+      setSpecResult(data as SpecParseResult);
+      
+      // Show appropriate toast based on whether JDE document was detected
+      if (data.isJDEDocument && data.jdeObjects?.length > 0) {
+        toast({
+          title: "🎯 JDE Spec Detected!",
+          description: `"${data.filename}" · ${data.pages} page${data.pages !== 1 ? "s" : ""} · Found ${data.jdeObjects.length} JDE objects: ${data.jdeObjects.slice(0, 3).join(", ")}${data.jdeObjects.length > 3 ? "..." : ""}`,
+        });
+        // Auto-select JDE profile if a JDE document is detected
+        setSelectedAppType("jde");
+      } else {
+        toast({
+          title: "Spec Parsed Successfully",
+          description: `"${data.filename}" · ${data.pages} page${data.pages !== 1 ? "s" : ""} · ${(data.charCount / 1000).toFixed(1)}k chars · ${data.sections.length} sections`,
+        });
+      }
+    } catch (err: any) {
+      toast({ title: "Parse Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsParsingSpec(false);
+    }
+  }, [toast]);
+
+  const applySpecToRequirement = useCallback(() => {
+    if (!specResult) return;
+    setRequirementTitle(prev => prev || specResult.filename.replace(/\.[^.]+$/, ""));
+    setRequirement(prev => prev || specResult.text.substring(0, 2000));
+    toast({ title: "Auto-filled", description: "Requirement title and description updated from spec." });
+  }, [specResult]);
+
+  const applySpecToAllContext = useCallback(() => {
+    if (!specResult) return;
+    setRequirementTitle(prev => prev || specResult.filename.replace(/\.[^.]+$/, ""));
+    setRequirement(prev => prev || specResult.text.substring(0, 2000));
+    // Extract functional requirements from sections
+    const funcSections = specResult.sections
+      .filter(s => /functional|requirement|feature|story|acceptance/i.test(s))
+      .slice(0, 10)
+      .join("\n");
+    if (funcSections) setFunctionalRequirements(prev => prev || funcSections);
+    // Use AI summary as business use case
+    if (specResult.summary && specResult.summary !== "(AI summary unavailable)") {
+      setBusinessUseCase(prev => prev || specResult.summary);
+    }
+    // Use all sections as app context
+    if (specResult.sections.length > 0) {
+      setAppContext(prev => prev || specResult.sections.slice(0, 20).join(", "));
+    }
+    setShowContext(true);
+    toast({ title: "All Context Auto-filled", description: "Requirement + Architect Context populated from spec." });
+  }, [specResult]);
+
   const depthInfo = {
     standard:      { label: "Standard", desc: "15-20 test cases", color: "text-emerald-500" },
     comprehensive: { label: "Comprehensive", desc: "25-35 test cases", color: "text-blue-500" },
@@ -328,6 +483,145 @@ export default function Generator() {
       <div className="grid gap-5 xl:grid-cols-5">
         {/* ── LEFT PANEL: Input ──────────────────────────────────────────── */}
         <div className="xl:col-span-2 space-y-4">
+
+          {/* ── Spec / Documentation Upload Card ──────────────────────── */}
+          <Card className={cn(specResult && "border-violet-500/40 bg-violet-500/3")}>
+            <Collapsible open={showSpecUpload} onOpenChange={setShowSpecUpload}>
+              <CollapsibleTrigger asChild>
+                <button className="w-full text-left">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <FileSearch className={cn("h-4 w-4", specResult ? "text-violet-500" : "text-muted-foreground")} />
+                      <span>Upload Spec / Documentation</span>
+                      {specResult && !showSpecUpload && (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-1 bg-violet-500/10 text-violet-600 border-violet-500/20">
+                          {specResult.filename}
+                        </Badge>
+                      )}
+                      <span className="ml-auto text-xs text-muted-foreground font-normal">
+                        {showSpecUpload ? "hide" : (specResult ? "spec loaded" : "upload PDF/DOCX/TXT")}
+                      </span>
+                      <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", showSpecUpload && "rotate-180")} />
+                    </CardTitle>
+                    {!showSpecUpload && !specResult && (
+                      <CardDescription className="text-xs text-left">
+                        Upload a requirements doc, PRD, or user story to auto-fill test inputs
+                      </CardDescription>
+                    )}
+                  </CardHeader>
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent className="pt-0 space-y-3">
+                  {!specResult ? (
+                    /* ── Drop zone ── */
+                    <div
+                      className={cn(
+                        "flex flex-col items-center justify-center gap-3 p-6 rounded-xl border-2 border-dashed cursor-pointer transition-all",
+                        specDragging ? "border-violet-500 bg-violet-500/8" : "border-border/60 hover:border-violet-400/60 hover:bg-muted/30"
+                      )}
+                      onDragOver={e => { e.preventDefault(); setSpecDragging(true); }}
+                      onDragLeave={() => setSpecDragging(false)}
+                      onDrop={e => { e.preventDefault(); setSpecDragging(false); const f = e.dataTransfer.files[0]; if (f) parseSpec(f); }}
+                      onClick={() => specInputRef.current?.click()}
+                    >
+                      <input ref={specInputRef} type="file" accept=".pdf,.docx,.doc,.txt,.md"
+                        className="hidden"
+                        onChange={e => { const f = e.target.files?.[0]; if (f) parseSpec(f); e.target.value = ""; }}
+                      />
+                      {isParsingSpec ? (
+                        <><Loader2 className="h-8 w-8 text-violet-500 animate-spin" />
+                          <p className="text-sm font-medium text-muted-foreground">Parsing document...</p></>
+                      ) : (
+                        <>
+                          <div className="h-10 w-10 rounded-xl bg-violet-500/10 flex items-center justify-center">
+                            <FileUp className="h-5 w-5 text-violet-500" />
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm font-medium">Drop spec document here</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">or click to browse · max 50 MB</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                            {[".pdf", ".docx", ".txt", ".md"].map(ext => (
+                              <Badge key={ext} variant="secondary" className="font-mono text-[10px]">{ext}</Badge>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    /* ── Parse result ── */
+                    <div className="space-y-3">
+                      {/* File info bar */}
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-violet-500/8 border border-violet-500/20">
+                        <BookOpen className="h-4 w-4 text-violet-500 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold truncate">{specResult.filename}</p>
+                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                            <span className="text-[10px] text-muted-foreground">{specResult.pages} page{specResult.pages !== 1 ? "s" : ""}</span>
+                            <span className="text-[10px] text-muted-foreground">·</span>
+                            <span className="text-[10px] text-muted-foreground">{(specResult.charCount / 1000).toFixed(1)}k chars</span>
+                            <span className="text-[10px] text-muted-foreground">·</span>
+                            <span className="text-[10px] text-muted-foreground">{specResult.sections.length} sections</span>
+                            {specResult.truncated && (
+                              <span className="text-[10px] bg-amber-500/10 text-amber-600 border border-amber-500/20 px-1 rounded">truncated</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setSpecResult(null)}
+                          className="shrink-0 h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {/* AI summary */}
+                      {specResult.summary && specResult.summary !== "(AI summary unavailable)" && (
+                        <div className="p-2.5 rounded-lg bg-muted/40 border border-border/50">
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">AI Summary</p>
+                          <p className="text-xs text-muted-foreground leading-relaxed">{specResult.summary}</p>
+                        </div>
+                      )}
+
+                      {/* Sections */}
+                      {specResult.sections.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1.5">Detected Sections</p>
+                          <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto pr-1">
+                            {specResult.sections.slice(0, 20).map((s, i) => (
+                              <span key={i} className="text-[10px] bg-muted px-1.5 py-0.5 rounded border border-border/50 truncate max-w-[160px]">{s}</span>
+                            ))}
+                            {specResult.sections.length > 20 && (
+                              <span className="text-[10px] text-muted-foreground">+{specResult.sections.length - 20} more</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={applySpecToRequirement}>
+                          <FileText className="h-3.5 w-3.5" />Auto-fill Requirement
+                        </Button>
+                        <Button size="sm" className="h-8 text-xs gap-1.5 bg-violet-600 hover:bg-violet-700" onClick={applySpecToAllContext}>
+                          <Wand2 className="h-3.5 w-3.5" />Auto-fill All Context
+                        </Button>
+                      </div>
+
+                      {/* Re-upload link */}
+                      <button
+                        onClick={() => { setSpecResult(null); setTimeout(() => specInputRef.current?.click(), 50); }}
+                        className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      >
+                        <RefreshCw className="h-3 w-3" />Upload different file
+                      </button>
+                    </div>
+                  )}
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
 
           {/* App Type */}
           <Card>
@@ -584,6 +878,7 @@ export default function Generator() {
                     <TabsContent value="coverage" className="mt-0 space-y-4">
                       {result.coverageSummary && (
                         <>
+                          {result.coverageSummary.byType && (
                           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                             {Object.entries(result.coverageSummary.byType).map(([type, count]) => (
                               <div key={type} className={cn("p-2 rounded-lg border text-center", (count as number) > 0 ? testTypeColors[type] || testTypeColors.functional : "bg-muted/30 border-border text-muted-foreground")}>
@@ -592,22 +887,33 @@ export default function Generator() {
                               </div>
                             ))}
                           </div>
-                          {result.coverageSummary.coverageAreas.length > 0 && (
+                          )}
+                          {((result.coverageSummary.coverageAreas && result.coverageSummary.coverageAreas.length > 0) || (result.coverageSummary.objectsCovered && result.coverageSummary.objectsCovered.length > 0)) && (
                             <div>
                               <p className="text-xs font-medium mb-1.5 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />Areas Covered</p>
                               <div className="flex flex-wrap gap-1.5">
-                                {result.coverageSummary.coverageAreas.map((a, i) => (
+                                {(result.coverageSummary.coverageAreas || result.coverageSummary.objectsCovered || []).map((a: string, i: number) => (
                                   <span key={i} className="text-xs bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 px-2 py-0.5 rounded">{a}</span>
                                 ))}
                               </div>
                             </div>
                           )}
-                          {result.coverageSummary.gapAreas.length > 0 && (
+                          {(result.coverageSummary.gapAreas && result.coverageSummary.gapAreas.length > 0) && (
                             <div>
                               <p className="text-xs font-medium mb-1.5 flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5 text-amber-500" />Coverage Gaps</p>
                               <div className="flex flex-wrap gap-1.5">
-                                {result.coverageSummary.gapAreas.map((a, i) => (
+                                {result.coverageSummary.gapAreas.map((a: string, i: number) => (
                                   <span key={i} className="text-xs bg-amber-500/10 text-amber-600 border border-amber-500/20 px-2 py-0.5 rounded">{a}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {(result.coverageSummary.tablesCovered && result.coverageSummary.tablesCovered.length > 0) && (
+                            <div>
+                              <p className="text-xs font-medium mb-1.5 flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5 text-blue-500" />JDE Tables Covered</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {result.coverageSummary.tablesCovered.map((t: string, i: number) => (
+                                  <span key={i} className="text-xs bg-blue-500/10 text-blue-600 border border-blue-500/20 px-2 py-0.5 rounded">{t}</span>
                                 ))}
                               </div>
                             </div>

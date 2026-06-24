@@ -46,6 +46,8 @@ import {
   GitMerge,
   Target,
   ShieldAlert,
+  Database,
+  Brain,
 } from "lucide-react";
 
 const mainNavItems = [
@@ -68,6 +70,13 @@ const mainNavItems = [
     icon: Sparkles,
     description: "Generate from requirements",
     badge: "AI",
+  },
+  {
+    title: "Knowledge Base",
+    url: "/knowledge",
+    icon: Database,
+    description: "RAG-powered knowledge",
+    badge: "NEW",
   },
   {
     title: "Test Repository",
@@ -111,6 +120,13 @@ const executionNavItems = [
     icon: HeartPulse,
     description: "Auto-fix broken tests",
     badge: "AI",
+  },
+  {
+    title: "AI Healer Pro",
+    url: "/healer/enterprise",
+    icon: HeartPulse,
+    description: "Enterprise healing with rollback",
+    badge: "PRO",
   },
   {
     title: "Performance",
@@ -161,6 +177,27 @@ const configNavItems = [
     url: "/agents",
     icon: Bot,
     description: "Autonomous agents",
+  },
+  {
+    title: "Enterprise Agents",
+    url: "/agents/enterprise",
+    icon: Server,
+    description: "Agent groups & orchestration",
+    badge: "NEW",
+  },
+  {
+    title: "Compliance",
+    url: "/compliance",
+    icon: ShieldAlert,
+    description: "Approvals, audits, flaky tests",
+    badge: "NEW",
+  },
+  {
+    title: "LLM Tests",
+    url: "/llm-tests",
+    icon: Brain,
+    description: "5-layer LLM evaluation",
+    badge: "NEW",
   },
   {
     title: "Environments",

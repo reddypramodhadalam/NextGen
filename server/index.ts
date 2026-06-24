@@ -77,6 +77,18 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // ========================================
+  // NEW: Initialize Enterprise Architecture
+  // ========================================
+  try {
+    const { bootstrapNewArchitecture } = await import("./bootstrap-new-architecture");
+    await bootstrapNewArchitecture(app);
+    log("✅ New architecture bootstrapped", "bootstrap");
+  } catch (error: any) {
+    log(`⚠️  New architecture bootstrap warning: ${error.message}`, "bootstrap");
+    // Continue anyway - old code still works
+  }
+
   await registerRoutes(httpServer, app);
 
   // Start agent health monitor
@@ -126,4 +138,29 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // ========================================
+  // NEW: Graceful Shutdown
+  // ========================================
+  process.on("SIGTERM", async () => {
+    log("SIGTERM received, shutting down gracefully...", "shutdown");
+    try {
+      const { shutdownNewArchitecture } = await import("./bootstrap-new-architecture");
+      await shutdownNewArchitecture();
+    } catch {
+      // Ignore shutdown errors
+    }
+    process.exit(0);
+  });
+
+  process.on("SIGINT", async () => {
+    log("SIGINT received, shutting down gracefully...", "shutdown");
+    try {
+      const { shutdownNewArchitecture } = await import("./bootstrap-new-architecture");
+      await shutdownNewArchitecture();
+    } catch {
+      // Ignore shutdown errors
+    }
+    process.exit(0);
+  });
 })();

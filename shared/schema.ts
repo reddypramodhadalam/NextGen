@@ -40,6 +40,7 @@ export const testCases = pgTable("test_cases", {
   status: text("status").default("active"), // active, deprecated, draft
   tags: text("tags").array(),
   generatedByAI: boolean("generated_by_ai").default(false),
+  order: integer("order").default(0), // Execution order within suite (0 = first, 1 = second, etc.)
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -48,6 +49,7 @@ export const insertTestCaseSchema = createInsertSchema(testCases).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+  order: true,  // Order is auto-assigned, not from user input
 });
 
 export type InsertTestCase = z.infer<typeof insertTestCaseSchema>;

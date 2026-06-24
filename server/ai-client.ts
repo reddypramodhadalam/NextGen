@@ -102,10 +102,24 @@ async function callCustomLlm(
     // Sanitize error: if the remote API returned a JSON error, extract the message
     try {
       const errJson = JSON.parse(errorText);
-      errorText = errJson.message || errJson.error || errorText;
+      // Prefer common fields, otherwise stringify object
+      if (errJson.message) {
+        errorText = errJson.message;
+      } else if (errJson.error) {
+        errorText = typeof errJson.error === 'string' ? errJson.error : JSON.stringify(errJson.error);
+      } else if (errJson.errors) {
+        if (Array.isArray(errJson.errors)) {
+          errorText = errJson.errors.map((e: any) => (e.message || JSON.stringify(e))).join('; ');
+        } else {
+          errorText = JSON.stringify(errJson.errors);
+        }
+      } else {
+        // Fallback: stringify entire JSON so it's readable
+        errorText = JSON.stringify(errJson);
+      }
     } catch {
       // errorText is plain text — use as-is but truncate if very long
-      if (errorText.length > 300) errorText = errorText.substring(0, 300) + "...";
+      if (errorText && errorText.length > 300) errorText = errorText.substring(0, 300) + "...";
     }
     throw new Error(`LLM API error: ${response.status} - ${errorText}`);
   }

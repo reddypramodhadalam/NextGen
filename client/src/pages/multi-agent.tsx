@@ -512,7 +512,10 @@ export default function MultiAgentPage() {
     setSelectedTestCaseId(tcId);
     const tc = testCases.find(t => t.id === tcId);
     if (tc?.steps && Array.isArray(tc.steps)) {
-      setSteps((tc.steps as StepInput[]).map(s => ({ step: s.step || "", expected: s.expected || "" })));
+      setSteps((tc.steps as any[]).map(s => ({ 
+        step: s.step || (s.action && s.target ? `${s.action}: ${s.target}` : s.action) || "", 
+        expected: s.expected || "" 
+      })));
       if (tc.targetUrl) setTargetUrl(tc.targetUrl);
     }
   };

@@ -121,7 +121,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTestCasesBySuite(suiteId: string): Promise<TestCase[]> {
-    return await db.select().from(testCases).where(eq(testCases.suiteId, suiteId));
+    const { asc } = await import("drizzle-orm");
+    return await db.select().from(testCases)
+      .where(eq(testCases.suiteId, suiteId))
+      .orderBy(asc(testCases.order), asc(testCases.createdAt));
   }
 
   async createTestCase(tc: InsertTestCase): Promise<TestCase> {
@@ -234,6 +237,10 @@ export class DatabaseStorage implements IStorage {
       .where(eq(testResults.id, id))
       .returning();
     return updated;
+  }
+
+  async deleteResultsByExecution(executionId: string): Promise<void> {
+    await db.delete(testResults).where(eq(testResults.executionId, executionId));
   }
 
   // Generated Scripts

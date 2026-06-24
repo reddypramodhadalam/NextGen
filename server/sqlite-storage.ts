@@ -75,21 +75,22 @@ function initializeTables() {
       updated_at INTEGER
     );
 
-    CREATE TABLE IF NOT EXISTS test_cases (
-      id TEXT PRIMARY KEY,
-      suite_id TEXT REFERENCES test_suites(id) ON DELETE CASCADE,
-      title TEXT NOT NULL,
-      description TEXT,
-      preconditions TEXT,
-      target_url TEXT,
-      steps TEXT,
-      priority TEXT DEFAULT 'medium',
-      tags TEXT,
-      status TEXT DEFAULT 'active',
-      generated_by_ai INTEGER DEFAULT 0,
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER
-    );
+        CREATE TABLE IF NOT EXISTS test_cases (
+          id TEXT PRIMARY KEY,
+          suite_id TEXT REFERENCES test_suites(id) ON DELETE CASCADE,
+          title TEXT NOT NULL,
+          description TEXT,
+          preconditions TEXT,
+          target_url TEXT,
+          steps TEXT,
+          priority TEXT DEFAULT 'medium',
+          tags TEXT,
+          status TEXT DEFAULT 'active',
+          generated_by_ai INTEGER DEFAULT 0,
+          "order" INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at INTEGER
+        );
 
     -- Test Execution
     CREATE TABLE IF NOT EXISTS test_agents (
@@ -278,34 +279,31 @@ function initializeTables() {
   
   console.log("[SQLite] Database tables initialized successfully");
 
-  // ─── Migrations ──────────────────────────────────────────────────────────────
-  // Drop FK constraint on projects.owner_id by recreating the table if needed
+    // ─── Migrations ──────────────────────────────────────────────────────────────
+  // Migration 1: Add slug to projects if missing
   try {
     const tableInfo = sqliteConnection.prepare("PRAGMA table_info(projects)").all() as any[];
     const hasSlug = tableInfo.some((col: any) => col.name === "slug");
     if (!hasSlug) {
-      console.log("[SQLite] Migrating projects table (adding slug, removing FK)...");
-      sqliteConnection.exec(`
-        CREATE TABLE IF NOT EXISTS projects_new (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          description TEXT,
-          slug TEXT,
-          owner_id TEXT,
-          is_active INTEGER DEFAULT 1,
-          settings TEXT,
-          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-          updated_at INTEGER
-        );
-        INSERT OR IGNORE INTO projects_new (id, name, description, owner_id, is_active, created_at, updated_at)
-          SELECT id, name, description, owner_id, is_active, created_at, updated_at FROM projects;
-        DROP TABLE projects;
-        ALTER TABLE projects_new RENAME TO projects;
-      `);
-      console.log("[SQLite] Projects table migrated successfully");
+      console.log("[SQLite] Migrating projects table (adding slug)...");
+      sqliteConnection.prepare("ALTER TABLE projects ADD COLUMN slug TEXT").run();
+      console.log("[SQLite] ✅ Projects table migrated");
     }
   } catch (migErr: any) {
-    console.warn("[SQLite] Migration warning:", migErr.message);
+    console.warn("[SQLite] Projects migration warning:", migErr.message);
+  }
+
+  // Migration 2: Add order column to test_cases if missing
+  try {
+    const tableInfo = sqliteConnection.prepare("PRAGMA table_info(test_cases)").all() as any[];
+    const hasOrder = tableInfo.some((col: any) => col.name === '"order"' || col.name === 'order');
+    if (!hasOrder) {
+      console.log("[SQLite] Migrating test_cases table (adding order column)...");
+      sqliteConnection.prepare('ALTER TABLE test_cases ADD COLUMN "order" INTEGER DEFAULT 0').run();
+      console.log("[SQLite] ✅ Test cases table migrated with order column");
+    }
+  } catch (migErr: any) {
+    console.warn("[SQLite] Test cases migration warning:", migErr.message);
   }
 }
 
@@ -452,10 +450,10 @@ export class SQLiteStorage implements IStorage {
     return rows.map(r => this.mapTestCase(r));
   }
 
-  async getTestCasesBySuite(suiteId: string): Promise<TestCase[]> {
-    const rows = sqliteConnection.prepare("SELECT * FROM test_cases WHERE suite_id = ? ORDER BY created_at DESC").all(suiteId) as any[];
-    return rows.map(r => this.mapTestCase(r));
-  }
+    async getTestCasesBySuite(suiteId: string): Promise<TestCase[]> {
+      const rows = sqliteConnection.prepare('SELECT * FROM test_cases WHERE suite_id = ? ORDER BY "order" ASC, created_at ASC').all(suiteId) as any[];
+      return rows.map(r => this.mapTestCase(r));
+    }
 
   async getTestCase(id: string): Promise<TestCase | undefined> {
     const r = sqliteConnection.prepare("SELECT * FROM test_cases WHERE id = ?").get(id) as any;
@@ -463,7 +461,7 @@ export class SQLiteStorage implements IStorage {
     return this.mapTestCase(r);
   }
 
-  private mapTestCase(r: any): TestCase {
+    private mapTestCase(r: any): TestCase {
     return {
       id: r.id,
       suiteId: r.suite_id,
@@ -476,42 +474,49 @@ export class SQLiteStorage implements IStorage {
       tags: r.tags ? JSON.parse(r.tags) : null,
       status: r.status,
       generatedByAi: r.generated_by_ai === 1,
+      order: r.order || 0,
       createdAt: new Date(r.created_at * 1000),
       updatedAt: toDate(r.updated_at),
     };
   }
 
-  async createTestCase(tc: InsertTestCase): Promise<TestCase> {
-    const id = randomUUID();
-    sqliteConnection.prepare(`
-      INSERT INTO test_cases (id, suite_id, title, description, preconditions, target_url, steps, priority, tags, status, generated_by_ai, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id, tc.suiteId, tc.title, tc.description || null, tc.preconditions || null, tc.targetUrl || null,
-      tc.steps ? JSON.stringify(tc.steps) : null, tc.priority || 'medium',
-      tc.tags ? JSON.stringify(tc.tags) : null, tc.status || 'active', tc.generatedByAi ? 1 : 0, now()
-    );
-    return this.getTestCase(id) as Promise<TestCase>;
-  }
+    async createTestCase(tc: InsertTestCase): Promise<TestCase> {
+      const id = randomUUID();
+      // Get next order number for the suite
+      const nextOrder = tc.suiteId ? 
+        (sqliteConnection.prepare('SELECT MAX("order") as maxOrder FROM test_cases WHERE suite_id = ?').get(tc.suiteId) as any)?.maxOrder || 0 + 1 :
+        0;
+    
+      sqliteConnection.prepare(`
+        INSERT INTO test_cases (id, suite_id, title, description, preconditions, target_url, steps, priority, tags, status, generated_by_ai, "order", created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id, tc.suiteId, tc.title, tc.description || null, tc.preconditions || null, tc.targetUrl || null,
+        tc.steps ? JSON.stringify(tc.steps) : null, tc.priority || 'medium',
+        tc.tags ? JSON.stringify(tc.tags) : null, tc.status || 'active', tc.generatedByAi ? 1 : 0, nextOrder, now()
+      );
+      return this.getTestCase(id) as Promise<TestCase>;
+    }
 
-  async updateTestCase(id: string, tc: Partial<InsertTestCase>): Promise<TestCase | undefined> {
-    const fields: string[] = [];
-    const vals: any[] = [];
-    if (tc.title !== undefined) { fields.push("title = ?"); vals.push(tc.title); }
-    if (tc.description !== undefined) { fields.push("description = ?"); vals.push(tc.description); }
-    if (tc.preconditions !== undefined) { fields.push("preconditions = ?"); vals.push(tc.preconditions); }
-    if (tc.targetUrl !== undefined) { fields.push("target_url = ?"); vals.push(tc.targetUrl); }
-    if (tc.steps !== undefined) { fields.push("steps = ?"); vals.push(JSON.stringify(tc.steps)); }
-    if (tc.priority !== undefined) { fields.push("priority = ?"); vals.push(tc.priority); }
-    if (tc.tags !== undefined) { fields.push("tags = ?"); vals.push(JSON.stringify(tc.tags)); }
-    if (tc.status !== undefined) { fields.push("status = ?"); vals.push(tc.status); }
-    if (tc.generatedByAi !== undefined) { fields.push("generated_by_ai = ?"); vals.push(tc.generatedByAi ? 1 : 0); }
-    if (fields.length === 0) return this.getTestCase(id);
-    fields.push("updated_at = ?"); vals.push(now());
-    vals.push(id);
-    sqliteConnection.prepare(`UPDATE test_cases SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
-    return this.getTestCase(id);
-  }
+    async updateTestCase(id: string, tc: Partial<InsertTestCase>): Promise<TestCase | undefined> {
+      const fields: string[] = [];
+      const vals: any[] = [];
+      if (tc.title !== undefined) { fields.push("title = ?"); vals.push(tc.title); }
+      if (tc.description !== undefined) { fields.push("description = ?"); vals.push(tc.description); }
+      if (tc.preconditions !== undefined) { fields.push("preconditions = ?"); vals.push(tc.preconditions); }
+      if (tc.targetUrl !== undefined) { fields.push("target_url = ?"); vals.push(tc.targetUrl); }
+      if (tc.steps !== undefined) { fields.push("steps = ?"); vals.push(JSON.stringify(tc.steps)); }
+      if (tc.priority !== undefined) { fields.push("priority = ?"); vals.push(tc.priority); }
+      if (tc.tags !== undefined) { fields.push("tags = ?"); vals.push(JSON.stringify(tc.tags)); }
+      if (tc.status !== undefined) { fields.push("status = ?"); vals.push(tc.status); }
+      if (tc.generatedByAi !== undefined) { fields.push("generated_by_ai = ?"); vals.push(tc.generatedByAi ? 1 : 0); }
+      if ((tc as any).order !== undefined) { fields.push('"order" = ?'); vals.push((tc as any).order); }
+      if (fields.length === 0) return this.getTestCase(id);
+      fields.push("updated_at = ?"); vals.push(now());
+      vals.push(id);
+      sqliteConnection.prepare(`UPDATE test_cases SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
+      return this.getTestCase(id);
+    }
 
   async deleteTestCase(id: string): Promise<void> {
     sqliteConnection.prepare("DELETE FROM test_cases WHERE id = ?").run(id);

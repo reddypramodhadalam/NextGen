@@ -30,6 +30,7 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    cssMinify: false,  // Disable CSS minification to avoid lightningcss errors
   },
   server: {
     fs: {

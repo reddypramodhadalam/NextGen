@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+﻿import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -28,7 +28,7 @@ import {
   ChevronRight, FolderOpen, Eye, Trash2, RefreshCw, FileUp,
   ArrowRight, Zap, KeyRound, Database, Plus, Pencil, Save,
   X, EyeOff, Lock, Globe, AtSign, Hash, Type, ShieldCheck,
-  FileSpreadsheet, Info, Copy,
+  FileSpreadsheet, Info, Copy, AlertTriangle, TrendingUp, Star, Activity,
 } from "lucide-react";
 import type { TestSuite, TestCase, TestDataParam } from "@shared/schema";
 
@@ -44,6 +44,59 @@ interface ParsedTestCase {
   steps: { step: string; expected: string }[];
   _rowIndex?: number;
   _parseError?: string;
+  _canonical?: CanonicalTestCase;
+}
+
+// Canonical Test Case types (from server)
+interface CanonicalTestStep {
+  stepNumber: number;
+  actionType: string;
+  target?: string;
+  value?: string;
+  selector?: string;
+  expectedResult: string;
+  screenshot?: boolean;
+  timeout?: number;
+  optional?: boolean;
+}
+
+interface CanonicalTestCase {
+  testCaseId: string;
+  title: string;
+  application?: string;
+  testType?: string;
+  module?: string;
+  preconditions?: string[];
+  steps: CanonicalTestStep[];
+  postconditions?: string[];
+  testData?: any[];
+  priority?: string;
+  automationStatus?: string;
+  retryCount?: number;
+  metadata?: any;
+  tags?: string[];
+}
+
+interface CanonicalValidation {
+  testCaseId: string;
+  title: string;
+  isValid: boolean;
+  score: number;
+  errors: { field: string; message: string }[];
+  warnings: { field: string; message: string }[];
+}
+
+interface CanonicalParseResult {
+  testCases: CanonicalTestCase[];
+  validation: CanonicalValidation[];
+  overallScore: number;
+  metadata: {
+    fileName: string;
+    totalRows: number;
+    parsedScenarios: number;
+    totalSteps: number;
+  };
+  actionTypes: string[];
 }
 
 interface UploadResult {
@@ -52,6 +105,14 @@ interface UploadResult {
   totalRows: number;
   parsed: ParsedTestCase[];
   errors: string[];
+  canonical?: CanonicalParseResult;
+  stats?: {
+    totalScenarios: number;
+    totalSteps: number;
+    validTestCases: number;
+    invalidTestCases: number;
+    warnings: number;
+  };
 }
 
 interface GeneratedScript {
@@ -164,7 +225,7 @@ function parseJSON(text: string): ParsedTestCase[] {
       ? item.steps.map((s: any) =>
           typeof s === "string"
             ? { step: s, expected: "Step completes successfully" }
-            : { step: s.step || s.action || s.description || s, expected: s.expected || s.result || "Step completes successfully" }
+            : { step: s.step || (s.action && s.target ? `${s.action}: ${s.target}` : s.action) || s.description || String(s), expected: s.expected || s.result || "Step completes successfully" }
         )
       : [{ step: `Execute: ${item.title || "test"}`, expected: "Test completes successfully" }],
     _rowIndex: i + 1,
@@ -388,33 +449,66 @@ export default function UploadTestCases() {
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     const errors: string[] = [];
     let parsed: ParsedTestCase[] = [];
+    let canonicalResult: CanonicalParseResult | undefined;
+    let stats: UploadResult["stats"] | undefined;
 
     try {
       if (ext === "json") {
-        const text = await file.text();
-        parsed = parseJSON(text);
-      } else if (ext === "csv") {
-        const text = await file.text();
-        const rows = parseCSV(text);
-        parsed = csvRowsToTestCases(rows);
-      } else if (ext === "xlsx" || ext === "xls") {
-        // Send to server for Excel parsing — do NOT set Content-Type,
-        // let the browser set it automatically with the correct multipart boundary
+        // Try canonical parsing first for JSON
         const formData = new FormData();
         formData.append("file", file);
-        const res = await fetch("/api/upload/parse-excel", { method: "POST", body: formData });
-        // Read raw text first so we can give a useful error if it's not JSON
+        const res = await fetch("/api/upload/parse-canonical", { method: "POST", body: formData });
+        const rawText = await res.text();
+        let data: any;
+        try { data = JSON.parse(rawText); } catch {
+          // Fallback to client-side parsing
+          const text = await file.text();
+          parsed = parseJSON(text);
+        }
+        if (data) {
+          if (!res.ok) throw new Error(data.error || "JSON parsing failed");
+          parsed = data.testCases ?? [];
+          canonicalResult = data.canonical;
+          stats = data.stats;
+          errors.push(...(data.errors || []));
+        }
+      } else if (ext === "csv") {
+        // Use canonical parsing for CSV
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/upload/parse-canonical", { method: "POST", body: formData });
+        const rawText = await res.text();
+        let data: any;
+        try { data = JSON.parse(rawText); } catch {
+          // Fallback to client-side parsing
+          const text = await file.text();
+          const rows = parseCSV(text);
+          parsed = csvRowsToTestCases(rows);
+        }
+        if (data) {
+          if (!res.ok) throw new Error(data.error || "CSV parsing failed");
+          parsed = data.testCases ?? [];
+          canonicalResult = data.canonical;
+          stats = data.stats;
+          errors.push(...(data.errors || []));
+        }
+      } else if (ext === "xlsx" || ext === "xls") {
+        // Use canonical parsing for Excel (with enhanced validation)
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/upload/parse-canonical", { method: "POST", body: formData });
         const rawText = await res.text();
         let data: any;
         try {
           data = JSON.parse(rawText);
         } catch {
-          // Server returned HTML (error page) or non-JSON — surface the real message
           const snippet = rawText.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
           throw new Error(`Server error: ${snippet || "Unexpected response from server"}`);
         }
         if (!res.ok) throw new Error(data.error || "Excel parsing failed on server");
         parsed = data.testCases ?? [];
+        canonicalResult = data.canonical;
+        stats = data.stats;
         errors.push(...(data.errors || []));
       } else if (ext === "txt") {
         const text = await file.text();
@@ -439,11 +533,14 @@ export default function UploadTestCases() {
         totalRows: parsed.length,
         parsed,
         errors,
+        canonical: canonicalResult,
+        stats,
       });
 
+      const scoreInfo = canonicalResult ? ` (Score: ${canonicalResult.overallScore}%)` : "";
       toast({
         title: "File Parsed Successfully",
-        description: `Found ${validCount} valid test cases in ${file.name}`,
+        description: `Found ${validCount} valid test cases in ${file.name}${scoreInfo}`,
       });
 
       if (validCount > 0) setActiveTab("import");
@@ -525,38 +622,34 @@ export default function UploadTestCases() {
       toast({ title: "No Test Cases", description: "Import test cases first.", variant: "destructive" });
       return;
     }
-
     setIsGenerating(true);
-    setGenProgress(0);
-    const scripts: GeneratedScript[] = [];
-
+    setGenProgress(10);
     try {
-      for (let i = 0; i < cases.length; i++) {
-        const tc = cases[i];
-        const res = await apiRequest("POST", "/api/generate-script", {
-          testCaseId: tc.id,
-          framework,
-          language,
-        });
-        const data = await res.json();
-        scripts.push({
-          testCaseId:    tc.id,
-          testCaseTitle: tc.title,
-          language,
-          framework,
-          code:          data.code,
-          generatedBy:   data.generatedBy ?? "rule-based",
-        });
-        setGenProgress(Math.round(((i + 1) / cases.length) * 100));
-      }
-
-      setGeneratedScripts(scripts);
-      toast({
-        title: "Scripts Generated",
-        description: `Generated ${scripts.length} ${language} scripts using ${framework}.`,
+      // ONE combined AITASExecutor for ALL test cases
+      const res = await apiRequest("POST", "/api/generate-combined-script", {
+        testCaseIds: cases.map((tc: any) => tc.id),
+        framework,
+        language,
       });
-
-      setActiveTab("execute");
+      setGenProgress(80);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Server error");
+      const extMap: Record<string,string> = { typescript:"ts", javascript:"js", python:"py", java:"java", csharp:"cs" };
+      const ext = extMap[language] ?? "txt";
+      const combined: GeneratedScript = {
+        testCaseId:    "combined",
+        testCaseTitle: `AITASExecutor — ${cases.length} Test Case${cases.length !== 1 ? "s" : ""} Combined`,
+        language,
+        framework,
+        code:          data.code,
+        generatedBy:   data.generatedBy ?? "rule-based",
+      };
+      setGeneratedScripts([combined]);
+      setGenProgress(100);
+      toast({
+        title: "✅ Combined Script Ready",
+        description: `AITASExecutor.${ext} generated for all ${cases.length} test case${cases.length !== 1 ? "s" : ""}. Click View Code to review and download.`,
+      });
     } catch (err: any) {
       toast({ title: "Generation Failed", description: err.message, variant: "destructive" });
     } finally {
@@ -567,18 +660,14 @@ export default function UploadTestCases() {
   // ── Download all scripts ──────────────────────────────────────────────────────
 
   const handleDownloadAll = () => {
-    const extMap: Record<string, string> = {
-      typescript: "ts", javascript: "js", python: "py", java: "java", csharp: "cs",
-    };
+    const extMap: Record<string,string> = { typescript:"ts", javascript:"js", python:"py", java:"java", csharp:"cs" };
     const ext = extMap[language] ?? "txt";
-
     generatedScripts.forEach(s => {
+      const filename = s.testCaseId === "combined" ? `AITASExecutor.${ext}` : `${s.testCaseTitle.replace(/[^a-z0-9]/gi,"_")}.${ext}`;
       const blob = new Blob([s.code], { type: "text/plain" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
-      a.href     = url;
-      a.download = `${s.testCaseTitle.replace(/[^a-z0-9]/gi, "_")}.${ext}`;
-      a.click();
+      a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
     });
   };
@@ -782,6 +871,167 @@ export default function UploadTestCases() {
               </CardContent>
             </Card>
           </div>
+
+          {/* ═══════════════════════════════════════════════════════════════════
+              CANONICAL VALIDATION DASHBOARD
+          ═══════════════════════════════════════════════════════════════════ */}
+          {uploadResult?.canonical && (
+            <Card className="border-2 border-primary/20">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      "h-12 w-12 rounded-xl flex items-center justify-center font-bold text-lg",
+                      uploadResult.canonical.overallScore >= 80 ? "bg-emerald-500/15 text-emerald-600" :
+                      uploadResult.canonical.overallScore >= 60 ? "bg-amber-500/15 text-amber-600" :
+                      "bg-destructive/15 text-destructive"
+                    )}>
+                      {uploadResult.canonical.overallScore}%
+                    </div>
+                    <div>
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Activity className="h-4 w-4" />
+                        Canonical Validation Score
+                      </CardTitle>
+                      <CardDescription className="text-xs mt-0.5">
+                        Enterprise-grade test case analysis
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {uploadResult.stats && (
+                      <>
+                        <Badge variant="outline" className="bg-primary/5">
+                          <TrendingUp className="h-3 w-3 mr-1" />
+                          {uploadResult.stats.totalScenarios} scenarios
+                        </Badge>
+                        <Badge variant="outline" className="bg-primary/5">
+                          {uploadResult.stats.totalSteps} steps
+                        </Badge>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Stats Grid */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                    <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span className="text-xs font-medium">Valid</span>
+                    </div>
+                    <p className="text-2xl font-bold mt-1">{uploadResult.stats?.validTestCases ?? 0}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                    <div className="flex items-center gap-2 text-destructive">
+                      <XCircle className="h-4 w-4" />
+                      <span className="text-xs font-medium">Invalid</span>
+                    </div>
+                    <p className="text-2xl font-bold mt-1">{uploadResult.stats?.invalidTestCases ?? 0}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                    <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                      <AlertTriangle className="h-4 w-4" />
+                      <span className="text-xs font-medium">Warnings</span>
+                    </div>
+                    <p className="text-2xl font-bold mt-1">{uploadResult.stats?.warnings ?? 0}</p>
+                  </div>
+                  <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                    <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                      <Star className="h-4 w-4" />
+                      <span className="text-xs font-medium">Score</span>
+                    </div>
+                    <p className="text-2xl font-bold mt-1">{uploadResult.canonical.overallScore}%</p>
+                  </div>
+                </div>
+
+                {/* Per-test case validation results */}
+                {uploadResult.canonical.validation.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold">Test Case Validation Details</h4>
+                      <Badge variant="outline" className="text-xs">
+                        {uploadResult.canonical.validation.length} test cases analyzed
+                      </Badge>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                      {uploadResult.canonical.validation.map((v, idx) => (
+                        <div key={idx} className={cn(
+                          "flex items-start gap-3 p-3 rounded-lg border text-sm",
+                          v.isValid 
+                            ? "border-emerald-500/30 bg-emerald-500/5" 
+                            : "border-destructive/30 bg-destructive/5"
+                        )}>
+                          <div className={cn(
+                            "h-8 w-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0",
+                            v.score >= 80 ? "bg-emerald-500/20 text-emerald-600" :
+                            v.score >= 60 ? "bg-amber-500/20 text-amber-600" :
+                            "bg-destructive/20 text-destructive"
+                          )}>
+                            {v.score}%
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{v.title}</p>
+                            <p className="text-xs text-muted-foreground">{v.testCaseId}</p>
+                            {v.errors.length > 0 && (
+                              <div className="mt-1 space-y-0.5">
+                                {v.errors.slice(0, 2).map((e, ei) => (
+                                  <p key={ei} className="text-xs text-destructive flex items-center gap-1">
+                                    <XCircle className="h-3 w-3" />
+                                    {e.field}: {e.message}
+                                  </p>
+                                ))}
+                                {v.errors.length > 2 && (
+                                  <p className="text-xs text-muted-foreground">
+                                    +{v.errors.length - 2} more errors
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                            {v.warnings.length > 0 && v.errors.length === 0 && (
+                              <div className="mt-1 space-y-0.5">
+                                {v.warnings.slice(0, 2).map((w, wi) => (
+                                  <p key={wi} className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                                    <AlertTriangle className="h-3 w-3" />
+                                    {w.field}: {w.message}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {v.isValid ? (
+                            <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
+                          ) : (
+                            <XCircle className="h-5 w-5 text-destructive shrink-0" />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Supported Action Types */}
+                {uploadResult.canonical.actionTypes && uploadResult.canonical.actionTypes.length > 0 && (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-muted-foreground">Supported Action Types</h4>
+                    <div className="flex flex-wrap gap-1">
+                      {uploadResult.canonical.actionTypes.slice(0, 15).map(at => (
+                        <Badge key={at} variant="outline" className="text-[10px] py-0 px-1.5 font-mono">
+                          {at}
+                        </Badge>
+                      ))}
+                      {uploadResult.canonical.actionTypes.length > 15 && (
+                        <Badge variant="secondary" className="text-[10px] py-0 px-1.5">
+                          +{uploadResult.canonical.actionTypes.length - 15} more
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Parse results preview */}
           {uploadResult && uploadResult.parsed.length > 0 && (
@@ -1313,16 +1563,15 @@ export default function UploadTestCases() {
                   disabled={isGenerating || importedCases.length === 0}
                 >
                   {isGenerating ? (
-                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating...</>
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Generating Combined Script...</>
                   ) : (
-                    <><Sparkles className="h-4 w-4 mr-2" />Generate {importedCases.length} Scripts</>
+                    <><Sparkles className="h-4 w-4 mr-2" />Generate Combined Script ({importedCases.length} Cases)</>
                   )}
                 </Button>
-
                 {generatedScripts.length > 0 && (
                   <Button variant="outline" className="w-full" onClick={handleDownloadAll}>
                     <Download className="h-4 w-4 mr-2" />
-                    Download All Scripts
+                    Download AITASExecutor File
                   </Button>
                 )}
               </CardContent>
@@ -1332,11 +1581,11 @@ export default function UploadTestCases() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="text-base">Generated Scripts</CardTitle>
+                    <CardTitle className="text-base">Generated Script</CardTitle>
                     <CardDescription>
                       {generatedScripts.length > 0
-                        ? `${generatedScripts.length} scripts · ${LANGUAGES.find(l => l.value === language)?.label} · ${framework}`
-                        : "Scripts will appear here after generation"}
+                        ? `ONE combined AITASExecutor \u2014 ${LANGUAGES.find(l => l.value === language)?.label} \u00b7 ${framework} \u00b7 ${importedCases.length} test case${importedCases.length !== 1 ? "s" : ""}`
+                        : "Combined executor will appear here after generation"}
                     </CardDescription>
                   </div>
                 </div>
@@ -1345,46 +1594,63 @@ export default function UploadTestCases() {
                 {generatedScripts.length === 0 ? (
                   <div className="py-12 text-center text-muted-foreground">
                     <Code2 className="h-12 w-12 mx-auto mb-4 opacity-40" />
-                    <p className="font-medium">No scripts generated yet</p>
-                    <p className="text-sm mt-1">Configure and click Generate Scripts</p>
+                    <p className="font-medium">No combined script generated yet</p>
+                    <p className="text-sm mt-1">Select framework &amp; language, then click Generate Combined Script</p>
                   </div>
                 ) : (
-                  <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
-                    {generatedScripts.map((s, i) => (
-                      <div key={i} className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-muted/30 gap-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Code2 className="h-4 w-4 text-primary shrink-0" />
-                          <div className="min-w-0">
-                            <p className="font-medium text-sm truncate">{s.testCaseTitle}</p>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{s.framework}</Badge>
-                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                {LANGUAGES.find(l => l.value === s.language)?.label}
-                              </Badge>
-                              {s.generatedBy === "rule-based" && (
-                                <Badge className="text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30">
-                                  rule-based
+                  <div className="space-y-3">
+                    {generatedScripts.map((s, i) => {
+                      const extMap2: Record<string,string> = { typescript:"ts",javascript:"js",python:"py",java:"java",csharp:"cs" };
+                      const ext2 = extMap2[s.language] ?? "txt";
+                      return (
+                        <div key={i} className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                          <div className="flex items-start gap-3">
+                            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                              <Code2 className="h-5 w-5 text-primary" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-sm">{s.testCaseTitle}</p>
+                              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{s.framework}</Badge>
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{LANGUAGES.find(l=>l.value===s.language)?.label}</Badge>
+                                <Badge className="text-[10px] px-1.5 py-0 bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30">
+                                  {importedCases.length} cases combined
                                 </Badge>
-                              )}
+                                {s.generatedBy === "ai"
+                                  ? <Badge className="text-[10px] px-1.5 py-0 bg-blue-500/15 text-blue-600 border-blue-500/30">AI generated</Badge>
+                                  : <Badge className="text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-600 border-amber-500/30">rule-based</Badge>}
+                              </div>
                             </div>
                           </div>
+                          <div className="rounded-lg bg-muted/50 border border-border/40 px-3 py-2 text-xs text-muted-foreground space-y-0.5">
+                            <p>✅ <span className="font-medium">Class:</span> <code>AITASExecutor</code> &nbsp;·&nbsp; <span className="font-medium">Method:</span> <code>executeAllTests()</code></p>
+                            <p>✅ <span className="font-medium">Single WebDriver</span> — init once, quit in finally block</p>
+                            <p>✅ <span className="font-medium">Utilities:</span> <code>performAction()</code> &nbsp;<code>switchFrame()</code> &nbsp;<code>switchWindow()</code> &nbsp;<code>handleShadow()</code></p>
+                            <p>✅ Each step has its own <span className="font-medium">try/catch</span> — one failure does not stop execution</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" className="flex-1" onClick={() => setPreviewScript(s)}>
+                              <Eye className="h-3.5 w-3.5 mr-1.5" />View Code
+                            </Button>
+                            <Button size="sm" variant="outline" className="flex-1" onClick={() => {
+                              const blob = new Blob([s.code], { type:"text/plain" });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement("a");
+                              a.href=url; a.download=`AITASExecutor.${ext2}`; a.click();
+                              URL.revokeObjectURL(url);
+                              toast({ title:"Downloaded", description:`AITASExecutor.${ext2} saved.` });
+                            }}>
+                              <Download className="h-3.5 w-3.5 mr-1.5" />Download .{ext2}
+                            </Button>
+                          </div>
                         </div>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setPreviewScript(s)}
-                          className="shrink-0"
-                        >
-                          <Eye className="h-3.5 w-3.5 mr-1.5" />
-                          Preview
-                        </Button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 {generatedScripts.length > 0 && (
                   <Button className="w-full mt-4" onClick={() => setActiveTab("execute")}>
-                    Proceed to Run Tests
+                    <Zap className="h-4 w-4 mr-2" />Run Tests in AITAS
                     <ChevronRight className="h-4 w-4 ml-1" />
                   </Button>
                 )}
@@ -1540,22 +1806,58 @@ export default function UploadTestCases() {
 
       {/* ── Script Preview Dialog ── */}
       <Dialog open={!!previewScript} onOpenChange={() => setPreviewScript(null)}>
-        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Code2 className="h-4 w-4" />
-              {previewScript?.testCaseTitle}
-              <Badge variant="secondary" className="ml-2 text-xs">
-                {LANGUAGES.find(l => l.value === previewScript?.language)?.label} · {previewScript?.framework}
-              </Badge>
-            </DialogTitle>
+        <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col p-6">
+          <DialogHeader className="pb-4 border-b">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <Code2 className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-semibold">{previewScript?.testCaseId === "combined" ? "AITASExecutor — Combined Script" : "Generated Script"}</DialogTitle>
+                  <p className="text-xs text-muted-foreground mt-1">{previewScript?.testCaseTitle}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge className="text-xs">{LANGUAGES.find(l => l.value === previewScript?.language)?.label}</Badge>
+                <Badge variant="secondary" className="text-xs">{previewScript?.framework}</Badge>
+              </div>
+            </div>
           </DialogHeader>
-          <div className="flex-1 overflow-auto rounded-xl bg-muted p-4">
-            <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap">
-              {previewScript?.code}
-            </pre>
+          
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between py-3 px-4 border-b bg-muted/30">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Code2 className="h-3.5 w-3.5" />
+                <span className="font-mono">{previewScript?.testCaseTitle.replace(/[^a-z0-9]/gi, "_")}.{
+                  (["typescript", "javascript", "python", "java", "csharp"] as const).reduce((m, lang) => {
+                    m[lang] = { typescript: "ts", javascript: "js", python: "py", java: "java", csharp: "cs" }[lang];
+                    return m;
+                  }, {} as Record<string, string>)[previewScript?.language ?? "ts"] ?? "txt"
+                }</span>
+              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs gap-1.5"
+                onClick={() => {
+                  if (previewScript) navigator.clipboard.writeText(previewScript.code);
+                  toast({ title: "Copied", description: "Script copied to clipboard." });
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                Copy
+              </Button>
+            </div>
+            
+            <div className="flex-1 overflow-auto bg-slate-950 rounded-b-lg">
+              <pre className="font-mono text-sm leading-relaxed text-slate-100 p-4 whitespace-pre-wrap break-words">
+                <code>{previewScript?.code}</code>
+              </pre>
+            </div>
           </div>
-          <div className="flex gap-2 pt-2">
+          
+          <div className="flex gap-2 pt-4 border-t">
             <Button
               variant="outline"
               className="flex-1"
@@ -1567,23 +1869,24 @@ export default function UploadTestCases() {
                   const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
                   a.href = url;
-                  a.download = `${previewScript.testCaseTitle.replace(/[^a-z0-9]/gi, "_")}.${ext}`;
+                  a.download = previewScript.testCaseId === "combined" ? `AITASExecutor.${ext}` : `${previewScript.testCaseTitle.replace(/[^a-z0-9]/gi,"_")}.${ext}`;
                   a.click();
                   URL.revokeObjectURL(url);
+                  toast({ title: "Downloaded", description: "Script file downloaded successfully." });
                 }
               }}
             >
-              <Download className="h-4 w-4 mr-2" /> Download
+              <Download className="h-4 w-4 mr-2" />Download AITASExecutor File
             </Button>
             <Button
-              variant="outline"
               className="flex-1"
               onClick={() => {
                 if (previewScript) navigator.clipboard.writeText(previewScript.code);
                 toast({ title: "Copied", description: "Script copied to clipboard." });
               }}
             >
-              Copy Code
+              <Copy className="h-4 w-4 mr-2" />
+              Copy to Clipboard
             </Button>
           </div>
         </DialogContent>

@@ -146,7 +146,10 @@ export class TestCaseValidator {
         }
 
         // ===== SELECTOR VALIDATION =====
-        if (!step.target && step.action !== "logout" && step.action !== "screenshot" && step.action !== "acceptAlert" && step.action !== "switchWindow") {
+        // Actions that don't require a target selector
+        const noTargetActions = ["logout", "screenshot", "acceptAlert", "switchWindow", "wait"];
+        
+        if (!step.target && !noTargetActions.includes(step.action)) {
           errors.push(`Test case ${i + 1}, Step ${j + 1}: missing target (selector or URL)`);
           details.selectorScore -= 15;
           score -= 15;
@@ -170,12 +173,21 @@ export class TestCaseValidator {
             score -= 2;
           }
 
-          // Check for vague selectors
+          // Check for vague selectors - but allow specific patterns
+          const isSpecificSelector = 
+            step.target.includes("[") ||      // Has attribute selector
+            step.target.includes("#") ||       // Has ID selector
+            step.target.includes(".") ||       // Has class selector
+            step.target.startsWith("//") ||    // XPath
+            step.target.startsWith("http") ||  // URL
+            step.target.startsWith("/") ||     // Path
+            step.target.includes("data-") ||   // Data attribute
+            step.target.includes(":has-text"); // Playwright selector
+            
           if (
-            step.target.includes("the ") ||
-            step.target.includes("button") ||
-            step.target.includes("field") ||
-            (step.target.includes("element") && step.target.length < 20)
+            !isSpecificSelector &&
+            (step.target.includes("the ") ||
+             /^(button|field|element|input|link)$/i.test(step.target.trim()))
           ) {
             warnings.push(
               `Test case ${i + 1}, Step ${j + 1}: selector may be too vague - "${step.target}"`
@@ -286,16 +298,17 @@ export class TestCaseValidator {
    * Check if step is atomic (single action)
    */
   private static isAtomicStep(step: any): boolean {
-    if (!step || !step.action) return false;
+    // If step or action is missing, consider it atomic (other validation will catch missing fields)
+    if (!step || !step.action) return true;
 
     // Keywords that indicate multiple actions combined
     const multiActionPatterns = [
-      /and then/i,
-      /also /i,
-      /then /i,
-      /plus /i,
-      /afterwards/i,
-      /first\s+\w+\s+then/i,
+      /\s+and then\s+/i,
+      /\s+also\s+/i,
+      /\s+then\s+/i,
+      /\s+plus\s+/i,
+      /\s+afterwards\s+/i,
+      /first\s+\w+\s+then\s+/i,
       /both\s+\w+\s+and\s+\w+/i,
     ];
 

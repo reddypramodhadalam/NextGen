@@ -20,7 +20,11 @@ import Environments from "@/pages/environments";
 import Projects from "@/pages/projects";
 import AppProfiles from "@/pages/app-profiles";
 import EnterpriseExecutions from "@/pages/enterprise-executions";
+import EnterpriseAgents from "@/pages/enterprise-agents";
+import CompliancePage from "@/pages/compliance";
+import LLMTestsPage from "@/pages/llm-tests";
 import AIHealer from "@/pages/ai-healer";
+import EnterpriseAIHealerPage from "@/pages/ai-healer-enterprise";
 import PerformancePage from "@/pages/performance";
 import TestDataFactoryPage from "@/pages/test-data-factory";
 import CICDPage from "@/pages/cicd";
@@ -33,6 +37,7 @@ import Documentation from "@/pages/documentation";
 import UploadTestCases from "@/pages/upload";
 import MultiAgentPage from "@/pages/multi-agent";
 import LocalAgentSetup from "@/pages/local-agent-setup";
+import KnowledgeBasePage from "@/pages/knowledge-base";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedRouter() {
@@ -46,11 +51,15 @@ function AuthenticatedRouter() {
       <Route path="/reports" component={Reports} />
       <Route path="/agents" component={Agents} />
       <Route path="/agents/setup" component={LocalAgentSetup} />
+      <Route path="/agents/enterprise" component={EnterpriseAgents} />
       <Route path="/environments" component={Environments} />
       <Route path="/projects" component={Projects} />
       <Route path="/app-profiles" component={AppProfiles} />
       <Route path="/enterprise" component={EnterpriseExecutions} />
+      <Route path="/compliance" component={CompliancePage} />
+      <Route path="/llm-tests" component={LLMTestsPage} />
       <Route path="/healer" component={AIHealer} />
+      <Route path="/healer/enterprise" component={EnterpriseAIHealerPage} />
       <Route path="/performance" component={PerformancePage} />
       <Route path="/data-factory" component={TestDataFactoryPage} />
       <Route path="/cicd" component={CICDPage} />
@@ -58,6 +67,7 @@ function AuthenticatedRouter() {
       <Route path="/admin" component={AdminPage} />
       <Route path="/upload" component={UploadTestCases} />
       <Route path="/multi-agent" component={MultiAgentPage} />
+      <Route path="/knowledge" component={KnowledgeBasePage} />
       <Route path="/settings" component={Settings} />
       <Route path="/docs" component={Documentation} />
       <Route component={NotFound} />

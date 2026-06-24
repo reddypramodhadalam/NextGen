@@ -4,3 +4,22 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+.git
+
+# SQLite database files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Replit / local state
+.local/
+.replit
+replit.nix
+
+# Logs and temp
+*.log
+server.pid
+test-output.txt
