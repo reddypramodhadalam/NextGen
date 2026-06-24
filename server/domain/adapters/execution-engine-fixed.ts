@@ -40,8 +40,9 @@ export class ExecutionEngineFixed {
       logger.info(`[ExecutionEngine] Initializing browser...`);
 
       this.browser = await chromium.launch({
-        headless: false,  // Set to true for production
+        headless: true,
         slowMo: 500,      // Slow down actions for reliability
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
       });
 
       const context = await this.browser.newContext();

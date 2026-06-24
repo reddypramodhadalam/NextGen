@@ -328,11 +328,14 @@ export class SalesforceExecutor {
 
   private async initBrowser(config: SalesforceConfig): Promise<void> {
     this.browser = await chromium.launch({
-      headless: false,
+      headless: true,
       args: [
         "--disable-blink-features=AutomationControlled",
         "--disable-web-security",
         "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
       ],
     });
 

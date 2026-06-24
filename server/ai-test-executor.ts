@@ -352,7 +352,7 @@ export class AITestExecutor {
         try {
           console.log("[AIExecutor] Trying Playwright as backup...");
           const { chromium } = await import("playwright");
-          this.playwrightBrowser = await chromium.launch({ headless: false });
+          this.playwrightBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
           console.log("[AIExecutor] Playwright initialized as backup");
           return true;
         } catch (pwError: any) {

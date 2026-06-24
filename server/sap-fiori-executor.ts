@@ -262,8 +262,8 @@ export class SAPFioriExecutor {
 
   private async initBrowser(config: SAPFioriConfig): Promise<void> {
     this.browser = await chromium.launch({
-      headless: false,
-      args: ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-web-security"],
+      headless: true,
+      args: ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-web-security"],
     });
     this.context = await this.browser.newContext({
       viewport: { width: 1440, height: 900 },
