@@ -274,33 +274,35 @@ export class AITestExecutor {
     try {
       if (!this.driver && !this.playwrightBrowser) return;
       
-      // Close all windows except the first one
-      try {
-        const handles = await this.driver.getAllWindowHandles();
-        if (handles.length > 1) {
-          const mainWindow = handles[0];
-          for (const handle of handles) {
-            if (handle !== mainWindow) {
-              try {
-                await this.driver.switchTo().window(handle);
-                await this.driver.close();
-              } catch { }
-            }
-          }
-          await this.driver.switchTo().window(mainWindow);
-        }
-      } catch { }
-
-      // Switch back to main content
-      try {
-        await this.driver.switchTo().defaultContent();
-      } catch { }
-
-      // Quit driver
+      // Selenium cleanup
       if (this.driver) {
+        // Close all windows except the first one
+        try {
+          const handles = await this.driver.getAllWindowHandles();
+          if (handles.length > 1) {
+            const mainWindow = handles[0];
+            for (const handle of handles) {
+              if (handle !== mainWindow) {
+                try {
+                  await this.driver.switchTo().window(handle);
+                  await this.driver.close();
+                } catch { }
+              }
+            }
+            await this.driver.switchTo().window(mainWindow);
+          }
+        } catch { }
+
+        // Switch back to main content
+        try {
+          await this.driver.switchTo().defaultContent();
+        } catch { }
+
+        // Quit driver
         await this.driver.quit();
         this.driver = null;
       }
+
       // Cleanup Playwright resources
       if (this.playwrightPage) { try { await this.playwrightPage.close(); } catch {} this.playwrightPage = null; }
       if (this.playwrightContext) { try { await this.playwrightContext.close(); } catch {} this.playwrightContext = null; }
@@ -709,11 +711,11 @@ export class AITestExecutor {
   // ============================================================================
 
   private async getPageSnapshot(): Promise<PageSnapshot> {
-    if (!this.driver && !this.playwrightPage) {
+    if (!this.driver) {
+      if (this.playwrightPage) {
+        return this.getPageSnapshotPlaywright();
+      }
       throw new Error("No browser driver available");
-    }
-    if (!this.driver && this.playwrightPage) {
-      return this.getPageSnapshotPlaywright();
     }
 
     const snapshot: PageSnapshot = {
@@ -2956,12 +2958,12 @@ logs.push(`✓ Switched to iframe[0] automatically`);
           break;
         }
 
-        case "submit":
-        case "pressEnter": {
+        case "pressKey": {
           const locator = buildPwLocator(action.locators, action.elementXPath);
-          await locator.first().press('Enter', { timeout: 10000 });
+          const key = action.value || 'Enter';
+          await locator.first().press(key, { timeout: 10000 });
           await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-          logs.push(`[Playwright] Pressed Enter on: ${action.elementXPath}`);
+          logs.push(`[Playwright] Pressed ${key} on: ${action.elementXPath}`);
           break;
         }
 
@@ -3010,8 +3012,11 @@ logs.push(`✓ Switched to iframe[0] automatically`);
         }
 
         case "switchToIframe":
-        case "switchToMainContent":
+        case "switchToDefaultContent":
+        case "switchToParentFrame":
         case "switchToWindow":
+        case "switchToNewWindow":
+        case "closeWindow":
           // Playwright handles iframes/windows via frame locators — log and continue
           logs.push(`[Playwright] ${action.type}: handled by Playwright frame context`);
           break;
