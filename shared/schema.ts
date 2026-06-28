@@ -232,6 +232,9 @@ export const testReports = pgTable("test_reports", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   executionId: varchar("execution_id").references(() => testExecutions.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
+  type: text("type").default("execution"),
+  format: text("format").default("html"),
+  content: text("content"),
   summary: text("summary"),
   passRate: integer("pass_rate"), // percentage
   totalDuration: integer("total_duration"), // in milliseconds

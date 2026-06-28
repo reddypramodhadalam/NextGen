@@ -308,6 +308,91 @@ import { useState } from "react";
       });
     };
 
+    // Download a single generated report. Uses the stored `content` when the
+    // server pre-rendered it, otherwise builds an HTML document on the fly from
+    // the report's summary/insights so the download always works.
+    const downloadReport = (report: TestReport) => {
+      try {
+        const r = report as any;
+        const fmt = (r.format || "html").toLowerCase();
+        const safeName = (report.name || "test-report").replace(/[^a-z0-9-_]+/gi, "-");
+        let content = r.content || "";
+        let mimeType = fmt === "json" ? "application/json" : fmt === "xml" ? "application/xml" : "text/html";
+        let ext = fmt === "json" ? "json" : fmt === "xml" ? "xml" : "html";
+
+        // No pre-rendered content → synthesize a document from the stored fields.
+        if (!content) {
+          const summary: any = (report as any).summary || {};
+          const insights: any[] = Array.isArray((report as any).insights) ? (report as any).insights : [];
+          const passRate = report.passRate ?? summary.passRate ?? 0;
+          const total = summary.total ?? summary.totalTests ?? 0;
+          const passed = summary.passed ?? 0;
+          const failed = summary.failed ?? 0;
+          const durationSec = report.totalDuration ? Math.round(report.totalDuration / 1000) : 0;
+
+          content = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>${report.name}</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; background: #f9fafb; margin: 0; padding: 40px; color: #111827; }
+    .header { margin-bottom: 24px; }
+    .header h1 { margin: 0 0 4px; }
+    .meta { color: #6b7280; font-size: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 24px 0; }
+    .stat-card { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .stat-value { font-size: 30px; font-weight: 700; }
+    .stat-label { color: #6b7280; margin-top: 4px; font-size: 13px; }
+    .passed { color: #10b981; } .failed { color: #ef4444; }
+    .insights { background: #fff; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .insight { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 14px; }
+    .insight.info { background: #eff6ff; color: #1d4ed8; }
+    .insight.success { background: #d1fae5; color: #059669; }
+    .insight.warning { background: #fef3c7; color: #b45309; }
+    .insight.error { background: #fee2e2; color: #dc2626; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>${report.name}</h1>
+    <p class="meta">Generated: ${new Date(report.createdAt || Date.now()).toLocaleString()}${summary.framework ? ` · Framework: ${summary.framework}` : ""}</p>
+  </div>
+  <div class="stats">
+    <div class="stat-card"><div class="stat-value">${passRate}%</div><div class="stat-label">Pass Rate</div></div>
+    <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total Tests</div></div>
+    <div class="stat-card"><div class="stat-value passed">${passed}</div><div class="stat-label">Passed</div></div>
+    <div class="stat-card"><div class="stat-value failed">${failed}</div><div class="stat-label">Failed</div></div>
+  </div>
+  ${durationSec ? `<p class="meta">Total duration: ${durationSec}s</p>` : ""}
+  ${insights.length ? `<div class="insights"><h3>Insights</h3>${insights.map(i => `<div class="insight ${i.type || "info"}">${i.message || ""}</div>`).join("")}</div>` : ""}
+</body>
+</html>`;
+          mimeType = "text/html";
+          ext = "html";
+        }
+
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${safeName}.${ext}`;
+        link.style.display = "none";
+        document.body.appendChild(link);
+        setTimeout(() => {
+          link.click();
+          setTimeout(() => {
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          }, 100);
+        }, 0);
+
+        toast({ title: "Report Downloaded", description: `Downloading ${safeName}.${ext}...` });
+      } catch (err: any) {
+        toast({ title: "Download failed", description: err?.message || "Could not download report", variant: "destructive" });
+      }
+    };
+
     if (isLoading) {
       return (
         <div className="flex items-center justify-center h-full">
@@ -543,6 +628,7 @@ import { useState } from "react";
                           <Button
                             size="icon"
                             variant="ghost"
+                            onClick={() => downloadReport(report)}
                             data-testid={`button-download-report-${report.id}`}
                           >
                             <Download className="h-4 w-4" />

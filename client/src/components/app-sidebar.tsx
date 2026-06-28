@@ -407,7 +407,7 @@ export function AppSidebar() {
         <div className="flex items-center justify-between px-3 py-1.5 mb-1">
           <div className="flex items-center gap-1.5">
             <Shield className="h-3 w-3 text-sidebar-foreground/30" />
-            <span className="text-[10px] text-sidebar-foreground/30 font-medium">v1.0.0 Enterprise</span>
+            <span className="text-[10px] text-sidebar-foreground/30 font-medium">v2.0.0 Enterprise</span>
           </div>
           <div className="flex items-center gap-1 text-[10px] text-emerald-400/70 font-medium">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.8)]" />
