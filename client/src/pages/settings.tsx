@@ -36,8 +36,23 @@ import {
   MessageSquare,
   Send,
   AlertCircle,
+  ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
 import type { PlatformSetting } from "@shared/schema";
+import { useGovernance } from "@/hooks/useGovernance";
+import { AuditTrailViewer } from "@/components/governance";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 type SettingsState = {
   notifications: {
@@ -830,7 +845,193 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ─────────────────────────────────────────────────────────────────
+            REGULATORY MODE — controls VALIDATED vs NON_VALIDATED behavior.
+            This is platform-wide and affects ALL users.
+        ───────────────────────────────────────────────────────────────────── */}
+        <RegulatoryModeCard />
+
+        {/* ── Audit trail viewer ─────────────────────────────────────── */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              Governance Audit Log
+            </CardTitle>
+            <CardDescription>
+              Immutable, append-only log of every governance event (AI generation, reviews, executions blocked, bypass attempts).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AuditTrailViewer verbose={false} maxHeight="500px" />
+          </CardContent>
+        </Card>
       </div>
     </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RegulatoryModeCard
+// ═══════════════════════════════════════════════════════════════════════════
+// Controls VALIDATED vs NON_VALIDATED platform mode.
+// Switching is an audit-logged, signed event.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function RegulatoryModeCard() {
+  const governance = useGovernance();
+  const { toast } = useToast();
+  const [pendingType, setPendingType] = useState<"VALIDATED" | "NON_VALIDATED" | null>(null);
+
+  const flipMutation = useMutation({
+    mutationFn: async (systemType: "VALIDATED" | "NON_VALIDATED") => {
+      const res = await apiRequest("PUT", "/api/governance/system-type", { systemType });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/governance/mode"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/governance/audit"] });
+      toast({
+        title: "Regulatory mode updated",
+        description: "Platform behavior has changed for ALL users.",
+      });
+      setPendingType(null);
+    },
+    onError: (err: any) => {
+      toast({
+        variant: "destructive",
+        title: "Could not update mode",
+        description: err?.message || "Backend rejected the change.",
+      });
+    },
+  });
+
+  const isValidated = governance.isValidated;
+  const target = isValidated ? "NON_VALIDATED" : "VALIDATED";
+  const targetLabel = target === "VALIDATED"
+    ? "Validated (GxP / SOX / ISO)"
+    : "Non-Validated (sandbox / R&D)";
+
+  return (
+    <Card className="lg:col-span-2 border-l-4 border-l-amber-500">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-amber-600" />
+          Regulatory Mode
+        </CardTitle>
+        <CardDescription>
+          Controls platform-wide governance. In <strong>VALIDATED</strong> mode the platform enforces 21 CFR Part 11 / EU Annex 11 controls: every AI output requires human approval with e-signature, AI fixes cannot be auto-applied, and evidence must be attested before AQM upload.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs text-muted-foreground">Current mode</p>
+              <p className="mt-1 text-2xl font-bold">
+                {isValidated ? (
+                  <span className="text-amber-700 dark:text-amber-400">VALIDATED</span>
+                ) : (
+                  <span className="text-blue-700 dark:text-blue-400">NON_VALIDATED</span>
+                )}
+              </p>
+              {governance.description && (
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {governance.description.summary}
+                </p>
+              )}
+            </div>
+            <div className="text-right">
+              <Badge
+                variant="outline"
+                className={
+                  isValidated
+                    ? "border-amber-500 bg-amber-100 text-amber-900"
+                    : "border-blue-500 bg-blue-100 text-blue-900"
+                }
+              >
+                {isValidated ? "Strict controls active" : "Relaxed controls"}
+              </Badge>
+            </div>
+          </div>
+
+          {governance.description?.controls && governance.description.controls.length > 0 && (
+            <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
+              {governance.description.controls.map((c, i) => (
+                <li key={i} className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-0.5 h-3 w-3 text-emerald-500 flex-shrink-0" />
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              variant={isValidated ? "outline" : "default"}
+              className={!isValidated ? "bg-amber-600 hover:bg-amber-700" : ""}
+              onClick={() => setPendingType(target)}
+              data-testid="button-toggle-regulatory-mode"
+            >
+              <ShieldAlert className="mr-2 h-4 w-4" />
+              Switch to {targetLabel}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <AlertCircle className="h-5 w-5 text-amber-600" />
+                Change Regulatory Mode?
+              </AlertDialogTitle>
+              <AlertDialogDescription className="space-y-2">
+                <p>
+                  You are about to switch the platform from{" "}
+                  <strong>{isValidated ? "VALIDATED" : "NON_VALIDATED"}</strong> to{" "}
+                  <strong>{target}</strong>.
+                </p>
+                {target === "VALIDATED" ? (
+                  <p className="text-amber-700 dark:text-amber-400">
+                    All AI-generated test cases will require explicit human approval before
+                    execution. Auto-application of AI Healer fixes will be blocked. Evidence
+                    upload will require 3-checkbox attestation.
+                  </p>
+                ) : (
+                  <p className="text-amber-700 dark:text-amber-400">
+                    <strong>Warning:</strong> Strict regulatory controls will be relaxed.
+                    AI-generated content can be executed without review. This is suitable only
+                    for sandbox, R&D, or training environments — not for systems supporting
+                    regulated products.
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  This action will be cryptographically logged in the audit trail. It cannot
+                  be undone retroactively.
+                </p>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={flipMutation.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => pendingType && flipMutation.mutate(pendingType)}
+                disabled={flipMutation.isPending}
+                className={target === "VALIDATED" ? "bg-amber-600 hover:bg-amber-700" : ""}
+              >
+                {flipMutation.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Updating…
+                  </>
+                ) : (
+                  <>Confirm switch to {target}</>
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </CardContent>
+    </Card>
   );
 }

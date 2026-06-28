@@ -12,15 +12,26 @@ import {
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
   Zap, Loader2, AlertTriangle, CheckCircle2, XCircle, Wrench,
   Brain, TrendingUp, Shield, RefreshCw, ChevronRight, Sparkles,
-  Clock, Target, Activity, BarChart3,
+  Clock, Target, Activity, BarChart3, Gauge, History, Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TestSuite, TestCase } from "@shared/schema";
+import {
+  AiDisclaimerBanner,
+  HumanReviewGate,
+  type ReviewableItem,
+} from "@/components/governance";
+import { useGovernance } from "@/hooks/useGovernance";
+import { EnterpriseAIHealerPage } from "@/pages/ai-healer-enterprise";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +65,10 @@ interface HealReport {
   overallHealth: HealthStatus;
   autoHealApplied: boolean;
   healedSteps: number;
+  /** Healing mode that produced this report (BASIC | ADVANCED | PRO). */
+  mode?: string;
+  /** Overall confidence score (0-100) for the report's suggestions. */
+  confidenceScore?: number;
 }
 
 interface SuiteAnalysisResult {
@@ -87,6 +102,19 @@ const CATEGORY_CONFIG: Record<FailureCategory, { label: string; color: string }>
   unknown:        { label: "Unknown",         color: "bg-muted text-muted-foreground" },
 };
 
+/**
+ * Safely resolve a failure-category's display config. The backend may emit a
+ * category that isn't in CATEGORY_CONFIG (e.g. a newly added or unexpected
+ * value); in that case we fall back to the "unknown" entry so the UI never
+ * crashes on `cat.color` / `cat.label`.
+ */
+function getCategoryConfig(category: FailureCategory | string | undefined | null) {
+  return (
+    (category && CATEGORY_CONFIG[category as FailureCategory]) ||
+    CATEGORY_CONFIG.unknown
+  );
+}
+
 function ConfidenceBadge({ value }: { value: number }) {
   const color = value >= 80 ? "text-emerald-600" : value >= 60 ? "text-amber-600" : "text-red-500";
   return (
@@ -103,7 +131,7 @@ function SuggestionCard({
   testCaseId: string;
   onApply: (s: HealSuggestion) => void;
 }) {
-  const cat = CATEGORY_CONFIG[suggestion.category];
+  const cat = getCategoryConfig(suggestion.category);
 
   return (
     <div className="p-4 rounded-xl border bg-card space-y-3">
@@ -169,10 +197,11 @@ function SuggestionCard({
 // ─── Report Card ──────────────────────────────────────────────────────────────
 
 function ReportCard({
-  report, onApply,
+  report, onApply, onHistory,
 }: {
   report: HealReport;
   onApply: (testCaseId: string, suggestion: HealSuggestion) => void;
+  onHistory?: (testCaseId: string, title: string) => void;
 }) {
   const health = HEALTH_CONFIG[report.overallHealth];
   const HealthIcon = health.icon;
@@ -204,6 +233,17 @@ function ReportCard({
         </div>
       </AccordionTrigger>
       <AccordionContent className="px-4 pb-4 pt-0">
+        <div className="mb-3 flex justify-end">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 text-xs"
+            onClick={() => onHistory?.(report.testCaseId, report.testCaseTitle)}
+          >
+            <History className="h-3.5 w-3.5" />
+            View Heal History
+          </Button>
+        </div>
         {report.lastFailureMessage && (
           <div className="mb-3 p-3 rounded-lg bg-destructive/5 border border-destructive/20">
             <p className="text-xs font-medium text-destructive mb-1">Last error:</p>
@@ -231,14 +271,25 @@ function ReportCard({
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Standard Healer Panel ────────────────────────────────────────────────────
 
-export default function AIHealer() {
+function StandardHealerPanel() {
   const { toast } = useToast();
   const [selectedSuite, setSelectedSuite] = useState("");
   const [autoHeal, setAutoHeal] = useState(false);
   const [appType, setAppType] = useState("web");
   const [result, setResult] = useState<SuiteAnalysisResult | null>(null);
+
+  // ── Governance ─────────────────────────────────────────────────────────
+  const governance = useGovernance();
+  const [healGateOpen, setHealGateOpen] = useState(false);
+  const [pendingHeal, setPendingHeal] = useState<
+    { testCaseId: string; testCaseTitle: string; suggestion: HealSuggestion } | null
+  >(null);
+
+  // ── History dialog ─────────────────────────────────────────────────────
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyTarget, setHistoryTarget] = useState<{ id: string; title: string } | null>(null);
 
   const { data: suites = [] } = useQuery<TestSuite[]>({ queryKey: ["/api/test-suites"] });
 
@@ -261,8 +312,8 @@ export default function AIHealer() {
   });
 
   const applyMutation = useMutation({
-    mutationFn: async ({ testCaseId, suggestion }: { testCaseId: string; suggestion: HealSuggestion }) => {
-      const res = await apiRequest("POST", "/api/healer/apply", { testCaseId, suggestion });
+    mutationFn: async ({ testCaseId, suggestion, approvalId }: { testCaseId: string; suggestion: HealSuggestion; approvalId?: string }) => {
+      const res = await apiRequest("POST", "/api/healer/apply", { testCaseId, suggestion, approvalId });
       return res.json();
     },
     onSuccess: () => {
@@ -272,6 +323,33 @@ export default function AIHealer() {
     onError: (e: any) => toast({ title: "Apply Failed", description: e.message, variant: "destructive" }),
   });
 
+  // Clear the current on-screen analysis results.
+  const clearResults = () => {
+    setResult(null);
+    toast({ title: "Analysis Cleared", description: "The current analysis results were removed." });
+  };
+
+  // Delete ALL persisted heal history/analysis on the server.
+  const clearHistoryMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", "/api/healer/history");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setResult(null);
+      toast({
+        title: "History Deleted",
+        description: `Cleared ${data?.cleared ?? 0} saved heal report(s).`,
+      });
+    },
+    onError: (e: any) => toast({ title: "Delete Failed", description: e.message, variant: "destructive" }),
+  });
+
+  const openHistory = (id: string, title: string) => {
+    setHistoryTarget({ id, title });
+    setHistoryOpen(true);
+  };
+
   const stats = result?.stats;
   const reports = result?.reports || [];
   const brokenReports = reports.filter((r) => r.overallHealth === "broken" || r.overallHealth === "critical");
@@ -279,18 +357,7 @@ export default function AIHealer() {
   const healthyReports = reports.filter((r) => r.overallHealth === "healthy");
 
   return (
-    <div className="p-6 space-y-6 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center shadow-lg">
-          <Brain className="h-5 w-5 text-white" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">AI Test Healer</h1>
-          <p className="text-sm text-muted-foreground">Automatically detect, diagnose, and fix broken test cases</p>
-        </div>
-      </div>
-
+    <div className="space-y-6 animate-fade-in">
       {/* Controls */}
       <Card>
         <CardHeader>
@@ -326,10 +393,26 @@ export default function AIHealer() {
               </Select>
             </div>
             <div className="flex items-center gap-2 pb-0.5">
-              <Switch id="auto-heal" checked={autoHeal} onCheckedChange={setAutoHeal} />
+              <Switch
+                id="auto-heal"
+                checked={autoHeal && !governance.isValidated}
+                disabled={governance.isValidated}
+                onCheckedChange={(v) => setAutoHeal(v && !governance.isValidated)}
+              />
               <Label htmlFor="auto-heal" className="cursor-pointer">
-                <span className="text-sm font-medium">Auto-heal</span>
-                <p className="text-xs text-muted-foreground">Apply high-confidence fixes automatically</p>
+                <span className="text-sm font-medium">
+                  Auto-heal
+                  {governance.isValidated && (
+                    <span className="ml-2 text-xs font-normal text-amber-700 dark:text-amber-400">
+                      (disabled in VALIDATED systems)
+                    </span>
+                  )}
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  {governance.isValidated
+                    ? "Auto-apply is not permitted - every fix requires human approval"
+                    : "Apply high-confidence fixes automatically"}
+                </p>
               </Label>
             </div>
             <Button
@@ -340,6 +423,29 @@ export default function AIHealer() {
               {analyseMutation.isPending
                 ? <><Loader2 className="h-4 w-4 animate-spin" />Analysing...</>
                 : <><Brain className="h-4 w-4" />Analyse Suite</>}
+            </Button>
+            {result && (
+              <Button
+                variant="outline"
+                onClick={clearResults}
+                className="gap-2"
+                title="Clear the current analysis results from the screen"
+              >
+                <XCircle className="h-4 w-4" />
+                Clear
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => clearHistoryMutation.mutate()}
+              disabled={clearHistoryMutation.isPending}
+              className="gap-2 text-destructive hover:text-destructive"
+              title="Delete all saved heal analysis/history on the server"
+            >
+              {clearHistoryMutation.isPending
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Trash2 className="h-4 w-4" />}
+              Delete History
             </Button>
           </div>
         </CardContent>
@@ -408,7 +514,20 @@ export default function AIHealer() {
                   <ReportCard
                     key={report.testCaseId}
                     report={report}
-                    onApply={(tcId, suggestion) => applyMutation.mutate({ testCaseId: tcId, suggestion })}
+                    onHistory={openHistory}
+                    onApply={(tcId, suggestion) => {
+                      // ── Governance: in VALIDATED mode, route through HumanReviewGate ──
+                      if (governance.requireHumanReview) {
+                        setPendingHeal({
+                          testCaseId: tcId,
+                          testCaseTitle: report.testCaseTitle || tcId,
+                          suggestion,
+                        });
+                        setHealGateOpen(true);
+                      } else {
+                        applyMutation.mutate({ testCaseId: tcId, suggestion });
+                      }
+                    }}
                   />
                 ))}
               </Accordion>
@@ -428,7 +547,7 @@ export default function AIHealer() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {stats.topFailureCategories.map(({ category, count }) => {
-                    const cat = CATEGORY_CONFIG[category];
+                    const cat = getCategoryConfig(category);
                     const maxCount = stats.topFailureCategories[0]?.count || 1;
                     return (
                       <div key={category} className="space-y-1">
@@ -520,6 +639,213 @@ export default function AIHealer() {
           </div>
         </div>
       )}
+
+      {/* ─────────────────────────────────────────────────────────────────
+          GOVERNANCE: Human Review Gate for AI Healer fix application
+      ───────────────────────────────────────────────────────────────────── */}
+      <HumanReviewGate
+        open={healGateOpen}
+        onOpenChange={setHealGateOpen}
+        title="Approve AI Healer Fix"
+        intro="The AI Healer is proposing a fix to a test case. In a VALIDATED system, you must explicitly approve every AI-suggested modification before it is applied."
+        items={
+          pendingHeal
+            ? [{
+                id: pendingHeal.testCaseId,
+                type: "HEAL_SUGGESTION",
+                title: pendingHeal.testCaseTitle,
+                subtitle: `Step ${pendingHeal.suggestion.stepIndex + 1}: ${pendingHeal.suggestion.originalStep || "(modified)"}`,
+                contentPreview: pendingHeal.suggestion.suggestedStep
+                  ? `Proposed step: ${pendingHeal.suggestion.suggestedStep}`
+                  : pendingHeal.suggestion.explanation,
+              } as ReviewableItem]
+            : []
+        }
+        onApproved={async (reviewIds) => {
+          if (!pendingHeal) return;
+          // Re-call /api/healer/apply with the approval token recorded above
+          applyMutation.mutate({
+            testCaseId: pendingHeal.testCaseId,
+            suggestion: pendingHeal.suggestion,
+            approvalId: reviewIds[0],
+          });
+          setPendingHeal(null);
+        }}
+      />
+
+      {/* ── Heal History dialog ── */}
+      <HealHistoryDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        target={historyTarget}
+      />
     </div>
   );
 }
+
+// ─── Heal History Dialog ──────────────────────────────────────────────────────
+
+function HealHistoryDialog({
+  open, onOpenChange, target,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  target: { id: string; title: string } | null;
+}) {
+  const { toast } = useToast();
+  const { data, isLoading, refetch } = useQuery<{ history: HealReport[]; historyCount: number }>({
+    queryKey: ["/api/healer/history", target?.id],
+    enabled: open && !!target?.id,
+  });
+
+  const clearOne = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", `/api/healer/history/${target?.id}`);
+      return res.json();
+    },
+    onSuccess: (d: any) => {
+      toast({ title: "History Cleared", description: `Removed ${d?.cleared ?? 0} report(s) for this test.` });
+      refetch();
+    },
+    onError: (e: any) => toast({ title: "Delete Failed", description: e.message, variant: "destructive" }),
+  });
+
+  const history = data?.history || [];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <History className="h-5 w-5 text-primary" />
+            Heal History
+          </DialogTitle>
+          <DialogDescription>
+            {target?.title ? `Past analyses and applied fixes for "${target.title}".` : "Past analyses and applied fixes."}
+          </DialogDescription>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : history.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            <History className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm">No heal history recorded yet for this test case.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-destructive hover:text-destructive"
+                onClick={() => clearOne.mutate()}
+                disabled={clearOne.isPending}
+              >
+                {clearOne.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Clear This History
+              </Button>
+            </div>
+            {history.map((report, idx) => {
+              const health = HEALTH_CONFIG[report.overallHealth] ?? HEALTH_CONFIG.healthy;
+              const HealthIcon = health.icon;
+              return (
+                <div key={idx} className="p-3 rounded-xl border bg-card space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <div className={cn("h-7 w-7 rounded-lg border flex items-center justify-center shrink-0", health.bg)}>
+                        <HealthIcon className={cn("h-4 w-4", health.color)} />
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium">{health.label}</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {new Date(report.analysedAt).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {report.autoHealApplied && (
+                        <Badge className="text-xs h-5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-0">
+                          {report.healedSteps} healed
+                        </Badge>
+                      )}
+                      <Badge variant="outline" className="text-xs h-5">{report.mode ?? "BASIC"}</Badge>
+                    </div>
+                  </div>
+                  {report.lastFailureMessage && (
+                    <p className="text-xs text-muted-foreground font-mono bg-muted/40 px-2 py-1 rounded">
+                      {report.lastFailureMessage}
+                    </p>
+                  )}
+                  {report.suggestions.length > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {report.suggestions.length} suggestion{report.suggestions.length !== 1 ? "s" : ""} ·
+                      {" "}confidence {report.confidenceScore ?? 0}%
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Unified AI Healer Page ─────────────────────────────────────────────────────
+//
+// Combines the Standard suite-analysis healer and the Pro (enterprise) state-machine
+// healer into a single page with a mode switch. The "Standard" tab exposes the
+// lightweight suite-wide diagnosis + one-click fixes (with VALIDATED-mode review
+// gates); the "Pro" tab exposes the full enterprise workflow (sessions, confidence
+// scoring, automatic rollback, regression checks, KPIs and learning).
+
+export default function AIHealer() {
+  const [mode, setMode] = useState<"standard" | "pro">("standard");
+
+  return (
+    <div className="p-6 space-y-6 animate-fade-in">
+      {/* Shared Header */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center shadow-lg">
+            <Brain className="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">AI Test Healer</h1>
+            <p className="text-sm text-muted-foreground">
+              Automatically detect, diagnose, and fix broken test cases
+            </p>
+          </div>
+        </div>
+
+        {/* Mode switch */}
+        <Tabs value={mode} onValueChange={(v) => setMode(v as "standard" | "pro")} className="w-full sm:w-auto">
+          <TabsList className="grid w-full grid-cols-2 sm:w-[320px]">
+            <TabsTrigger value="standard" className="gap-1.5">
+              <Wrench className="h-3.5 w-3.5" />
+              Standard
+            </TabsTrigger>
+            <TabsTrigger value="pro" className="gap-1.5">
+              <Gauge className="h-3.5 w-3.5" />
+              Pro
+              <Badge className="ml-1 h-4 px-1.5 text-[10px] bg-purple-500/15 text-purple-700 dark:text-purple-300 border-0">
+                ENTERPRISE
+              </Badge>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {/* ── Governance: mandatory disclaimer above all AI healer surfaces ── */}
+      <AiDisclaimerBanner variant="healer" />
+
+      {/* Mode content */}
+      {mode === "standard" ? <StandardHealerPanel /> : <EnterpriseAIHealerPage />}
+    </div>
+  );
+}
+

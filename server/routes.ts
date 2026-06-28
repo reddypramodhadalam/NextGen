@@ -29,6 +29,7 @@ import {
   getTestOptimizationRecommendations,
   getPassFailStats,
   storeTestResult,
+  deleteReportAnalytics,
 } from './reportAnalytics';
 import { APP_PROFILES, APP_PROFILE_CATEGORIES } from "./app-profiles";
 import { sendTestNotification } from "./notifications";
@@ -78,6 +79,16 @@ import {
   generateJDERuleBasedTests,
 } from "./jde-rule-based-generator";
 import knowledgeBaseRoutes from "./knowledge-routes";
+import governanceRoutes from "./governance-routes";
+import { auditLog, getGovernanceMode } from "./governance/rules-engine";
+import {
+  requireApprovedTestCases,
+  blockAutoApplyAiFix,
+  resolveTestCaseIdsForExecution,
+} from "./governance/enforcement";
+import { parseAiJson } from "./utils/ai-response-parser";
+import { normalizeTestCases } from "./utils/normalize-test-cases";
+import { extractDocxWithTables } from "./utils/docx-tables";
 import multer from "multer";
 import nodePath from "path";
 import * as XLSX from "xlsx";
@@ -232,6 +243,19 @@ export async function registerRoutes(
   console.log("[Routes] Knowledge Base routes registered at /api/knowledge");
 
   // ========================================
+  // GOVERNANCE / HUMAN-IN-THE-LOOP ROUTES
+  // Regulated-enterprise (GxP/SOX/ISO) compliance controls.
+  // Single source of truth for review status, audit log, and evidence attestation.
+  // ========================================
+  app.use("/api/governance", governanceRoutes);
+  const initialMode = getGovernanceMode();
+  console.log("[Routes] Governance routes registered at /api/governance");
+  console.log(`[Governance] System classification: ${initialMode.systemType}`);
+  console.log(`[Governance] Human review required: ${initialMode.requireHumanReview}`);
+  console.log(`[Governance] Auto-apply AI fixes allowed: ${initialMode.allowAutoApplyAiFixes}`);
+  console.log(`[Governance] Evidence attestation required: ${initialMode.requireEvidenceReview}`);
+
+  // ========================================
   // COVERAGE MATRIX ROUTES
   // ========================================
   app.get("/api/coverage/matrix", async (req: Request, res: Response) => {
@@ -374,7 +398,13 @@ export async function registerRoutes(
   const { unifiedExecutionController } = await import("./unified-execution-adapter");
   
   // Execute test case with unified adapter
-  app.post("/api/execute/unified", async (req: Request, res: Response) => {
+  app.post("/api/execute/unified",
+    // ── Governance gate: VALIDATED systems cannot execute un-reviewed AI tests ──
+    requireApprovedTestCases(
+      (req) => req.body?.testCaseId ? [req.body.testCaseId] : [],
+      { operationName: "execute unified test" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const { testCaseId, targetUrl, credentials, config, testData } = req.body;
       
@@ -448,7 +478,7 @@ export async function registerRoutes(
       
       // Store step results
       for (const result of summary.results) {
-        await storage.createTestResult({
+        await storage.createResult({
           executionId: execution.id,
           testCaseId,
           status: result.status.toLowerCase() as any,
@@ -521,7 +551,10 @@ export async function registerRoutes(
   });
   
   // Analyze all test cases in a suite
-  app.post("/api/healer/analyse-suite", async (req: Request, res: Response) => {
+  app.post("/api/healer/analyse-suite",
+    // ── Governance gate: in VALIDATED systems, autoHeal=true is forbidden ──
+    blockAutoApplyAiFix,
+    async (req: Request, res: Response) => {
     try {
       const { suiteId, autoHeal, appType } = req.body;
       
@@ -550,13 +583,66 @@ export async function registerRoutes(
       if (!testCaseId || !suggestion) {
         return res.status(400).json({ error: "testCaseId and suggestion are required" });
       }
-      
+
+      // ──────────────────────────────────────────────────────────────────────
+      // GOVERNANCE: AI Healer mutation requires explicit human approval in
+      // VALIDATED systems. Reject if the caller has not supplied an approval
+      // token / approvalId from POST /api/governance/reviews.
+      // ──────────────────────────────────────────────────────────────────────
+      const mode = getGovernanceMode();
+      if (mode.requireHumanReview) {
+        const approvalId = req.body?.approvalId || req.headers["x-approval-id"];
+        if (!approvalId) {
+          const actor: any = (req as any).user || {};
+          auditLog.record({
+            eventType: "REVIEW_BYPASS_ATTEMPTED",
+            severity: "CRITICAL",
+            resourceType: "HEAL_SUGGESTION",
+            resourceId: testCaseId,
+            actorId: actor.id || actor.userId,
+            actorEmail: actor.email,
+            actorRole: actor.role,
+            payload: { route: "/api/healer/apply", stepIndex: suggestion?.stepIndex },
+            ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip,
+            userAgent: req.headers["user-agent"],
+          });
+          return res.status(403).json({
+            error: "HEAL_APPROVAL_REQUIRED",
+            message: "AI Healer fix application requires human approval in a VALIDATED system.",
+            systemType: mode.systemType,
+            remediation: {
+              step: "1) POST /api/governance/reviews with decision=APPROVED for resourceType=HEAL_SUGGESTION. 2) Re-call /api/healer/apply including the approvalId.",
+              endpoint: "POST /api/governance/reviews",
+            },
+          });
+        }
+      }
+
       console.log(`[AI Healer] Applying heal to test case: ${testCaseId}, step: ${suggestion.stepIndex}`);
       
       const updatedTestCase = await unifiedAIHealer.applyHeal(testCaseId, suggestion);
       
       console.log(`[AI Healer] Heal applied successfully to "${updatedTestCase.title}"`);
-      
+
+      // ── Governance: every applied AI fix produces an audit entry ──
+      const actor: any = (req as any).user || {};
+      auditLog.record({
+        eventType: "AI_HEAL_APPLIED",
+        severity: "INFO",
+        resourceType: "TEST_CASE",
+        resourceId: testCaseId,
+        actorId: actor.id || actor.userId,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        payload: {
+          stepIndex: suggestion?.stepIndex,
+          approvalId: req.body?.approvalId || req.headers["x-approval-id"] || null,
+          title: updatedTestCase.title,
+        },
+        ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip,
+        userAgent: req.headers["user-agent"],
+      });
+
       res.json({ 
         success: true, 
         testCase: updatedTestCase,
@@ -587,8 +673,168 @@ export async function registerRoutes(
       res.status(500).json({ error: error.message || "Failed to get heal history" });
     }
   });
+
+  // Delete heal history for a single test case
+  app.delete("/api/healer/history/:testCaseId", async (req: Request, res: Response) => {
+    try {
+      const { testCaseId } = req.params;
+      console.log(`[AI Healer] Clearing heal history for: ${testCaseId}`);
+      const { cleared } = unifiedAIHealer.clearHistory(testCaseId);
+      res.json({ success: true, testCaseId, cleared });
+    } catch (error: any) {
+      console.error("[AI Healer] Error clearing history:", error);
+      res.status(500).json({ error: error.message || "Failed to clear heal history" });
+    }
+  });
+
+  // Delete ALL heal history / generated analysis (used by "clear analysis" action)
+  app.delete("/api/healer/history", async (_req: Request, res: Response) => {
+    try {
+      console.log("[AI Healer] Clearing ALL heal history");
+      const { cleared } = unifiedAIHealer.clearHistory();
+      res.json({ success: true, cleared });
+    } catch (error: any) {
+      console.error("[AI Healer] Error clearing all history:", error);
+      res.status(500).json({ error: error.message || "Failed to clear heal history" });
+    }
+  });
   
   console.log("[Routes] AI Test Healer routes registered at /api/healer/*");
+
+  // ========================================
+  // UNIFIED AI HEALER - Single source of truth for all healing
+  // Combines BASIC + ADVANCED + PRO data into one unified view
+  // ========================================
+
+  // 🎯 UNIFIED DASHBOARD - Single endpoint for ALL healer data
+  // Replaces the need for separate /api/healer/* and /api/healer/enterprise/* dashboards
+  app.get("/api/healer/dashboard", async (_req: Request, res: Response) => {
+    try {
+      console.log("[Unified Healer] Building unified dashboard");
+      const dashboard = unifiedAIHealer.getDashboard();
+      res.json(dashboard);
+    } catch (error: any) {
+      console.error("[Unified Healer] Dashboard error:", error);
+      res.status(500).json({ error: error.message || "Failed to build dashboard" });
+    }
+  });
+
+  // 🎯 UNIFIED HEAL - Single endpoint with mode selection (BASIC | ADVANCED | PRO)
+  // This is the modern API - mode determines which intelligence layers run
+  app.post("/api/healer/heal",
+    // ── Governance gate: autoHeal=true is forbidden in VALIDATED systems ──
+    blockAutoApplyAiFix,
+    async (req: Request, res: Response) => {
+    try {
+      const { testCaseId, mode, autoHeal, appType, executionId } = req.body;
+      
+      if (!testCaseId) {
+        return res.status(400).json({ error: "testCaseId is required" });
+      }
+      
+      const healingMode = (mode || "ADVANCED").toUpperCase();
+      if (!["BASIC", "ADVANCED", "PRO"].includes(healingMode)) {
+        return res.status(400).json({ 
+          error: "mode must be BASIC, ADVANCED, or PRO" 
+        });
+      }
+      
+      console.log(`[Unified Healer] Heal request: ${testCaseId}, mode: ${healingMode}, autoHeal: ${autoHeal}`);
+      
+      const report = await unifiedAIHealer.analyzeTestCase(testCaseId, {
+        mode: healingMode as any,
+        autoHeal,
+        appType,
+        executionId,
+      });
+      
+      console.log(`[Unified Healer] Analysis complete: ${report.suggestions.length} suggestions, confidence: ${report.confidenceScore}`);
+      
+      res.json({
+        mode: healingMode,
+        ...report,
+      });
+    } catch (error: any) {
+      console.error("[Unified Healer] Heal error:", error);
+      res.status(500).json({ error: error.message || "Failed to heal test case" });
+    }
+  });
+
+  // 🎯 UNIFIED STATS - Combined statistics across all healing modes
+  app.get("/api/healer/stats", async (_req: Request, res: Response) => {
+    try {
+      const stats = unifiedAIHealer.getStatistics();
+      res.json(stats);
+    } catch (error: any) {
+      console.error("[Unified Healer] Stats error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 🎯 UNIFIED LEARNING - Combined learning insights from basic + enterprise
+  app.get("/api/healer/learning", async (_req: Request, res: Response) => {
+    try {
+      const insights = unifiedAIHealer.getLearningInsights();
+      res.json(insights);
+    } catch (error: any) {
+      console.error("[Unified Healer] Learning error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 🎯 UNIFIED KPIs - Production-grade KPIs (regression rate, time-to-heal, etc.)
+  app.get("/api/healer/kpis", async (_req: Request, res: Response) => {
+    try {
+      const kpis = unifiedAIHealer.getKPIs();
+      res.json(kpis);
+    } catch (error: any) {
+      console.error("[Unified Healer] KPIs error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 🎯 EXECUTION FAILURE HOOK - Auto-trigger healing when test fails
+  // This is the missing integration between executions and healer!
+  app.post("/api/healer/on-failure",
+    // ── Governance gate: autoHeal=true blocked in VALIDATED systems ──
+    blockAutoApplyAiFix,
+    async (req: Request, res: Response) => {
+    try {
+      const { executionId, testCaseId, failureDetails, mode, autoHeal, appType } = req.body;
+      
+      if (!executionId || !testCaseId) {
+        return res.status(400).json({ 
+          error: "executionId and testCaseId are required" 
+        });
+      }
+      
+      console.log(`[Unified Healer] Failure hook triggered: ${executionId} / ${testCaseId}`);
+      
+      const report = await unifiedAIHealer.onExecutionFailure(
+        executionId,
+        testCaseId,
+        failureDetails || { errorMessage: "Unknown failure", stepIndex: 0, logs: [] },
+        { mode, autoHeal, appType }
+      );
+      
+      res.json({
+        message: "Failure analysed and healing suggestions generated",
+        report,
+        autoApplied: report.autoHealApplied,
+      });
+    } catch (error: any) {
+      console.error("[Unified Healer] On-failure error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  console.log("[Routes] Unified AI Healer routes registered:");
+  console.log("  ✅ GET  /api/healer/dashboard - Single source of truth for all healer data");
+  console.log("  ✅ POST /api/healer/heal - Unified healing with mode selection (BASIC|ADVANCED|PRO)");
+  console.log("  ✅ GET  /api/healer/stats - Comprehensive statistics");
+  console.log("  ✅ GET  /api/healer/learning - Learning insights");
+  console.log("  ✅ GET  /api/healer/kpis - Production KPIs");
+  console.log("  ✅ POST /api/healer/on-failure - Auto-trigger from execution failures");
 
   // ========================================
   // ENTERPRISE AI HEALER
@@ -1959,7 +2205,7 @@ export async function registerRoutes(
   });
 
   // Generate full compliance report (JSON format for PDF generation)
-  app.post("/api/compliance/report", async (req: Request, res: Response) => {
+  app.post("/api/compliance/export/full-report", async (req: Request, res: Response) => {
     try {
       const { dateRange, environment } = req.body;
       const user = (req as any).user;
@@ -2418,6 +2664,9 @@ export async function registerRoutes(
   app.get("/api/reports/predictive-failure", getPredictiveFailureAnalysis);
   app.get("/api/reports/test-optimization", getTestOptimizationRecommendations);
   app.get("/api/reports/pass-fail-stats", getPassFailStats);
+  // Delete analytics history (single, bulk, or all) — powers the select+delete
+  // controls on the Reports page.
+  app.post("/api/reports/analytics/delete", deleteReportAnalytics);
 
   // Optional: endpoint to store test results
   app.post("/api/reports/store-result", (req: Request, res: Response) => {
@@ -2999,7 +3248,47 @@ export async function registerRoutes(
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const testCase = await storage.createTestCase(validation.data);
+
+      // ── Governance: stamp AI-generated content with DRAFT status + provenance ──
+      const mode = getGovernanceMode();
+      const isAi = !!validation.data.generatedByAI;
+      const payload: any = { ...validation.data };
+      if (isAi) {
+        payload.reviewStatus = payload.reviewStatus || "DRAFT";
+        payload.reviewVersion = 0;
+        payload.aiProvenance = payload.aiProvenance || {
+          generatedBy: req.body?._generatedBy || "ai",
+          generatedAt: new Date().toISOString(),
+          ragSourceIds: req.body?._ragSourceIds || undefined,
+        };
+      } else {
+        payload.reviewStatus = "NOT_REQUIRED";
+      }
+
+      const testCase = await storage.createTestCase(payload);
+
+      // ── Governance: audit the creation event ────────────────────────────────
+      if (isAi) {
+        const actor: any = (req as any).user || {};
+        auditLog.record({
+          eventType: "AI_TEST_CASE_GENERATED",
+          severity: "INFO",
+          resourceType: "TEST_CASE",
+          resourceId: testCase.id,
+          actorId: actor.id || actor.userId,
+          actorEmail: actor.email,
+          actorRole: actor.role,
+          payload: {
+            title: testCase.title,
+            stepCount: Array.isArray(testCase.steps) ? testCase.steps.length : 0,
+            provenance: payload.aiProvenance,
+            systemType: mode.systemType,
+          },
+          ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip,
+          userAgent: req.headers["user-agent"],
+        });
+      }
+
       res.status(201).json(testCase);
     } catch (error) {
       console.error("Error creating test case:", error);
@@ -3013,10 +3302,51 @@ export async function registerRoutes(
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const testCase = await storage.updateTestCase(req.params.id, validation.data);
+
+      // ── Governance: detect content-changing edits on previously-approved AI tests ──
+      // Such edits invalidate the prior approval - put the test back into DRAFT.
+      const before = await storage.getTestCase(req.params.id);
+      const contentChanging =
+        validation.data.title !== undefined ||
+        validation.data.description !== undefined ||
+        validation.data.preconditions !== undefined ||
+        validation.data.steps !== undefined ||
+        validation.data.targetUrl !== undefined;
+      const payload: any = { ...validation.data };
+      if (before && contentChanging) {
+        const beforeStatus = (before as any).reviewStatus || (before as any).review_status;
+        const isAi = (before as any).generatedByAI || (before as any).generated_by_ai;
+        if (isAi && (beforeStatus === "APPROVED" || beforeStatus === "PENDING")) {
+          payload.reviewStatus = "DRAFT";
+          payload.contentHash = null;
+        }
+      }
+
+      const testCase = await storage.updateTestCase(req.params.id, payload);
       if (!testCase) {
         return res.status(404).json({ error: "Test case not found" });
       }
+
+      // ── Governance: audit content edits on AI-generated tests ──
+      if (before && contentChanging && ((before as any).generatedByAI || (before as any).generated_by_ai)) {
+        const actor: any = (req as any).user || {};
+        auditLog.record({
+          eventType: "AI_TEST_CASE_EDITED",
+          severity: "INFO",
+          resourceType: "TEST_CASE",
+          resourceId: req.params.id,
+          actorId: actor.id || actor.userId,
+          actorEmail: actor.email,
+          actorRole: actor.role,
+          payload: {
+            fields: Object.keys(validation.data),
+            previousStatus: (before as any).reviewStatus || (before as any).review_status,
+            newStatus: payload.reviewStatus || (before as any).reviewStatus,
+          },
+          ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip,
+        });
+      }
+
       res.json(testCase);
     } catch (error) {
       console.error("Error updating test case:", error);
@@ -3285,7 +3615,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/executions", async (req: Request, res: Response) => {
+  app.post("/api/executions",
+    // ── Governance gate: VALIDATED systems cannot execute un-reviewed AI tests ──
+    requireApprovedTestCases(
+      (req) => resolveTestCaseIdsForExecution(req.body?.suiteId),
+      { operationName: "create execution" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const validation = validateBody(createExecutionSchema, req.body);
       if (!validation.success) {
@@ -3732,6 +4068,38 @@ export async function registerRoutes(
       if (dataVariations)            ctx.push("\nDATA VARIATIONS / CONSTRAINTS:\n" + dataVariations);
       const structuredContext = ctx.join("\n");
 
+      // ───────────────────────────────────────────────────────────────────────
+      // RAG RETRIEVAL: pull the top-K most relevant knowledge items from the
+      // unified Knowledge Base (PPT/PDF/Image/URL ingested content).
+      // ───────────────────────────────────────────────────────────────────────
+      const { buildRAGContextBlock, retrieveStructuredKnowledge } = await import("./knowledge/rag-helper");
+      const ragQuery = [title, description, moduleName, appName, businessUseCase, functionalRequirements]
+        .filter(Boolean)
+        .join(" ");
+      const ragApplication =
+        appType === "jde" ? "JDE"
+        : appType === "salesforce" ? "SALESFORCE"
+        : appType?.startsWith("sap") ? "SAP"
+        : undefined;
+      const ragContext = await buildRAGContextBlock(ragQuery, {
+        application: ragApplication,
+        module: moduleName,
+        topK: 6,
+      });
+      if (ragContext.resultCount > 0) {
+        console.log(`[GENERATE-TESTS] Injected ${ragContext.resultCount} RAG results (objects: ${ragContext.topObjects.join(", ")})`);
+      }
+      const structuredContextWithRAG = structuredContext + ragContext.blockText;
+
+      // Also fetch the FULL structured facts so the deterministic fallback can
+      // build detailed functional test cases from the uploaded knowledge instead
+      // of generic boilerplate when the AI path is unavailable.
+      const structuredKnowledge = await retrieveStructuredKnowledge(ragQuery, {
+        application: ragApplication,
+        module: moduleName,
+        topK: 8,
+      });
+
       // Domain-specific instructions
       const domainMap: Record<string, string> = {
         jde:       "ORACLE JDE DOMAIN: Use real JDE program names (P4310, P0411, P42101, P0901). Include business unit codes, item numbers (ITM-001), supplier numbers, cost centers, amounts. Test document approval workflows (draft->pending->approved->posted). Verify AAI routing. Test role-based access: Purchasing Manager vs AP Clerk vs Read-Only Auditor.",
@@ -3749,7 +4117,7 @@ export async function registerRoutes(
       let systemPrompt: string;
       if (appType === "jde") {
         // Extract JDE objects from the description and build JDE-specific prompt
-        const jdeObjects = extractJDEObjectsFromText(description + " " + (structuredContext || ""));
+        const jdeObjects = extractJDEObjectsFromText(description + " " + (structuredContextWithRAG || ""));
         const jdeObjectKnowledge = jdeObjects.map(obj => getJDEObjectKnowledge(obj)).filter(Boolean);
         systemPrompt = buildJDESystemPrompt(jdeObjects, jdeObjectKnowledge.join("\n\n"));
         console.log("[GENERATE-TESTS] Using JDE-specific prompt with objects:", jdeObjects);
@@ -3765,7 +4133,7 @@ export async function registerRoutes(
         "Description: " + description,
         "",
         "=== ARCHITECT CONTEXT ===",
-        structuredContext || "(No additional context provided -- infer maximum coverage from the requirement description)",
+        structuredContextWithRAG || "(No additional context provided -- infer maximum coverage from the requirement description)",
         "",
         "=== GENERATION PARAMETERS ===",
         "Test Depth: " + (testDepth || "comprehensive") + " (" + depth.label + " test cases)",
@@ -3794,17 +4162,16 @@ export async function registerRoutes(
               systemPrompt
             );
 
-            // Extract JSON from response (handle markdown code blocks)
-            let jsonStr = content;
-            const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-            if (jsonMatch) {
-              jsonStr = jsonMatch[1].trim();
-            }
-            
-            const parsed = JSON.parse(jsonStr);
+            // Robust extraction - handles fences, prose, trailing commas, BOM
+            const parsed = parseAiJson<any>(content);
+
             if (parsed && Array.isArray(parsed.testCases) && parsed.testCases.length > 0) {
-              generatedResult = { ...parsed, generatedBy: "ai" };
-              console.log("[GENERATE-TESTS] AI generation successful: " + parsed.testCases.length + " tests");
+              // Normalize every case so inconsistent AI field names (testCaseName,
+              // testSteps, actionDescription, expectedResult, …) never surface as
+              // "undefined" in the UI.
+              const normalized = normalizeTestCases(parsed.testCases);
+              generatedResult = { ...parsed, testCases: normalized, generatedBy: "ai" };
+              console.log("[GENERATE-TESTS] AI generation successful: " + normalized.length + " tests (normalized)");
             } else {
               console.warn("[GENERATE-TESTS] AI response missing testCases array, falling back to rule-based");
             }
@@ -3819,15 +4186,33 @@ export async function registerRoutes(
         console.error("[GENERATE-TESTS] Failed to get AI client:", clientError.message);
       }
 
-      // Fallback to rule-based generation if AI failed or was not available
+      // Fallback when AI failed or was not available. Prefer a KNOWLEDGE-DRIVEN
+      // generator that synthesises detailed functional steps from the uploaded
+      // Knowledge Base; only drop to generic boilerplate when no usable
+      // knowledge was retrieved.
       if (!generatedResult) {
-        console.log("[GENERATE-TESTS] Using rule-based generator");
-        generatedResult = generateRuleBasedTests(
-          title || "Untitled",
-          [description, structuredContext].filter(Boolean).join("\n\n"),
-          appType || "web"
-        );
-        console.log("[GENERATE-TESTS] Rule-based generation complete: " + generatedResult.testCases.length + " tests");
+        const { generateKnowledgeDrivenTests, hasUsableKnowledge } = await import("./knowledge-driven-generator");
+
+        if (hasUsableKnowledge(structuredKnowledge as any)) {
+          console.log(`[GENERATE-TESTS] Using knowledge-driven generator (${structuredKnowledge.length} KB items)`);
+          generatedResult = generateKnowledgeDrivenTests(structuredKnowledge as any, {
+            title: title || "Untitled",
+            description,
+            targetCount: depth.max,
+            includeE2E: !!includeE2E,
+            appName,
+            moduleName,
+          });
+          console.log(`[GENERATE-TESTS] Knowledge-driven generation complete: ${generatedResult.testCases.length} detailed tests`);
+        } else {
+          console.log("[GENERATE-TESTS] No usable KB knowledge — using generic rule-based generator");
+          generatedResult = generateRuleBasedTests(
+            title || "Untitled",
+            [description, structuredContext].filter(Boolean).join("\n\n"),
+            appType || "web"
+          );
+          console.log("[GENERATE-TESTS] Rule-based generation complete: " + generatedResult.testCases.length + " tests");
+        }
       }
 
       // Validate using our validator
@@ -3940,6 +4325,26 @@ export async function registerRoutes(
         .join("\n\n");
 
       // ═══════════════════════════════════════════════════════════════════════
+      // STEP 4.5: RAG ENRICHMENT - pull relevant content from the unified KB
+      //   This includes any PPT/PDF/Image/SharePoint sources the user uploaded.
+      // ═══════════════════════════════════════════════════════════════════════
+      const { buildRAGContextBlock: buildJdeRagBlock } = await import("./knowledge/rag-helper");
+      const jdeRagQuery = [
+        classification.jde_module,
+        ...detectedObjects,
+        ...governanceRules.required_programs,
+        ...governanceRules.required_tables,
+      ].filter(Boolean).join(" ");
+      const jdeRagContext = await buildJdeRagBlock(jdeRagQuery, {
+        application: "JDE",
+        module: classification.jde_module,
+        topK: 5,
+      });
+      if (jdeRagContext.resultCount > 0) {
+        console.log(`[GENERATE-JDE-TESTS] RAG enrichment: ${jdeRagContext.resultCount} items (${jdeRagContext.topObjects.join(", ")})`);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════
       // STEP 5: TEST CASE GENERATION
       // ═══════════════════════════════════════════════════════════════════════
       console.log("[GENERATE-JDE-TESTS] Step 5: Generating test cases...");
@@ -3960,7 +4365,7 @@ CRITICAL CONSTRAINT: Do NOT generate UI automation steps (click button, input fi
 Generate FUNCTIONAL test cases using JDE application-level actions (Launch P4210, Enter supplier, Save order).
 `;
 
-      const systemPrompt = buildJDESystemPrompt(detectedObjects, jdeObjectKnowledge + "\n" + governanceBlock);
+      const systemPrompt = buildJDESystemPrompt(detectedObjects, jdeObjectKnowledge + "\n" + governanceBlock + jdeRagContext.blockText);
 
       // Build user prompt with structured document if available
       const depthRange = testDepth === "exhaustive" ? "40-60" : testDepth === "comprehensive" ? "25-35" : "15-20";
@@ -4051,21 +4456,20 @@ Do NOT generate UI automation steps (click, input, navigate URL).
               systemPrompt
             );
 
-            // Extract JSON from response
-            let jsonStr = content;
-            const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-            if (jsonMatch) {
-              jsonStr = jsonMatch[1].trim();
-            }
-            
-            const parsed = JSON.parse(jsonStr);
+            // Robust extraction - handles fences, prose, trailing commas, BOM
+            const parsed = parseAiJson<any>(content);
             if (parsed && Array.isArray(parsed.testCases) && parsed.testCases.length > 0) {
-              generatedResult = { 
-                ...parsed, 
+              // Normalize so JDE-AI field variants (objective, testSteps, action,
+              // expectedResult, …) map onto the canonical shape the UI renders.
+              // Without this, valid AI content showed as "Test Case N / Execute undefined".
+              const normalized = normalizeTestCases(parsed.testCases);
+              generatedResult = {
+                ...parsed,
+                testCases: normalized,
                 generatedBy: "jde-ai",
                 jdeObjects: detectedObjects
               };
-              console.log("[GENERATE-JDE-TESTS] JDE AI generation successful: " + parsed.testCases.length + " tests");
+              console.log("[GENERATE-JDE-TESTS] JDE AI generation successful: " + normalized.length + " tests (normalized)");
             } else {
               console.warn("[GENERATE-JDE-TESTS] AI response missing testCases array, falling back to rule-based");
             }
@@ -5225,13 +5629,19 @@ aitas_tests:
           }
         }
       } else if (ext === ".docx" || ext === ".doc") {
-        // mammoth is CJS — exports land directly on namespace or under .default
-        const mammothMod: any = await import("mammoth");
-        const mammoth: any = (mammothMod.default && typeof mammothMod.default.extractRawText === "function")
-          ? mammothMod.default
-          : mammothMod;
-        const r2 = await mammoth.extractRawText({ buffer: buf });
-        text = r2.value || ""; pages = Math.ceil(text.length / 3000) || 1;
+        // Table-aware extraction: preserves <table> structure as Markdown grids
+        // so JDE business rules that live inside tables (e.g. the F47047 line
+        // consolidation grid) survive into the AI prompt instead of collapsing
+        // into an unreadable wall of text.
+        const docxResult = await extractDocxWithTables(buf);
+        text = docxResult.text || "";
+        pages = Math.ceil(text.length / 3000) || 1;
+        if (docxResult.tableCount > 0) {
+          console.log(`[parse-spec] Extracted ${docxResult.tableCount} table(s) as Markdown grids`);
+        }
+        if (docxResult.warnings.length > 0) {
+          console.warn("[parse-spec] DOCX extraction warnings:", docxResult.warnings.join("; "));
+        }
       } else { text = buf.toString("utf-8"); pages = Math.ceil(text.length / 3000) || 1; }
       const MAX = 200_000; const truncated = text.length > MAX; const textOut = text.substring(0,MAX);
       const headingRe = /^(#{1,3}\s+.+|\d+\.\s+[A-Z].+|[A-Z][A-Z\s]{5,50})$/gm;
@@ -5256,10 +5666,27 @@ aitas_tests:
             .map(obj => getJDEObjectKnowledge(obj))
             .filter(Boolean)
             .join("\n\n");
-          
+
+          // ── RAG ENRICHMENT: pull additional context from the unified KB
+          //    (PPT/PDF/SharePoint sources the user previously uploaded)
+          let ragEnrichment = "";
+          try {
+            const { buildRAGContextBlock: buildSpecRagBlock } = await import("./knowledge/rag-helper");
+            const ragCtx = await buildSpecRagBlock(jdeObjects.join(" ") + " " + textOut.slice(0, 1000), {
+              application: "JDE",
+              topK: 4,
+            });
+            ragEnrichment = ragCtx.blockText;
+            if (ragCtx.resultCount > 0) {
+              console.log(`[parse-spec] RAG enrichment: ${ragCtx.resultCount} items from KB`);
+            }
+          } catch (e: any) {
+            console.warn("[parse-spec] RAG enrichment failed (non-fatal):", e.message);
+          }
+
           const structuringPrompt = JDE_DOCUMENT_STRUCTURING_PROMPT
             .replace("{{JDE_OBJECTS}}", jdeObjects.join(", "))
-            .replace("{{JDE_KNOWLEDGE}}", jdeObjectKnowledge || "Standard JDE knowledge");
+            .replace("{{JDE_KNOWLEDGE}}", (jdeObjectKnowledge || "Standard JDE knowledge") + ragEnrichment);
           
           const structuredResponse = await ai.chat([
             { role: "user", content: `Structure this JDE functional specification document:\n\n${textOut.substring(0, 12000)}` }
@@ -5378,7 +5805,13 @@ aitas_tests:
     }).optional(),
   });
 
-  app.post("/api/executions/api", async (req: Request, res: Response) => {
+  app.post("/api/executions/api",
+    // ── Governance gate ──
+    requireApprovedTestCases(
+      (req) => resolveTestCaseIdsForExecution(req.body?.suiteId),
+      { operationName: "create API execution" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const validation = validateBody(createApiExecutionSchema, req.body);
       if (!validation.success) {
@@ -5441,7 +5874,13 @@ aitas_tests:
     environment: z.enum(["development", "staging", "production"]).optional(),
   });
 
-  app.post("/api/executions/salesforce", async (req: Request, res: Response) => {
+  app.post("/api/executions/salesforce",
+    // ── Governance gate ──
+    requireApprovedTestCases(
+      (req) => resolveTestCaseIdsForExecution(req.body?.suiteId),
+      { operationName: "create Salesforce execution" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const validation = validateBody(sfExecutionSchema, req.body);
       if (!validation.success) return res.status(400).json({ error: validation.error });
@@ -5497,7 +5936,13 @@ aitas_tests:
     execEnvironment: z.enum(["development", "staging", "production"]).optional(),
   });
 
-  app.post("/api/executions/jde", async (req: Request, res: Response) => {
+  app.post("/api/executions/jde",
+    // ── Governance gate ──
+    requireApprovedTestCases(
+      (req) => resolveTestCaseIdsForExecution(req.body?.suiteId),
+      { operationName: "create JDE execution" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const validation = validateBody(jdeExecutionSchema, req.body);
       if (!validation.success) return res.status(400).json({ error: validation.error });
@@ -5614,7 +6059,13 @@ aitas_tests:
     environment: z.enum(["development", "staging", "production"]).optional(),
   });
 
-  app.post("/api/executions/sap-fiori", async (req: Request, res: Response) => {
+  app.post("/api/executions/sap-fiori",
+    // ── Governance gate ──
+    requireApprovedTestCases(
+      (req) => resolveTestCaseIdsForExecution(req.body?.suiteId),
+      { operationName: "create SAP Fiori execution" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const validation = validateBody(sapFioriSchema, req.body);
       if (!validation.success) return res.status(400).json({ error: validation.error });
@@ -5649,7 +6100,13 @@ aitas_tests:
     environment: z.enum(["development", "staging", "production"]).optional(),
   });
 
-  app.post("/api/executions/sap-gui", async (req: Request, res: Response) => {
+  app.post("/api/executions/sap-gui",
+    // ── Governance gate ──
+    requireApprovedTestCases(
+      (req) => resolveTestCaseIdsForExecution(req.body?.suiteId),
+      { operationName: "create SAP GUI execution" },
+    ),
+    async (req: Request, res: Response) => {
     try {
       const validation = validateBody(sapGuiSchema, req.body);
       if (!validation.success) return res.status(400).json({ error: validation.error });

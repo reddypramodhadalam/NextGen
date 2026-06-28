@@ -714,7 +714,7 @@ export default function UploadTestCases() {
           <FileUp className="h-5 w-5 text-white" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Upload Test Cases</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Import Test Cases</h1>
           <p className="text-sm text-muted-foreground">
             Import from CSV, Excel, JSON or plain text → generate scripts → run instantly
           </p>

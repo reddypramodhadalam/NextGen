@@ -58,7 +58,7 @@ const mainNavItems = [
     description: "Overview & metrics",
   },
   {
-    title: "Upload Test Cases",
+    title: "Import Test Cases",
     url: "/upload",
     icon: FileUp,
     description: "Import CSV, Excel, JSON",
@@ -72,7 +72,7 @@ const mainNavItems = [
     badge: "AI",
   },
   {
-    title: "Knowledge Base",
+    title: "AI Knowledge Hub",
     url: "/knowledge",
     icon: Database,
     description: "RAG-powered knowledge",
@@ -118,7 +118,7 @@ const executionNavItems = [
     title: "AI Healer",
     url: "/healer",
     icon: HeartPulse,
-    description: "Auto-fix broken tests",
+    description: "Auto-fix broken tests · Standard + Pro",
     badge: "AI",
   },
   {
@@ -177,6 +177,25 @@ const configNavItems = [
     url: "/agents",
     icon: Bot,
     description: "Autonomous agents",
+  },
+  // NOTE: "Enterprise Agents" (/agents/enterprise) is intentionally hidden from the
+  // sidebar. The feature is a non-functional placeholder — its 7 "agents" are
+  // hardcoded/in-memory with simulated health, and all executions actually run
+  // locally via aiTestExecutor regardless of the agent shown. The page + route in
+  // App.tsx are kept so this can be re-enabled later by restoring this entry.
+  {
+    title: "Compliance",
+    url: "/compliance",
+    icon: ShieldAlert,
+    description: "Approvals, audits, flaky tests",
+    badge: "NEW",
+  },
+  {
+    title: "LLM Tests",
+    url: "/llm-tests",
+    icon: Brain,
+    description: "5-layer LLM evaluation",
+    badge: "NEW",
   },
   {
     title: "Enterprise Agents",

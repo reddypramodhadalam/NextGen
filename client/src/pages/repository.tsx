@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/status-badge";
 import { PriorityBadge } from "@/components/priority-badge";
+import { ReviewRequiredBadge } from "@/components/governance";
 import { EmptyState } from "@/components/empty-state";
 import {
 Dialog,
@@ -430,7 +431,7 @@ New Test Case
 </DialogHeader>
 <div className="overflow-y-auto max-h-[calc(90vh-120px)]">
 <EnhancedTestCaseEditor
-testCase={editingTestCase}
+testCase={(editingTestCase as any) ?? undefined}
 onSave={async (testCase) => {
 if (editingTestCase) {
 await updateTestCaseMutation.mutateAsync({
@@ -587,6 +588,7 @@ return (
 <div className="flex items-center gap-2 shrink-0">
 <PriorityBadge priority={(testCase.priority as any) || "medium"} />
 <StatusBadge status={(testCase.status as any) || "active"} showIcon={false} />
+<ReviewRequiredBadge status={(testCase as any).reviewStatus} />
 <DropdownMenu>
 <DropdownMenuTrigger asChild>
 <Button size="icon" variant="ghost" data-testid={`button-test-menu-${testCase.id}`}>

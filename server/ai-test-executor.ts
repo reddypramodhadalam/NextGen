@@ -243,6 +243,13 @@ export class AITestExecutor {
         } else {
           failedTests++;
           console.log(`[AIExecutor] ✗ FAILED: ${testCase.title}`);
+          
+          // 🎯 UNIFIED HEALER INTEGRATION
+          // Auto-trigger AI Healer analysis on failure (fire-and-forget)
+          // This is the missing pipeline between execution and healer!
+          this.triggerHealerOnFailure(executionId, testCase, result).catch((healerErr: any) => {
+            console.warn(`[AIExecutor] Healer trigger failed (non-fatal): ${healerErr.message}`);
+          });
         }
 
         allLogs.push(...result.logs);
@@ -258,15 +265,118 @@ export class AITestExecutor {
 
       // Update execution status
       const duration = Date.now() - startTime;
+      const finalStatus = failedTests > 0 ? "failed" : "passed";
       await storage.updateExecution(executionId, {
-        status: failedTests > 0 ? "failed" : "passed",
+        status: finalStatus,
         completedAt: new Date(),
         passedTests,
         failedTests,
       });
 
+      // 📊 GENERATE EXECUTION REPORT — this powers the "Generated Reports" list
+      // on the Reports page. Without this, executions complete but no report row
+      // is ever written to test_reports (the cause of "No reports generated yet").
+      try {
+        const totalRun = passedTests + failedTests;
+        const passRate = totalRun > 0 ? Math.round((passedTests / totalRun) * 100) : 0;
+        await storage.createReport({
+          executionId,
+          name: `Execution Report - ${new Date().toISOString().split("T")[0]}`,
+          summary: {
+            status: finalStatus,
+            total: testCases.length,
+            passed: passedTests,
+            failed: failedTests,
+            framework,
+          },
+          passRate,
+          totalDuration: duration,
+          insights: [
+            { type: "info", message: `Framework: ${framework}` },
+            totalRun > 0
+              ? { type: "info", message: `Average test duration: ${Math.round(duration / totalRun / 1000)}s` }
+              : { type: "info", message: "No tests were run" },
+            failedTests > 0
+              ? { type: "warning", message: `${failedTests} test(s) failed - review needed` }
+              : { type: "success", message: "All tests passed" },
+          ],
+        } as any);
+        console.log(`[AIExecutor] 📊 Report generated for execution ${executionId} (passRate: ${passRate}%)`);
+      } catch (reportErr: any) {
+        console.warn(`[AIExecutor] Failed to generate execution report (non-fatal): ${reportErr.message}`);
+      }
+
             console.log(`[AIExecutor] 🏁 EXECUTION COMPLETE: ${failedTests > 0 ? "FAILED" : "PASSED"} (${passedTests} passed, ${failedTests} failed) in ${Math.round(duration / 1000)}s`);
       this.isRunning = false;
+    }
+  }
+
+  /**
+   * 🎯 UNIFIED HEALER INTEGRATION
+   * Auto-trigger AI Healer when a test fails during execution.
+   * Runs asynchronously to not block execution flow.
+   * This connects executions → healer pipeline (the missing link!)
+   */
+  private async triggerHealerOnFailure(
+    executionId: string,
+    testCase: any,
+    result: { passed: boolean; error?: string; logs: string[] }
+  ): Promise<void> {
+    try {
+      // Lazy import to avoid circular deps
+      const { unifiedAIHealer } = await import("./unified-ai-healer");
+      
+      console.log(`[AIExecutor→Healer] Triggering healer for failed test: ${testCase.title}`);
+      
+      // Try to detect step index from error message
+      const stepMatch = (result.error || "").match(/step\s*(\d+)/i);
+      const stepIndex = stepMatch ? parseInt(stepMatch[1]) : 0;
+      
+      // Detect app type from test case or URL
+      const appType = testCase.appType || "web";
+      
+      // Fire healer in ADVANCED mode by default (no auto-apply for safety)
+      const report = await unifiedAIHealer.onExecutionFailure(
+        executionId,
+        testCase.id,
+        {
+          errorMessage: result.error || "Unknown failure",
+          stepIndex,
+          logs: result.logs || [],
+        },
+        {
+          mode: "ADVANCED",
+          autoHeal: false, // Don't auto-apply - let user review suggestions
+          appType,
+        }
+      );
+      
+      console.log(`[AIExecutor→Healer] ✓ Healer analysis complete: ${report.suggestions.length} suggestions, health: ${report.overallHealth}, confidence: ${report.confidenceScore}`);
+
+      // Also record into the Pro/Enterprise healer so its dashboard reflects
+      // real activity from execution failures (Option 3 wiring). The standard
+      // engine produced the suggestions; we mirror the outcome into the Pro KPIs.
+      try {
+        const { enterpriseAIHealer } = await import("./ai-healer-enterprise");
+        if (enterpriseAIHealer && typeof enterpriseAIHealer.recordObservedHealing === "function") {
+          enterpriseAIHealer.recordObservedHealing({
+            testCaseId: testCase.id,
+            testCaseTitle: testCase.title,
+            confidence: report.confidenceScore || 0,
+            // A high-confidence suggestion is treated as a healable outcome,
+            // otherwise it's surfaced as rejected (needs human attention).
+            outcome: (report.confidenceScore || 0) >= 75 ? "accepted" : "rejected",
+            failureMessage: result.error || "Unknown failure",
+            suggestionsCount: report.suggestions.length,
+          });
+          console.log(`[AIExecutor→ProHealer] ✓ Recorded observed healing into Pro dashboard`);
+        }
+      } catch (proErr: any) {
+        console.warn(`[AIExecutor→ProHealer] Pro healer record failed (non-fatal): ${proErr.message}`);
+      }
+    } catch (e: any) {
+      // Don't throw - healing is best-effort
+      console.warn(`[AIExecutor→Healer] Healer trigger failed: ${e.message}`);
     }
   }
 
@@ -548,6 +658,48 @@ export class AITestExecutor {
   }
 
   // ============================================================================
+  // HEAL ANNOTATION HANDLING
+  // ============================================================================
+
+  /**
+   * Parse and strip a folded "[selector: ...]" annotation from a step.
+   *
+   * The AI Healer may fold a suggested selector into the step text as
+   * "[selector: <css|xpath|id>]". Since THIS executor is AI-VISION based — it
+   * reads the LIVE DOM every step and generates its own locators — a
+   * fabricated/stale selector in the text MISLEADS the AI (it obeys the hint
+   * and searches for a non-existent element). So we:
+   *   1. STRIP the annotation from the text sent to the AI (clean NL step), and
+   *   2. return the selector separately as an OPTIONAL, lowest-priority fallback
+   *      locator that is only tried AFTER the AI's live-DOM locators.
+   * This way a genuinely-useful selector still helps, but a bogus one can never
+   * block the step.
+   */
+  private parseSelectorAnnotation(stepText: string): { cleanText: string; selectorHint?: string } {
+    if (!stepText) return { cleanText: stepText };
+    // The selector value itself may contain "]" (e.g. [data-testid="x"]), and
+    // the annotation is always appended at the end, so match greedily up to the
+    // LAST "]" on the line.
+    const m = stepText.match(/\[selector:\s*([\s\S]*)\]\s*$/i);
+    if (!m || m.index === undefined) return { cleanText: stepText };
+    const cleanText = stepText.slice(0, m.index).trim();
+    const selectorHint = m[1].trim();
+    return { cleanText: cleanText || stepText, selectorHint: selectorHint || undefined };
+  }
+
+  /** Convert a folded selector hint into an executable locator string. */
+  private selectorHintToLocator(hint: string): string | undefined {
+    if (!hint) return undefined;
+    const h = hint.trim();
+    if (/^(id|name|css|xpath|shadow)>{0,2}=?/.test(h) && /^(id|name|css|xpath)=/.test(h)) return h;
+    if (h.startsWith("shadow>>")) return h;
+    if (h.startsWith("//") || h.startsWith("(")) return `xpath=${h}`;
+    // Default: treat as a CSS selector (covers [data-testid="x"], #id, .class,
+    // tag[attr="v"], etc.)
+    return `css=${h}`;
+  }
+
+  // ============================================================================
   // AI-POWERED STEP EXECUTION
   // ============================================================================
 
@@ -567,6 +719,18 @@ export class AITestExecutor {
       const snapshot = await this.getPageSnapshot();
       logs.push(`Page: ${snapshot.title} (${snapshot.url})`);
       logs.push(`Found ${(snapshot.elements ?? []).length} interactive elements`);
+
+      // 1a. Strip any folded "[selector: ...]" heal annotation. This executor is
+      // AI-VISION based (it finds elements from the LIVE DOM), so a fabricated or
+      // stale selector in the step text only MISLEADS the AI. We remove it from
+      // the text sent to the AI and keep it as an OPTIONAL last-resort fallback
+      // locator that is appended AFTER the AI's own live-DOM locators.
+      const { cleanText: stepNoAnnotation, selectorHint } = this.parseSelectorAnnotation(stepAction);
+      if (selectorHint) {
+        logs.push(`[Heal] Detected selector hint '${selectorHint}' — using as low-priority fallback only (AI plans from live DOM)`);
+        stepAction = stepNoAnnotation;
+      }
+      const fallbackLocator = selectorHint ? this.selectorHintToLocator(selectorHint) : undefined;
 
             // 1b. Pre-resolve credential values from testDataMap before sending to AI
       const resolvedStepAction = this.resolveCredentialStep(stepAction, testDataMap, snapshot, logs);
@@ -602,6 +766,15 @@ export class AITestExecutor {
 
       // 2. Ask AI to create execution plan
             const plan = await this.getAIExecutionPlan(resolvedStepAction, expected, snapshot, testDataMap, targetUrl);
+
+      // 2a. Append the heal selector hint (if any) as the LOWEST-priority
+      // fallback locator — only tried after the AI's live-DOM locators all fail.
+      // This guarantees a bogus heal can never block a step, while a genuinely
+      // useful selector still gets a chance.
+      if (fallbackLocator) {
+        plan.action.locators = [...(plan.action.locators ?? []), fallbackLocator];
+        logs.push(`[Heal] Appended fallback locator '${fallbackLocator}' to plan (priority: last)`);
+      }
 
       logs.push(`AI Plan: ${plan.action.description} (confidence: ${plan.confidence}%)`);
       logs.push(`AI Reasoning: ${plan.reasoning}`);

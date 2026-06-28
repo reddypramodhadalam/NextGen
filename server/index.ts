@@ -91,6 +91,17 @@ app.use((req, res, next) => {
 
   await registerRoutes(httpServer, app);
 
+  // Bootstrap the Knowledge Base vector index (restore from DB if needed)
+  try {
+    const { bootstrapKnowledgeBase } = await import("./knowledge/bootstrap");
+    bootstrapKnowledgeBase().catch((e: any) =>
+      log(`⚠️  KB bootstrap warning: ${e.message}`, "kb-bootstrap")
+    );
+    log("Knowledge Base bootstrap initiated", "kb-bootstrap");
+  } catch (error: any) {
+    log(`⚠️  KB bootstrap import failed: ${error.message}`, "kb-bootstrap");
+  }
+
   // Start agent health monitor
   const { agentHealthMonitor } = await import("./agent-health-monitor");
   agentHealthMonitor.start();

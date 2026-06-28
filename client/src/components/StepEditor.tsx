@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -19,6 +20,7 @@ import {
   Clock,
   AlertCircle,
 } from 'lucide-react';
+import { detectAction, extractTargetValue, reconstructStepText } from '@/lib/stepAdapter';
 
 export interface TestStep {
   stepId: number;
@@ -29,6 +31,13 @@ export interface TestStep {
   waitEnabled?: boolean;
   retries?: number;
   expected: string;
+  /**
+   * Human-readable instruction for this step (the canonical text persisted as
+   * `step` in the database). `action`/`target`/`value` are derived hints kept
+   * in sync with this text. Optional for backwards-compat with steps created
+   * purely from structured fields.
+   */
+  description?: string;
   alternatives?: Array<{ target: string; reason: string }>;
 }
 
@@ -113,56 +122,41 @@ export const StepEditor: React.FC<StepEditorProps> = ({
       return;
     }
 
+    // Build the new step once. Reconstruct a human-readable instruction from
+    // the structured fields so the canonical `description` (persisted as the
+    // step text) stays in sync and execution has something to interpret.
+    const builtStep: TestStep = {
+      stepId: 0, // renumbered below
+      action: newStep.action,
+      target: newStep.target,
+      value: newStep.value || '',
+      expected: newStep.expected || '',
+      description: reconstructStepText(
+        newStep.action,
+        newStep.target,
+        newStep.value,
+        ''
+      ),
+      timeoutMs: newStep.timeoutMs || DEFAULT_TIMEOUTS[newStep.action] || 5000,
+      waitEnabled: newStep.waitEnabled || false,
+      retries: newStep.retries || 1,
+      alternatives: newStep.alternatives || [],
+    };
+
     let newSteps: TestStep[];
 
     if (insertAfterStepId === null || insertAfterStepId === -1) {
       // Insert at beginning
-      newSteps = [
-        {
-          stepId: 1,
-          action: newStep.action,
-          target: newStep.target,
-          value: newStep.value || '',
-          expected: newStep.expected || '',
-          timeoutMs: newStep.timeoutMs || DEFAULT_TIMEOUTS[newStep.action] || 5000,
-          waitEnabled: newStep.waitEnabled || false,
-          retries: newStep.retries || 1,
-          alternatives: newStep.alternatives || [],
-        },
-        ...steps,
-      ];
+      newSteps = [builtStep, ...steps];
     } else if (insertAfterStepId >= steps.length) {
       // Insert at end
-      newSteps = [
-        ...steps,
-        {
-          stepId: steps.length + 1,
-          action: newStep.action,
-          target: newStep.target,
-          value: newStep.value || '',
-          expected: newStep.expected || '',
-          timeoutMs: newStep.timeoutMs || DEFAULT_TIMEOUTS[newStep.action] || 5000,
-          waitEnabled: newStep.waitEnabled || false,
-          retries: newStep.retries || 1,
-          alternatives: newStep.alternatives || [],
-        },
-      ];
+      newSteps = [...steps, builtStep];
     } else {
-      // Insert after specific step
+      // Insert after specific step (insertAfterStepId is the 0-based index)
       const insertIndex = insertAfterStepId;
       newSteps = [
         ...steps.slice(0, insertIndex + 1),
-        {
-          stepId: insertAfterStepId + 1,
-          action: newStep.action,
-          target: newStep.target,
-          value: newStep.value || '',
-          expected: newStep.expected || '',
-          timeoutMs: newStep.timeoutMs || DEFAULT_TIMEOUTS[newStep.action] || 5000,
-          waitEnabled: newStep.waitEnabled || false,
-          retries: newStep.retries || 1,
-          alternatives: newStep.alternatives || [],
-        },
+        builtStep,
         ...steps.slice(insertIndex + 1),
       ];
     }
@@ -274,6 +268,7 @@ export const StepEditor: React.FC<StepEditorProps> = ({
                   isFirst={index === 0}
                   isLast={index === steps.length - 1}
                   onEdit={() => setEditingStepId(step.stepId)}
+                  onDoneEditing={() => setEditingStepId(null)}
                   onUpdate={(updated) => handleUpdateStep(step.stepId, updated)}
                   onDelete={() => handleDeleteStep(step.stepId)}
                   onMoveUp={() => handleMoveUp(step.stepId)}
@@ -540,6 +535,7 @@ interface StepCardProps {
   isFirst: boolean;
   isLast: boolean;
   onEdit: () => void;
+  onDoneEditing: () => void;
   onUpdate: (step: Partial<TestStep>) => void;
   onDelete: () => void;
   onMoveUp: () => void;
@@ -553,6 +549,7 @@ const StepCard: React.FC<StepCardProps> = ({
   isFirst,
   isLast,
   onEdit,
+  onDoneEditing,
   onUpdate,
   onDelete,
   onMoveUp,
@@ -572,12 +569,12 @@ const StepCard: React.FC<StepCardProps> = ({
               <div>
                 <p className="text-xs text-blue-100">Current Action</p>
                 <p className="text-lg font-bold text-white">
-                  {(step.action || 'Unknown').toUpperCase()}
+                  {safeCapitalize(step.action)}
                 </p>
               </div>
             </div>
             <Button 
-              onClick={() => onEdit()}
+              onClick={(e) => { e.stopPropagation(); onDoneEditing(); }}
               className="bg-green-500 hover:bg-green-600 text-white px-6 font-semibold"
             >
               ✓ Done Editing
@@ -586,11 +583,58 @@ const StepCard: React.FC<StepCardProps> = ({
 
           {/* Edit Fields */}
           <div className="space-y-4" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            {/* Instruction (canonical step text) */}
+            <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+              <label className="text-sm font-bold text-white">📝 Step Instruction</label>
+              <Textarea
+                autoFocus
+                placeholder="e.g., Click the Login button / Enter username = admin / Navigate to https://example.com"
+                value={step.description ?? ''}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  // The instruction is the source of truth. Re-derive the
+                  // action / target / value hints so the chips stay in sync.
+                  const text = e.target.value;
+                  const action = detectAction(text);
+                  const { target, value } = extractTargetValue(text);
+                  onUpdate({ description: text, action, target, value });
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                onKeyUp={(e) => e.stopPropagation()}
+                rows={2}
+                className="text-base bg-white border-2 border-blue-400 focus:border-blue-600 font-semibold text-blue-900 placeholder:text-blue-300"
+                autoComplete="off"
+              />
+              <p className="text-xs text-blue-100">
+                Plain-English instruction that will be executed. Action/target update automatically.
+              </p>
+            </div>
+
+            {/* Action override */}
+            <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+              <label className="text-sm font-bold text-white">⚡ Action</label>
+              <Select
+                value={ALLOWED_ACTIONS.includes(step.action) ? step.action : 'verify'}
+                onValueChange={(value) => onUpdate({ action: value })}
+              >
+                <SelectTrigger className="w-full text-base font-bold text-blue-900 border-2 border-blue-400 bg-white">
+                  <SelectValue placeholder="Select action..." />
+                </SelectTrigger>
+                <SelectContent className="bg-white">
+                  {ALLOWED_ACTIONS.map((action) => (
+                    <SelectItem key={action} value={action} className="text-base font-semibold text-gray-900">
+                      {safeCapitalize(action)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             {/* Target */}
             <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
               <label className="text-sm font-bold text-white">🎯 Target Selector/URL</label>
               <Input
-                autoFocus
                 placeholder="CSS selector, XPath, or URL"
                 value={step.target}
                 onChange={(e) => {
@@ -796,6 +840,14 @@ const StepCard: React.FC<StepCardProps> = ({
 
               {/* Details */}
               <div className="space-y-2 text-sm bg-gray-50 p-3 rounded-lg">
+                {step.description && (
+                  <div className="flex gap-2">
+                    <span className="font-semibold text-gray-700 min-w-fit">Instruction:</span>
+                    <span className="text-gray-900 flex-1 bg-white px-2 py-1 rounded border border-gray-200">
+                      {step.description}
+                    </span>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <span className="font-semibold text-gray-700 min-w-fit">Target:</span>
                   <code className="text-gray-800 font-mono break-all flex-1 bg-white px-2 py-1 rounded border border-gray-200">

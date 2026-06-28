@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  SelectGroup, SelectLabel, SelectSeparator,
 } from "@/components/ui/select";
 import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
@@ -27,8 +28,15 @@ import {
   Target, BarChart3, Bot, Settings2, ChevronRight, Code2, Users, Cpu,
   Network, Activity, CheckCircle2, XCircle, Clock, TrendingUp,
   Upload, FileUp, RefreshCw, X, Wand2, BookOpen, FileSearch,
+  Maximize2, Minimize2, ListChecks,
 } from "lucide-react";
 import type { TestSuite } from "@shared/schema";
+import {
+  AiDisclaimerBanner,
+  HumanReviewGate,
+  type ReviewableItem,
+} from "@/components/governance";
+import { useGovernance } from "@/hooks/useGovernance";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -156,19 +164,31 @@ function TestCaseCard({ test, index, selected, onToggle }: {
             <span className={cn("text-[10px] font-mono ml-auto", confColor)}>{confidence}%</span>
           </div>
           <p className="text-xs text-muted-foreground mb-2">{test.description}</p>
-          {/* Steps preview */}
-          <div className="space-y-0.5">
-            {test.steps.slice(0, expanded ? 99 : 3).map((s, i) => (
-              <div key={i} className="flex items-start gap-1.5 text-xs">
-                <span className="text-muted-foreground font-mono shrink-0 w-4 text-right">{i+1}.</span>
-                <span className="text-muted-foreground">{s.step}</span>
-              </div>
-            ))}
+          {/* Steps table — Step # · Action · Expected Result */}
+          <div className="rounded-lg border border-border/60 overflow-hidden">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-muted/50">
+                  <th className="text-left font-semibold text-muted-foreground px-2 py-1.5 w-7">#</th>
+                  <th className="text-left font-semibold text-muted-foreground px-2 py-1.5">Action / Step</th>
+                  <th className="text-left font-semibold text-muted-foreground px-2 py-1.5">Expected Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {test.steps.slice(0, expanded ? 99 : 3).map((s, i) => (
+                  <tr key={i} className="border-t border-border/40 align-top">
+                    <td className="px-2 py-1.5 font-mono text-muted-foreground text-right tabular-nums">{i + 1}</td>
+                    <td className="px-2 py-1.5 text-foreground/90 break-words">{s.step}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground break-words">{s.expected}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
           {test.steps.length > 3 && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="text-xs text-primary mt-1 hover:underline"
+              className="text-xs text-primary mt-1.5 hover:underline"
             >
               {expanded ? "Show less" : `+${test.steps.length - 3} more steps`}
             </button>
@@ -222,6 +242,14 @@ export default function Generator() {
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [selectedTests, setSelectedTests] = useState<Set<number>>(new Set());
   const [activeTab, setActiveTab] = useState("tests");
+  const [resultsExpanded, setResultsExpanded] = useState(false);
+
+  // ── Governance ─────────────────────────────────────────────────────────
+  // In VALIDATED systems, "Save tests" must open a HumanReviewGate that
+  // collects an attestation + e-signature before the rows are written.
+  const governance = useGovernance();
+  const [reviewGateOpen, setReviewGateOpen] = useState(false);
+  const [savedTestCaseIds, setSavedTestCaseIds] = useState<string[]>([]);
 
   // Spec upload
   const [specResult, setSpecResult] = useState<SpecParseResult | null>(null);
@@ -235,6 +263,30 @@ export default function Generator() {
   const profiles = profilesResponse?.profiles || [];
   const selectedProfile = profiles.find((p: AppProfile) => p.type === selectedAppType);
   const profileColors = selectedProfile ? (COLOR_CLASSES[selectedProfile.color] || COLOR_CLASSES.blue) : COLOR_CLASSES.blue;
+
+  // Group profiles by category for the dropdown (preserves a stable, sensible order)
+  const groupedProfiles = (() => {
+    const order = ["web", "erp", "desktop", "mobile", "api"];
+    const labels: Record<string, string> = {
+      web: "Web Applications", erp: "ERP Systems", desktop: "Desktop Applications",
+      mobile: "Mobile Applications", api: "API & Services",
+    };
+    const groups = new Map<string, AppProfile[]>();
+    for (const p of profiles) {
+      const cat = (p as any).category || "web";
+      if (!groups.has(cat)) groups.set(cat, []);
+      groups.get(cat)!.push(p);
+    }
+    return order
+      .filter(cat => groups.has(cat))
+      .map(cat => ({ category: cat, label: labels[cat] || cat, items: groups.get(cat)! }))
+      .concat(
+        Array.from(groups.keys())
+          .filter(cat => !order.includes(cat))
+          .map(cat => ({ category: cat, label: labels[cat] || cat, items: groups.get(cat)! }))
+      );
+  })();
+  const SelectedAppIcon = selectedProfile ? (ICON_MAP[selectedProfile.icon] || Globe) : AppWindow;
 
   const contextFieldCount = [appName, moduleName, businessUseCase, userRoles, appContext,
     functionalRequirements, nonFunctionalRequirements, apiDetails, uiWorkflow, dataVariations, environment
@@ -296,23 +348,46 @@ export default function Generator() {
       const rawCases: any[] = data.testCases || [];
 
       const mapped: GeneratedTestCase[] = rawCases.map((tc: any, i: number) => {
-        // Normalise steps — handle string arrays, object arrays, or missing
+        // Normalise steps — handle string arrays, object arrays, or missing.
+        // Field names vary across AI responses, so check every known variant.
         let steps: { step: string; expected: string }[] = [];
         if (Array.isArray(tc.steps) && tc.steps.length > 0) {
           steps = tc.steps
-            .map((s: any) => ({
-              step:     typeof s === "string" ? s : (s.step || (s.action && s.target ? `${s.action}: ${s.target}` : s.action) || s.description || ""),
-              expected: typeof s === "object" ? (s.expected || s.expectedResult || "Completed successfully") : "Completed successfully",
-            }))
-            .filter((s: any) => s.step.trim());
+            .map((s: any) => {
+              if (typeof s === "string") {
+                return { step: s, expected: "Completed successfully" };
+              }
+              const stepText =
+                s.step ||
+                (s.action && s.target ? `${s.action}: ${s.target}` : s.action) ||
+                s.actionDescription ||
+                s.description ||
+                s.instruction ||
+                "";
+              const expectedText =
+                s.expected ||
+                s.expectedResult ||
+                s.expectedOutcome ||
+                s.result ||
+                "Completed successfully";
+              return { step: stepText, expected: expectedText };
+            })
+            .filter((s: any) => s.step && s.step.trim());
         }
+        const safeTitle = tc.title || tc.testCaseName || tc.name || `Test Case ${i + 1}`;
         if (steps.length === 0) {
-          steps = [{ step: tc.description || `Execute ${tc.title}`, expected: "Completed successfully" }];
+          const desc = tc.description || tc.objective || "";
+          steps = [
+            {
+              step: desc ? `Execute: ${String(desc).split("\n")[0]}` : `Execute ${safeTitle}`,
+              expected: "Completed successfully",
+            },
+          ];
         }
         return {
           testCaseId:       tc.testCaseId  || `TC_${String(i + 1).padStart(3, "0")}`,
-          title:            tc.title       || `Test Case ${i + 1}`,
-          description:      tc.description || "",
+          title:            safeTitle,
+          description:      tc.description || tc.objective || "",
           priority:         tc.priority    || "medium",
           preconditions:    Array.isArray(tc.preconditions) ? tc.preconditions.join("; ") : (tc.preconditions || "N/A"),
           steps,
@@ -352,15 +427,47 @@ export default function Generator() {
 
   const saveMutation = useMutation({
     mutationFn: async (testCases: GeneratedTestCase[]) => {
-      const promises = testCases.map(tc =>
-        apiRequest("POST", "/api/test-cases", { ...tc, suiteId: selectedSuite || null, generatedByAI: true })
-      );
-      return Promise.all(promises);
+      // Save sequentially so we can collect the returned IDs in the order the
+      // user picked them — the IDs are needed for the HumanReviewGate.
+      const created: Array<{ id: string; title: string; preview: string }> = [];
+      for (const tc of testCases) {
+        const res = await apiRequest("POST", "/api/test-cases", {
+          ...tc,
+          suiteId: selectedSuite || null,
+          generatedByAI: true,
+        });
+        const body = await res.json();
+        created.push({
+          id: body.id,
+          title: body.title,
+          preview: (body.description || "").slice(0, 140),
+        });
+      }
+      return created;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["/api/test-cases"] });
-      toast({ title: "Tests Saved", description: `${selectedTests.size} test cases saved to repository.` });
-      setResult(null); setSelectedTests(new Set()); setRequirement(""); setRequirementTitle("");
+      const ids = created.map((c) => c.id);
+      setSavedTestCaseIds(ids);
+
+      if (governance.requireHumanReview) {
+        // VALIDATED: the rows now exist as DRAFT. Open the review gate so the
+        // user records an APPROVED governance review before they can execute.
+        toast({
+          title: "Tests saved as DRAFT",
+          description: "Human review required before execution. Opening review dialog…",
+        });
+        setReviewGateOpen(true);
+      } else {
+        toast({
+          title: "Tests Saved",
+          description: `${created.length} test cases saved to repository.`,
+        });
+        setResult(null);
+        setSelectedTests(new Set());
+        setRequirement("");
+        setRequirementTitle("");
+      }
     },
     onError: () => {
       toast({ title: "Save Failed", description: "Failed to save test cases.", variant: "destructive" });
@@ -460,7 +567,7 @@ export default function Generator() {
   }[testDepth];
 
   return (
-    <div className="p-6 space-y-5 max-w-7xl mx-auto">
+    <div className="p-6 space-y-5 max-w-[1600px] mx-auto">
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
@@ -473,16 +580,162 @@ export default function Generator() {
           </div>
         </div>
         {result && (
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm">
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <span className="text-muted-foreground">{result.testCases.length} tests generated</span>
+            <span className="font-medium text-emerald-600 dark:text-emerald-400">{result.testCases.length} tests generated</span>
           </div>
         )}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-5">
+      {/*
+        Layout: a 12-column grid on xl screens.
+        - Input panel: 4 cols (compact, scrollable on its own)
+        - Results panel: 8 cols (the "big screen" the user asked for)
+        When the user expands results to fullscreen, the input panel collapses
+        and results take the full 12 columns.
+      */}
+      <div className={cn("grid gap-5 items-start", resultsExpanded ? "xl:grid-cols-1" : "xl:grid-cols-12")}>
         {/* ── LEFT PANEL: Input ──────────────────────────────────────────── */}
-        <div className="xl:col-span-2 space-y-4">
+        <div className={cn("space-y-4 xl:col-span-4 xl:sticky xl:top-4", resultsExpanded && "hidden")}>
+          <div className="xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1.5 space-y-4">            {/* placeholder marker — content unchanged below */}
+          {/* ── Spec / Documentation Upload Card ──────────────────────── */}
+          <Card className={cn(specResult && "border-violet-500/40 bg-violet-500/3")}>
+            <Collapsible open={showSpecUpload} onOpenChange={setShowSpecUpload}>
+              <CollapsibleTrigger asChild>
+                <button className="w-full text-left">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <FileSearch className={cn("h-4 w-4", specResult ? "text-violet-500" : "text-muted-foreground")} />
+                      <span>Upload Spec / Documentation</span>
+                      {specResult && !showSpecUpload && (
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 ml-1 bg-violet-500/10 text-violet-600 border-violet-500/20">
+                          {specResult.filename}
+                        </Badge>
+                      )}
+                      <span className="ml-auto text-xs text-muted-foreground font-normal">
+                        {showSpecUpload ? "hide" : (specResult ? "spec loaded" : "upload PDF/DOCX/TXT")}
+                      </span>
+                      <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", showSpecUpload && "rotate-180")} />
+                    </CardTitle>
+                    {!showSpecUpload && !specResult && (
+                      <CardDescription className="text-xs text-left">
+                        Upload a requirements doc, PRD, or user story to auto-fill test inputs
+                      </CardDescription>
+                    )}
+                  </CardHeader>
+                </button>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent className="pt-0 space-y-3">
+                  {!specResult ? (
+                    /* ── Drop zone ── */
+                    <div
+                      className={cn(
+                        "flex flex-col items-center justify-center gap-3 p-6 rounded-xl border-2 border-dashed cursor-pointer transition-all",
+                        specDragging ? "border-violet-500 bg-violet-500/8" : "border-border/60 hover:border-violet-400/60 hover:bg-muted/30"
+                      )}
+                      onDragOver={e => { e.preventDefault(); setSpecDragging(true); }}
+                      onDragLeave={() => setSpecDragging(false)}
+                      onDrop={e => { e.preventDefault(); setSpecDragging(false); const f = e.dataTransfer.files[0]; if (f) parseSpec(f); }}
+                      onClick={() => specInputRef.current?.click()}
+                    >
+                      <input ref={specInputRef} type="file" accept=".pdf,.docx,.doc,.txt,.md"
+                        className="hidden"
+                        onChange={e => { const f = e.target.files?.[0]; if (f) parseSpec(f); e.target.value = ""; }}
+                      />
+                      {isParsingSpec ? (
+                        <><Loader2 className="h-8 w-8 text-violet-500 animate-spin" />
+                          <p className="text-sm font-medium text-muted-foreground">Parsing document...</p></>
+                      ) : (
+                        <>
+                          <div className="h-10 w-10 rounded-xl bg-violet-500/10 flex items-center justify-center">
+                            <FileUp className="h-5 w-5 text-violet-500" />
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm font-medium">Drop spec document here</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">or click to browse · max 50 MB</p>
+                          </div>
+                          <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                            {[".pdf", ".docx", ".txt", ".md"].map(ext => (
+                              <Badge key={ext} variant="secondary" className="font-mono text-[10px]">{ext}</Badge>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    /* ── Parse result ── */
+                    <div className="space-y-3">
+                      {/* File info bar */}
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-violet-500/8 border border-violet-500/20">
+                        <BookOpen className="h-4 w-4 text-violet-500 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold truncate">{specResult.filename}</p>
+                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                            <span className="text-[10px] text-muted-foreground">{specResult.pages} page{specResult.pages !== 1 ? "s" : ""}</span>
+                            <span className="text-[10px] text-muted-foreground">·</span>
+                            <span className="text-[10px] text-muted-foreground">{(specResult.charCount / 1000).toFixed(1)}k chars</span>
+                            <span className="text-[10px] text-muted-foreground">·</span>
+                            <span className="text-[10px] text-muted-foreground">{specResult.sections.length} sections</span>
+                            {specResult.truncated && (
+                              <span className="text-[10px] bg-amber-500/10 text-amber-600 border border-amber-500/20 px-1 rounded">truncated</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setSpecResult(null)}
+                          className="shrink-0 h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {/* AI summary */}
+                      {specResult.summary && specResult.summary !== "(AI summary unavailable)" && (
+                        <div className="p-2.5 rounded-lg bg-muted/40 border border-border/50">
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1">AI Summary</p>
+                          <p className="text-xs text-muted-foreground leading-relaxed">{specResult.summary}</p>
+                        </div>
+                      )}
+
+                      {/* Sections */}
+                      {specResult.sections.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase mb-1.5">Detected Sections</p>
+                          <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto pr-1">
+                            {specResult.sections.slice(0, 20).map((s, i) => (
+                              <span key={i} className="text-[10px] bg-muted px-1.5 py-0.5 rounded border border-border/50 truncate max-w-[160px]">{s}</span>
+                            ))}
+                            {specResult.sections.length > 20 && (
+                              <span className="text-[10px] text-muted-foreground">+{specResult.sections.length - 20} more</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={applySpecToRequirement}>
+                          <FileText className="h-3.5 w-3.5" />Auto-fill Requirement
+                        </Button>
+                        <Button size="sm" className="h-8 text-xs gap-1.5 bg-violet-600 hover:bg-violet-700" onClick={applySpecToAllContext}>
+                          <Wand2 className="h-3.5 w-3.5" />Auto-fill All Context
+                        </Button>
+                      </div>
+
+                      {/* Re-upload link */}
+                      <button
+                        onClick={() => { setSpecResult(null); setTimeout(() => specInputRef.current?.click(), 50); }}
+                        className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                      >
+                        <RefreshCw className="h-3 w-3" />Upload different file
+                      </button>
+                    </div>
+                  )}
+                </CardContent>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
 
           {/* ── Spec / Documentation Upload Card ──────────────────────── */}
           <Card className={cn(specResult && "border-violet-500/40 bg-violet-500/3")}>
@@ -630,26 +883,62 @@ export default function Generator() {
                 <AppWindow className="h-4 w-4" />Application Type
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-1.5 max-h-52 overflow-y-auto pr-1">
-                {profiles.map(profile => {
-                  const Icon = ICON_MAP[profile.icon] || Globe;
-                  const colors = COLOR_CLASSES[profile.color] || COLOR_CLASSES.blue;
-                  const sel = selectedAppType === profile.type;
-                  return (
-                    <button key={profile.type} onClick={() => setSelectedAppType(profile.type)}
-                      className={cn("flex items-center gap-2 p-2 rounded-lg border text-left transition-all text-xs",
-                        sel ? `${colors.bg} ${colors.border} font-semibold` : "bg-muted/30 border-border/50 hover:border-border"
-                      )}>
-                      <div className={cn("h-6 w-6 rounded flex items-center justify-center shrink-0", colors.bg)}>
-                        <Icon className={cn("h-3 w-3", colors.text)} />
-                      </div>
-                      <span className="truncate">{profile.label}</span>
-                      {sel && <Check className={cn("h-3 w-3 ml-auto shrink-0", colors.text)} />}
-                    </button>
-                  );
-                })}
-              </div>
+            <CardContent className="space-y-2.5">
+              <Select value={selectedAppType} onValueChange={setSelectedAppType}>
+                <SelectTrigger className="h-11" data-testid="select-app-type">
+                  <SelectValue placeholder="Select application type...">
+                    {selectedProfile && (
+                      <span className="flex items-center gap-2.5">
+                        <span className={cn("h-7 w-7 rounded-md flex items-center justify-center shrink-0", profileColors.bg)}>
+                          <SelectedAppIcon className={cn("h-4 w-4", profileColors.text)} />
+                        </span>
+                        <span className="font-medium">{selectedProfile.label}</span>
+                      </span>
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="max-h-[360px]">
+                  {groupedProfiles.map((group, gi) => (
+                    <SelectGroup key={group.category}>
+                      {gi > 0 && <SelectSeparator />}
+                      <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                        {group.label}
+                      </SelectLabel>
+                      {group.items.map(profile => {
+                        const Icon = ICON_MAP[profile.icon] || Globe;
+                        const colors = COLOR_CLASSES[profile.color] || COLOR_CLASSES.blue;
+                        return (
+                          <SelectItem key={profile.type} value={profile.type} className="py-2">
+                            <span className="flex items-center gap-2.5">
+                              <span className={cn("h-7 w-7 rounded-md flex items-center justify-center shrink-0", colors.bg)}>
+                                <Icon className={cn("h-4 w-4", colors.text)} />
+                              </span>
+                              <span className="flex flex-col">
+                                <span className="text-sm font-medium leading-tight">{profile.label}</span>
+                                <span className="text-[11px] text-muted-foreground leading-tight line-clamp-1">{profile.description}</span>
+                              </span>
+                            </span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
+              {/* Selected profile hint */}
+              {selectedProfile && (
+                <div className={cn("flex items-start gap-2 rounded-lg border px-2.5 py-2", profileColors.bg, profileColors.border)}>
+                  <Info className={cn("h-3.5 w-3.5 mt-0.5 shrink-0", profileColors.text)} />
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-muted-foreground leading-snug">{selectedProfile.description}</p>
+                    {selectedProfile.locatorStrategy && (
+                      <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">
+                        <span className="font-medium">Strategy:</span> {selectedProfile.locatorStrategy}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -779,29 +1068,91 @@ export default function Generator() {
               <><Sparkles className="h-4 w-4 mr-2" />Generate {depthInfo.label} Test Suite ({depthInfo.desc})</>
             )}
           </Button>
+          </div>
         </div>
 
         {/* ── RIGHT PANEL: Results ───────────────────────────────────────── */}
-        <div className="xl:col-span-3">
-          {!result ? (
-            <Card className="h-full min-h-[600px] flex items-center justify-center">
-              <div className="text-center py-12 px-6">
-                <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 flex items-center justify-center mx-auto mb-4">
-                  <Brain className="h-8 w-8 text-primary/50" />
+        <div className={cn(resultsExpanded ? "xl:col-span-1" : "xl:col-span-8")}>
+          {generateMutation.isPending ? (
+            /* ── LOADING STATE — fills the whole panel so the screen never looks half-empty ── */
+            <Card className="h-[calc(100vh-7rem)] min-h-[600px] flex flex-col overflow-hidden">
+              <CardHeader className="border-b border-border/50 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="relative h-10 w-10 shrink-0">
+                    <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 animate-pulse" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Sparkles className="h-5 w-5 text-white animate-pulse" />
+                    </div>
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Generating {depthInfo.label} Test Suite…</CardTitle>
+                    <CardDescription className="text-xs">
+                      The AI QA Architect is analyzing your requirement and designing {depthInfo.desc}
+                    </CardDescription>
+                  </div>
+                  <Loader2 className="h-5 w-5 text-primary animate-spin ml-auto" />
                 </div>
-                <h3 className="font-semibold text-lg mb-2">AI QA Architect Ready</h3>
-                <p className="text-muted-foreground text-sm max-w-sm">
-                  Configure your requirement and architect context, then generate a comprehensive enterprise test suite
+              </CardHeader>
+              <CardContent className="flex-1 overflow-hidden pt-5">
+                {/* Animated pipeline steps */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">
+                  {[
+                    { icon: FileSearch, label: "Parsing requirement" },
+                    { icon: Brain, label: "Designing scenarios" },
+                    { icon: Shield, label: "Mapping coverage" },
+                    { icon: Code2, label: "Writing steps" },
+                  ].map((s, i) => (
+                    <div key={s.label}
+                      className="flex flex-col items-center gap-1.5 p-3 rounded-xl border border-border/50 bg-muted/20 animate-pulse"
+                      style={{ animationDelay: `${i * 200}ms` }}>
+                      <s.icon className="h-4 w-4 text-primary/70" />
+                      <span className="text-[10px] text-muted-foreground text-center leading-tight">{s.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Skeleton test-case rows */}
+                <div className="space-y-2.5">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="rounded-xl border border-border/50 p-3"
+                      style={{ opacity: 1 - i * 0.12 }}>
+                      <div className="flex items-start gap-3">
+                        <div className="h-5 w-5 rounded border border-border shrink-0 shimmer" />
+                        <div className="flex-1 space-y-2">
+                          <div className="h-3.5 w-2/3 rounded shimmer" />
+                          <div className="flex gap-1.5">
+                            <div className="h-4 w-16 rounded shimmer" />
+                            <div className="h-4 w-12 rounded shimmer" />
+                            <div className="h-4 w-20 rounded shimmer" />
+                          </div>
+                          <div className="h-3 w-full rounded shimmer" />
+                          <div className="h-3 w-4/5 rounded shimmer" />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : !result ? (
+            /* ── EMPTY STATE — also fills the panel, centered ── */
+            <Card className="h-[calc(100vh-7rem)] min-h-[600px] flex items-center justify-center border-dashed">
+              <div className="text-center py-12 px-6 max-w-md">
+                <div className="h-20 w-20 rounded-3xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 flex items-center justify-center mx-auto mb-5 animate-float">
+                  <Brain className="h-10 w-10 text-primary/50" />
+                </div>
+                <h3 className="font-semibold text-xl mb-2">AI QA Architect Ready</h3>
+                <p className="text-muted-foreground text-sm mb-6">
+                  Pick your application type, describe the requirement, then generate a comprehensive enterprise test suite. Results will appear here.
                 </p>
-                <div className="mt-6 grid grid-cols-3 gap-3 text-xs text-muted-foreground">
+                <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
                   {[
                     { icon: Shield, label: "10 Coverage Categories" },
                     { icon: Target, label: "Domain-Specific Rules" },
                     { icon: Code2, label: "Automation-Ready Steps" },
                   ].map(f => (
-                    <div key={f.label} className="flex flex-col items-center gap-1.5 p-2 rounded-lg bg-muted/30">
-                      <f.icon className="h-4 w-4 text-primary/60" />
-                      <span>{f.label}</span>
+                    <div key={f.label} className="flex flex-col items-center gap-2 p-3 rounded-xl bg-muted/30 border border-border/40">
+                      <f.icon className="h-5 w-5 text-primary/60" />
+                      <span className="text-center leading-tight">{f.label}</span>
                     </div>
                   ))}
                 </div>
@@ -809,18 +1160,28 @@ export default function Generator() {
             </Card>
           ) : (
             <div className="space-y-4">
+              {/* ── Mandatory AI disclaimer banner (governance) ──────── */}
+              <AiDisclaimerBanner variant="generator" />
+
               {/* Stats row */}
               <div className="grid grid-cols-4 gap-3">
                 {[
-                  { label: "Total Tests", value: result.testCases.length, color: "text-primary" },
-                  { label: "Selected", value: selectedTests.size, color: "text-foreground" },
-                  { label: "Risk Areas", value: result.riskAreas?.length || 0, color: "text-amber-500" },
-                  { label: "Auto-Ready", value: result.automationCandidates?.length || 0, color: "text-emerald-500" },
+                  { label: "Total Tests", value: result.testCases.length, color: "text-primary", icon: TestTube2 },
+                  { label: "Selected", value: selectedTests.size, color: "text-foreground", icon: ListChecks },
+                  { label: "Risk Areas", value: result.riskAreas?.length || 0, color: "text-amber-500", icon: AlertTriangle },
+                  { label: "Auto-Ready", value: result.automationCandidates?.length || 0, color: "text-emerald-500", icon: Bot },
                 ].map(s => (
-                  <Card key={s.label}><CardContent className="p-3 text-center">
-                    <p className={cn("text-xl font-bold", s.color)}>{s.value}</p>
-                    <p className="text-[10px] text-muted-foreground">{s.label}</p>
-                  </CardContent></Card>
+                  <Card key={s.label} className="overflow-hidden">
+                    <CardContent className="p-3 flex items-center gap-3">
+                      <div className={cn("h-9 w-9 rounded-lg bg-muted/50 flex items-center justify-center shrink-0", s.color)}>
+                        <s.icon className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className={cn("text-xl font-bold leading-none", s.color)}>{s.value}</p>
+                        <p className="text-[10px] text-muted-foreground mt-1 truncate">{s.label}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
                 ))}
               </div>
 
@@ -843,9 +1204,21 @@ export default function Generator() {
                         </TabsTrigger>
                       </TabsList>
                     </Tabs>
-                    <Button onClick={handleSave} disabled={saveMutation.isPending || selectedTests.size === 0} size="sm">
-                      {saveMutation.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Saving...</> : <><Plus className="h-3.5 w-3.5 mr-1" />Save {selectedTests.size} Selected</>}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9 gap-1.5 hidden xl:inline-flex"
+                        onClick={() => setResultsExpanded(v => !v)}
+                        title={resultsExpanded ? "Collapse to split view" : "Expand results to full width"}
+                      >
+                        {resultsExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                        {resultsExpanded ? "Split View" : "Expand"}
+                      </Button>
+                      <Button onClick={handleSave} disabled={saveMutation.isPending || selectedTests.size === 0} size="sm" className="h-9">
+                        {saveMutation.isPending ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Saving...</> : <><Plus className="h-3.5 w-3.5 mr-1" />Save {selectedTests.size} Selected</>}
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="pt-3">
@@ -865,8 +1238,8 @@ export default function Generator() {
                           {selectedTests.size === result.testCases.length ? "Deselect all" : "Select all"}
                         </button>
                       </div>
-                      <ScrollArea className="h-[480px]">
-                        <div className="space-y-2 pr-2">
+                      <ScrollArea className="h-[calc(100vh-22rem)] min-h-[420px]">
+                        <div className={cn("pr-2", resultsExpanded ? "grid grid-cols-1 lg:grid-cols-2 gap-2" : "space-y-2")}>
                           {result.testCases.map((tc, i) => (
                             <TestCaseCard key={i} test={tc} index={i} selected={selectedTests.has(i)} onToggle={() => toggleTest(i)} />
                           ))}
@@ -990,6 +1363,39 @@ export default function Generator() {
           )}
         </div>
       </div>
+
+      {/* ─────────────────────────────────────────────────────────────────
+          GOVERNANCE: Human Review Gate
+          Opens after DRAFT save in VALIDATED systems. User MUST approve
+          before the test cases can be executed.
+      ───────────────────────────────────────────────────────────────────── */}
+      <HumanReviewGate
+        open={reviewGateOpen}
+        onOpenChange={setReviewGateOpen}
+        title="Approve AI-Generated Test Cases"
+        intro="The test cases below are AI-generated drafts. They cannot be executed until you approve them. Final accountability rests with the reviewer."
+        items={
+          (result?.testCases || [])
+            .filter((_, i) => selectedTests.has(i))
+            .slice(0, savedTestCaseIds.length)
+            .map((tc, i): ReviewableItem => ({
+              id: savedTestCaseIds[i],
+              type: "TEST_CASE",
+              title: tc.title,
+              subtitle: `${tc.steps.length} step(s) · ${tc.priority}`,
+              contentPreview: tc.description?.slice(0, 200),
+            }))
+        }
+        onApproved={() => {
+          // Reset generator after successful approval
+          setResult(null);
+          setSelectedTests(new Set());
+          setRequirement("");
+          setRequirementTitle("");
+          setSavedTestCaseIds([]);
+        }}
+      />
     </div>
   );
 }
+

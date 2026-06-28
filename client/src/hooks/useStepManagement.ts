@@ -9,6 +9,8 @@ export interface TestStep {
   waitEnabled?: boolean;
   retries?: number;
   expected: string;
+  /** Human-readable instruction (canonical `step` text persisted in the DB). */
+  description?: string;
   alternatives?: Array<{ target: string; reason: string }>;
 }
 

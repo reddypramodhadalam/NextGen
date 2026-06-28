@@ -1,19 +1,49 @@
 /**
  * AITAS Knowledge Base API Routes
  * ═══════════════════════════════════════════════════════════════════════════════
- * REST API for Knowledge Base management
+ * REST API for Knowledge Base management with REAL ingestion pipeline:
+ *   - URL sources (GitHub, Confluence, etc.) via URL extractor
+ *   - File uploads (PPT, PDF, DOCX, Images) via multipart endpoint
+ *   - Live preview (extract+structure+validate WITHOUT storing)
+ *   - RAG retrieval for test generation
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
 import { Router, Request, Response } from "express";
+import multer from "multer";
+import nodePath from "path";
 import { knowledgeStorage } from "./knowledge-storage";
-import { 
-  insertKnowledgeSourceSchema, 
+import {
+  insertKnowledgeSourceSchema,
   insertGovernanceRuleSchema,
-  IngestionStatus 
+  IngestionStatus,
 } from "../shared/knowledge-schema";
+import { ingestionEngine } from "./knowledge/ingestion-engine";
+import { vectorIndex } from "./knowledge/vector-index";
 
 const router = Router();
+
+// File upload config - 50MB max, allowed: PPT/PDF/DOCX/Images
+const ALLOWED_EXTENSIONS = new Set([
+  ".pptx", ".ppt",
+  ".pdf",
+  ".docx", ".doc",
+  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+  ".txt", ".md", ".csv",
+]);
+
+const knowledgeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  fileFilter: (_req: any, file: any, cb: any) => {
+    const ext = nodePath.extname(file.originalname).toLowerCase();
+    if (ALLOWED_EXTENSIONS.has(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Unsupported file type: ${ext}. Allowed: ${Array.from(ALLOWED_EXTENSIONS).join(", ")}`));
+    }
+  },
+});
 
 // Helper to safely get string param
 const getParam = (param: string | string[]): string => Array.isArray(param) ? param[0] : param;
@@ -92,7 +122,15 @@ router.patch("/sources/:id", async (req: Request, res: Response) => {
 // Delete knowledge source (cascade deletes documents and knowledge)
 router.delete("/sources/:id", async (req: Request, res: Response) => {
   try {
-    await knowledgeStorage.deleteKnowledgeSource(String(req.params.id));
+    const sourceId = String(req.params.id);
+    // Remove from vector index FIRST (storage cascade will drop the rows)
+    try {
+      vectorIndex.removeBySource(sourceId);
+      await vectorIndex.flush();
+    } catch (vecErr: any) {
+      console.warn("[KnowledgeBase] Vector index cleanup failed (non-fatal):", vecErr.message);
+    }
+    await knowledgeStorage.deleteKnowledgeSource(sourceId);
     res.status(204).send();
   } catch (error: any) {
     console.error("[KnowledgeBase] Error deleting source:", error);
@@ -101,222 +139,197 @@ router.delete("/sources/:id", async (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// INGESTION PROCESSOR
-// Processes knowledge sources and creates structured knowledge
+// INGESTION PROCESSOR — REAL PIPELINE
+// Uses the IngestionEngine: Extract → Structure (AI) → Validate → Store → Index
+// Replaces the previous fake `generateSampleKnowledge` with real content parsing.
 // ═══════════════════════════════════════════════════════════════════════════════
 async function processIngestion(sourceId: string): Promise<void> {
-  console.log(`[KnowledgeBase] Starting ingestion for source: ${sourceId}`);
-  
+  console.log(`[KnowledgeBase] Starting REAL ingestion for source: ${sourceId}`);
+
+  const source = await knowledgeStorage.getKnowledgeSource(sourceId);
+  if (!source) {
+    console.error(`[KnowledgeBase] Source ${sourceId} not found`);
+    return;
+  }
+
+  // Resolve module name from moduleTag (e.g., "JDE_PROCUREMENT" -> "Procurement")
+  const moduleTag = (source as any).moduleTag || (source as any).module_tag;
+  const moduleReadable = moduleTag
+    ? String(moduleTag).replace(/^[A-Z]+_/, "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
+    : undefined;
+
+  const url = source.sourceUrl;
+  // We only call the engine here for URL-based sources. File-upload sources are
+  // handled directly by the /upload endpoint which passes the buffer in memory.
+  if (!url || url.startsWith("file://")) {
+    console.log(`[KnowledgeBase] Skipping engine ingest for non-URL source ${sourceId} (handled by upload endpoint)`);
+    return;
+  }
+
   try {
-    const source = await knowledgeStorage.getKnowledgeSource(sourceId);
-    if (!source) {
-      throw new Error("Source not found");
+    const result = await ingestionEngine.ingest({
+      sourceId,
+      sourceName: source.name,
+      url,
+      application: source.application,
+      module: moduleReadable,
+      moduleTag,
+    });
+
+    if (result.success) {
+      console.log(
+        `[KnowledgeBase] ✅ Ingestion COMPLETE for ${source.name} — ` +
+        `${result.storage?.itemsStored ?? 0} items stored (${result.validation?.rejected ?? 0} rejected), ` +
+        `RAG-indexed: ${result.storage?.indexedForRAG}, took ${result.totalDurationMs}ms`
+      );
+    } else {
+      console.error(`[KnowledgeBase] ❌ Ingestion FAILED for ${source.name}: ${result.errorMessage}`);
     }
-    
-    // Step 1: Set status to INGESTING
-    await knowledgeStorage.updateIngestionStatus(sourceId, "INGESTING");
-    console.log(`[KnowledgeBase] Status: INGESTING for ${source.name}`);
-    
-    // Step 2: Set status to CLASSIFYING
-    await knowledgeStorage.updateIngestionStatus(sourceId, "CLASSIFYING");
-    console.log(`[KnowledgeBase] Status: CLASSIFYING for ${source.name}`);
-    
-    // Step 3: Set status to EXTRACTING
-    await knowledgeStorage.updateIngestionStatus(sourceId, "EXTRACTING");
-    console.log(`[KnowledgeBase] Status: EXTRACTING for ${source.name}`);
-    
-    // Step 4: Generate sample knowledge based on module
-    const sampleKnowledge = generateSampleKnowledge(source);
-    
-    // Step 5: Store structured knowledge
-    for (const knowledge of sampleKnowledge) {
-      await knowledgeStorage.createStructuredKnowledge({
-        ...knowledge,
-        sourceId,
-      } as any);
-    }
-    
-    // Step 6: Update document count and set status to READY
-    await knowledgeStorage.incrementDocumentCount(sourceId, sampleKnowledge.length);
-    await knowledgeStorage.updateIngestionStatus(sourceId, "READY");
-    
-    console.log(`[KnowledgeBase] ✅ Ingestion COMPLETE for ${source.name} - ${sampleKnowledge.length} knowledge items created`);
   } catch (error: any) {
-    console.error(`[KnowledgeBase] ❌ Ingestion FAILED for ${sourceId}:`, error.message);
-    await knowledgeStorage.updateIngestionStatus(sourceId, "FAILED", error.message);
+    console.error(`[KnowledgeBase] ❌ Ingestion EXCEPTION for ${sourceId}:`, error.message);
+    try {
+      await knowledgeStorage.updateIngestionStatus(sourceId, "FAILED", error.message);
+    } catch {}
   }
 }
 
-// Generate sample structured knowledge based on source module
-function generateSampleKnowledge(source: any): any[] {
-  const moduleKnowledge: Record<string, any[]> = {
-    // JDE Procurement knowledge
-    "JDE_PROCUREMENT": [
-      {
-        application: "JDE",
-        module: "Procurement",
-        objectName: "P4310",
-        knowledgeType: "PROCESS",
-        facts: {
-          description: "Purchase Order Entry program for creating and managing purchase orders",
-          requiredFields: ["Supplier Number", "Branch/Plant", "Order Date", "Line Items"],
-          validations: ["Supplier must be active", "Branch/Plant must exist", "Quantity must be > 0"],
-          tables: ["F4301", "F4311", "F0401"],
-          businessRules: ["Credit check required for orders > $10,000", "Approval required for orders > $50,000"],
-          testPoints: [
-            "Create standard PO with valid supplier",
-            "Validate supplier credit hold blocks PO creation",
-            "Verify line item pricing from F4106",
-            "Check inventory availability in F41021",
-            "Test approval workflow for high-value orders"
-          ]
-        },
-        testableActions: ["Create PO", "Edit PO", "Approve PO", "Cancel PO", "Print PO"],
-        integrationPoints: ["F0401 Address Book", "F4106 Item Cost", "F41021 Item Location"],
-        confidenceScore: 95,
-      },
-      {
-        application: "JDE",
-        module: "Procurement",
-        objectName: "P43081",
-        knowledgeType: "PROCESS",
-        facts: {
-          description: "Receipt Routing program for receiving goods against purchase orders",
-          requiredFields: ["PO Number", "Receipt Date", "Quantity", "Location"],
-          validations: ["PO must be open", "Quantity cannot exceed PO quantity", "Location must be valid"],
-          tables: ["F43121", "F4311", "F41021"],
-          testPoints: [
-            "Receive full quantity against PO",
-            "Receive partial quantity",
-            "Test over-receipt handling",
-            "Verify inventory update in F41021"
-          ]
-        },
-        testableActions: ["Create Receipt", "Cancel Receipt", "Reverse Receipt"],
-        integrationPoints: ["F4311 PO Detail", "F41021 Item Location", "F0911 Account Ledger"],
-        confidenceScore: 90,
-      }
-    ],
-    // JDE Accounts Payable knowledge
-    "JDE_ACCOUNTS_PAYABLE": [
-      {
-        application: "JDE",
-        module: "Accounts Payable",
-        objectName: "P0411",
-        knowledgeType: "PROCESS",
-        facts: {
-          description: "Standard Voucher Entry for entering supplier invoices",
-          requiredFields: ["Supplier Number", "Invoice Number", "Invoice Date", "Amount", "G/L Account"],
-          validations: ["Duplicate invoice check", "Supplier must exist", "G/L Account must be valid"],
-          tables: ["F0411", "F0414", "F0911"],
-          testPoints: [
-            "Enter standard voucher",
-            "Test duplicate invoice detection",
-            "Verify tax calculation",
-            "Check payment terms defaulting"
-          ]
-        },
-        testableActions: ["Enter Voucher", "Match Voucher", "Delete Voucher", "Post Voucher"],
-        integrationPoints: ["F0401 Address Book", "F0911 Account Ledger", "F0101 Business Unit Master"],
-        confidenceScore: 95,
-      }
-    ],
-    // JDE Order Management knowledge
-    "JDE_ORDER_MANAGEMENT": [
-      {
-        application: "JDE",
-        module: "Order Management",
-        objectName: "P4210",
-        knowledgeType: "PROCESS",
-        facts: {
-          description: "Sales Order Entry for creating customer sales orders",
-          requiredFields: ["Customer Number", "Ship To", "Line Items", "Quantity", "Price"],
-          validations: ["Customer credit check", "Item availability", "Price validation"],
-          tables: ["F4201", "F4211", "F4106"],
-          testPoints: [
-            "Create sales order for valid customer",
-            "Test credit hold blocking",
-            "Verify pricing from F4106",
-            "Check inventory commitment"
-          ]
-        },
-        testableActions: ["Create Order", "Edit Order", "Ship Order", "Invoice Order"],
-        integrationPoints: ["F0101 Customer Master", "F4101 Item Master", "F41021 Item Location"],
-        confidenceScore: 95,
-      }
-    ],
-    // SAP MM knowledge
-    "SAP_MM": [
-      {
-        application: "SAP",
-        module: "Materials Management",
-        objectName: "ME21N",
-        knowledgeType: "PROCESS",
-        facts: {
-          description: "Create Purchase Order transaction in SAP",
-          requiredFields: ["Vendor", "Purchasing Org", "Material", "Quantity", "Plant"],
-          validations: ["Vendor must be active", "Material must exist", "Plant must be valid"],
-          tables: ["EKKO", "EKPO", "LFA1", "MARA"],
-          testPoints: [
-            "Create standard PO",
-            "Test vendor block handling",
-            "Verify pricing conditions",
-            "Check account assignment"
-          ]
-        },
-        testableActions: ["Create PO", "Change PO", "Display PO", "Release PO"],
-        integrationPoints: ["LFA1 Vendor Master", "MARA Material Master", "T001W Plant"],
-        confidenceScore: 95,
-      }
-    ],
-    // Salesforce Sales knowledge
-    "SF_SALES": [
-      {
-        application: "SALESFORCE",
-        module: "Sales Cloud",
-        objectName: "Opportunity",
-        knowledgeType: "PROCESS",
-        facts: {
-          description: "Opportunity management for tracking sales deals",
-          requiredFields: ["Name", "Account", "Close Date", "Stage", "Amount"],
-          validations: ["Account must exist", "Stage must be valid", "Close Date cannot be in past"],
-          tables: ["Opportunity", "OpportunityLineItem", "Account"],
-          testPoints: [
-            "Create opportunity with products",
-            "Test stage progression",
-            "Verify amount calculation",
-            "Check forecast category update"
-          ]
-        },
-        testableActions: ["Create", "Edit", "Close Won", "Close Lost"],
-        integrationPoints: ["Account", "Contact", "Product2", "PricebookEntry"],
-        confidenceScore: 90,
-      }
-    ],
-  };
-  
-  // Return knowledge for the source module, or default knowledge
-  const moduleTag = source.moduleTag || source.module_tag;
-  return moduleKnowledge[moduleTag] || [
-    {
-      application: source.application,
-      module: moduleTag?.replace(/_/g, " ") || "General",
-      objectName: "CUSTOM_001",
-      knowledgeType: "PROCESS",
-      facts: {
-        description: `Knowledge extracted from ${source.name}`,
-        testPoints: [
-          "Basic functionality test",
-          "Input validation test",
-          "Error handling test"
-        ]
-      },
-      testableActions: ["Create", "Read", "Update", "Delete"],
-      integrationPoints: [],
-      confidenceScore: 70,
+// ═══════════════════════════════════════════════════════════════════════════════
+// FILE UPLOAD INGESTION
+// Accepts: PPTX, PDF, DOCX, Images (PNG/JPG/GIF/BMP/WEBP), TXT, MD, CSV
+// Body: multipart/form-data with `file` + metadata fields
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post("/sources/upload", knowledgeUpload.single("file"), async (req: Request, res: Response) => {
+  try {
+    const file = (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      return res.status(400).json({ error: "No file provided. Send as multipart 'file' field." });
     }
-  ];
-}
+
+    const { name, moduleTag, application, sourceType } = req.body || {};
+    if (!moduleTag || !application) {
+      return res.status(400).json({ error: "moduleTag and application are required" });
+    }
+
+    const filename = file.originalname || "uploaded";
+    const ext = nodePath.extname(filename).toLowerCase();
+
+    // 1) Create the source record so the UI can poll status
+    const source = await knowledgeStorage.createKnowledgeSource({
+      name: name || filename,
+      sourceType: sourceType || "FILE_UPLOAD",
+      // source_url is NOT NULL in the DB — use a synthetic uri for uploads
+      sourceUrl: `file:///uploaded/${encodeURIComponent(filename)}`,
+      moduleTag,
+      application,
+      authType: "NONE",
+      status: "PENDING",
+      documentCount: 0,
+    } as any);
+
+    if (!source?.id) {
+      return res.status(500).json({ error: "Failed to create source record" });
+    }
+
+    const moduleReadable = String(moduleTag)
+      .replace(/^[A-Z]+_/, "")
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+    // 2) Kick off REAL ingestion asynchronously with the buffer in memory
+    ingestionEngine
+      .ingest({
+        sourceId: source.id,
+        sourceName: filename,
+        buffer: file.buffer,
+        mimeType: file.mimetype,
+        extension: ext,
+        application,
+        module: moduleReadable,
+        moduleTag,
+      })
+      .then((result) => {
+        console.log(
+          `[KnowledgeBase] ✅ Upload ingestion COMPLETE for ${filename} — ` +
+          `${result.storage?.itemsStored ?? 0} items, success=${result.success}`
+        );
+      })
+      .catch((err) => {
+        console.error("[KnowledgeBase] Upload ingestion error:", err);
+      });
+
+    // 3) Respond immediately with the source so the UI can poll for status
+    res.status(201).json({
+      ...source,
+      message: "Upload accepted. Ingestion started.",
+      filename,
+      fileSize: file.size,
+    });
+  } catch (error: any) {
+    console.error("[KnowledgeBase] Upload error:", error);
+    res.status(500).json({ error: error.message || "Failed to process upload" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PREVIEW (no-store): Extract + structure + validate so the user can confirm
+// before committing to the database.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post("/preview", knowledgeUpload.single("file"), async (req: Request, res: Response) => {
+  try {
+    const file = (req as any).file as Express.Multer.File | undefined;
+    const { url, name, moduleTag, application } = req.body || {};
+
+    if (!file && !url) {
+      return res.status(400).json({ error: "Provide either a 'file' (multipart) or 'url' (form field)." });
+    }
+
+    const filename =
+      file?.originalname ||
+      name ||
+      (url ? (url as string).split("/").pop() || "preview" : "preview");
+    const moduleReadable = moduleTag
+      ? String(moduleTag).replace(/^[A-Z]+_/, "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())
+      : undefined;
+
+    const preview = await ingestionEngine.preview({
+      sourceName: filename,
+      buffer: file?.buffer,
+      url,
+      mimeType: file?.mimetype,
+      extension: file ? nodePath.extname(file.originalname).toLowerCase() : undefined,
+      application,
+      module: moduleReadable,
+      moduleTag,
+    });
+
+    if (!preview.success) {
+      return res.status(422).json({
+        success: false,
+        error: preview.errorMessage || "Preview failed",
+      });
+    }
+
+    res.json({
+      success: true,
+      extraction: {
+        units: preview.extraction?.units?.length || 0,
+        wordCount: preview.extraction?.metadata?.wordCount,
+        warnings: preview.extraction?.metadata?.warnings,
+        sampleText: preview.extraction?.fullText?.slice(0, 800),
+      },
+      knowledge: preview.knowledge || [],
+      rejected: preview.rejected || [],
+      counts: {
+        total: (preview.knowledge?.length || 0) + (preview.rejected?.length || 0),
+        valid: preview.knowledge?.length || 0,
+        rejected: preview.rejected?.length || 0,
+      },
+    });
+  } catch (error: any) {
+    console.error("[KnowledgeBase] Preview error:", error);
+    res.status(500).json({ error: error.message || "Failed to preview" });
+  }
+});
 
 // Trigger re-ingestion
 router.post("/sources/:id/reingest", async (req: Request, res: Response) => {
@@ -326,20 +339,33 @@ router.post("/sources/:id/reingest", async (req: Request, res: Response) => {
     if (!source) {
       return res.status(404).json({ error: "Knowledge source not found" });
     }
-    
-    // Clear existing data
+
+    // Clear existing data including the RAG index
+    try {
+      vectorIndex.removeBySource(sourceId);
+    } catch (e: any) {
+      console.warn("[KnowledgeBase] Vector cleanup non-fatal:", e.message);
+    }
     await knowledgeStorage.deleteRawDocumentsBySource(sourceId);
     await knowledgeStorage.deleteStructuredKnowledgeBySource(sourceId);
-    
+
     // Reset status to PENDING
     await knowledgeStorage.updateIngestionStatus(sourceId, "PENDING");
-    
-    // Trigger async ingestion (non-blocking)
-    processIngestion(sourceId).catch((err) => {
-      console.error("[KnowledgeBase] Async ingestion error:", err);
-    });
-    
-    res.json({ message: "Re-ingestion started", sourceId, status: "INGESTING" });
+
+    // Trigger async ingestion (non-blocking) - URL sources only.
+    // File-upload sources cannot be re-ingested because the original buffer is
+    // no longer available; user must re-upload the file.
+    if (source.sourceUrl && !source.sourceUrl.startsWith("file://")) {
+      processIngestion(sourceId).catch((err) => {
+        console.error("[KnowledgeBase] Async ingestion error:", err);
+      });
+      res.json({ message: "Re-ingestion started", sourceId, status: "INGESTING" });
+    } else {
+      res.status(400).json({
+        error: "File-upload sources cannot be auto-reingested. Please re-upload the file.",
+        sourceId,
+      });
+    }
   } catch (error: any) {
     console.error("[KnowledgeBase] Error triggering re-ingestion:", error);
     res.status(500).json({ error: "Failed to trigger re-ingestion" });
@@ -464,49 +490,227 @@ router.delete("/governance/:id", async (req: Request, res: Response) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RAG QUERY ENDPOINT (for test generation)
+// Returns governance rules + structured knowledge filtered by application/module.
+// If `question` is provided, also runs RAG semantic+keyword search.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.post("/query", async (req: Request, res: Response) => {
   try {
-    const { module, application, objectName, question } = req.body;
-    
+    const { module, application, objectName, question, topK } = req.body;
+
     if (!module || !application) {
       return res.status(400).json({ error: "module and application are required" });
     }
-    
+
     // Get governance rules
     const governance = await knowledgeStorage.getGovernanceRuleByModule(application, module);
-    
-    // Get structured knowledge
+
+    // Get structured knowledge (filter-based - exact match)
     const knowledge = await knowledgeStorage.searchStructuredKnowledge({
       application,
       module,
       objectName,
     });
-    
+
+    // If a `question` was supplied, run hybrid RAG search to find the most
+    // semantically relevant knowledge. Otherwise return the filter results.
+    let ragResults: any[] = [];
+    if (question && typeof question === "string" && question.trim().length > 0) {
+      try {
+        ragResults = await ingestionEngine.retrieve(question, {
+          application,
+          module,
+          objectName,
+          topK: typeof topK === "number" ? topK : 8,
+        });
+      } catch (e: any) {
+        console.warn("[KnowledgeBase] RAG retrieval failed (non-fatal):", e.message);
+      }
+    }
+
     // Transform to RAG-ready format
     const context = {
       module,
       application,
       governance: governance || null,
-      knowledge: knowledge.map(k => ({
+      knowledge: knowledge.map((k) => ({
         objectName: k.objectName,
         knowledgeType: k.knowledgeType,
         facts: k.facts,
       })),
-      allowedTestTypes: governance 
-        ? ["FUNCTIONAL", "CONFIGURATION", "INTEGRATION"].filter(t => !governance.blockedTestTypes.includes(t))
+      ragResults: ragResults.map((r) => ({
+        application: r.entry.metadata.application,
+        module: r.entry.metadata.module,
+        objectName: r.entry.metadata.objectName,
+        knowledgeType: r.entry.metadata.knowledgeType,
+        score: r.score,
+        semanticScore: r.semanticScore,
+        keywordScore: r.keywordScore,
+        snippet: r.entry.chunkText.slice(0, 500),
+      })),
+      allowedTestTypes: governance
+        ? ["FUNCTIONAL", "CONFIGURATION", "INTEGRATION"].filter((t) => !governance.blockedTestTypes.includes(t))
         : ["FUNCTIONAL", "CONFIGURATION", "INTEGRATION"],
       blockedTestTypes: governance?.blockedTestTypes || [],
       requiredObjects: governance?.requiredObjects || [],
       requiredTables: governance?.requiredTables || [],
       businessFlow: governance?.businessFlowOrder || [],
     };
-    
+
     res.json(context);
   } catch (error: any) {
     console.error("[KnowledgeBase] Error querying knowledge:", error);
     res.status(500).json({ error: "Failed to query knowledge base" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RAG RETRIEVE ENDPOINT (pure vector search, no governance)
+// Used by the test generator to inject the top-K most relevant knowledge into
+// the prompt.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post("/retrieve", async (req: Request, res: Response) => {
+  try {
+    const { query, application, module, objectName, topK } = req.body || {};
+    if (!query || typeof query !== "string") {
+      return res.status(400).json({ error: "`query` is required and must be a string" });
+    }
+
+    const results = await ingestionEngine.retrieve(query, {
+      application,
+      module,
+      objectName,
+      topK: typeof topK === "number" ? topK : 8,
+    });
+
+    res.json({
+      query,
+      count: results.length,
+      results: results.map((r) => ({
+        knowledgeId: r.entry.knowledgeId,
+        sourceId: r.entry.sourceId,
+        application: r.entry.metadata.application,
+        module: r.entry.metadata.module,
+        objectName: r.entry.metadata.objectName,
+        knowledgeType: r.entry.metadata.knowledgeType,
+        score: r.score,
+        semanticScore: r.semanticScore,
+        keywordScore: r.keywordScore,
+        reason: r.reason,
+        snippet: r.entry.chunkText.slice(0, 500),
+      })),
+      stats: vectorIndex.getStats(),
+    });
+  } catch (error: any) {
+    console.error("[KnowledgeBase] Error in /retrieve:", error);
+    res.status(500).json({ error: error.message || "Failed to retrieve" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HEALTH / INTEGRATION CHECK
+// Verifies that DB + Vector Index + Extractors + AI client + End-to-end
+// retrieval are all wired correctly. Use this before relying on the KB for
+// test generation.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get("/health", async (_req: Request, res: Response) => {
+  try {
+    const { checkKBIntegrationHealth } = await import("./knowledge/rag-helper");
+    const health = await checkKBIntegrationHealth();
+    const httpStatus = health.overall === "BROKEN" ? 503 : 200;
+    res.status(httpStatus).json(health);
+  } catch (error: any) {
+    res.status(500).json({
+      overall: "BROKEN",
+      checks: [{ name: "Health endpoint", status: "FAIL", detail: error.message }],
+    });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHAREPOINT CRAWLER
+// Adds a SharePoint site as a knowledge source. Each discovered file becomes
+// its own KnowledgeSource row and runs through the standard ingestion pipeline.
+// Body:
+//   {
+//     name: "JDE SharePoint Docs",
+//     siteUrl: "https://contoso.sharepoint.com/sites/JDEDocs",
+//     folderPath: "Shared Documents/Specs",
+//     accessToken: "<oauth bearer>",
+//     application: "JDE",
+//     moduleTag: "JDE_PROCUREMENT",
+//     applicationScope: ["JDE"],
+//     maxFiles: 50
+//   }
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post("/sources/sharepoint", async (req: Request, res: Response) => {
+  try {
+    const {
+      name,
+      siteUrl,
+      folderPath,
+      accessToken,
+      application,
+      moduleTag,
+      applicationScope,
+      maxFiles,
+      maxDepth,
+    } = req.body || {};
+
+    if (!siteUrl || !accessToken || !moduleTag || !application) {
+      return res.status(400).json({
+        error: "siteUrl, accessToken, application, and moduleTag are required",
+      });
+    }
+
+    // 1) Create the parent SharePoint source so the UI shows it as one entry
+    const parentSource = await knowledgeStorage.createKnowledgeSource({
+      name: name || `SharePoint: ${siteUrl}`,
+      sourceType: "SHAREPOINT",
+      sourceUrl: siteUrl,
+      moduleTag,
+      application,
+      authType: "OAUTH",
+      // We intentionally do NOT persist the bearer token - it stays in memory.
+      status: "PENDING",
+      documentCount: 0,
+    } as any);
+
+    if (!parentSource.id) {
+      return res.status(500).json({ error: "Failed to create source record" });
+    }
+
+    // 2) Kick off the crawl asynchronously
+    const { sharePointConnector } = await import("./knowledge/sharepoint-connector");
+    sharePointConnector
+      .crawlAndIngest(parentSource.id, {
+        siteUrl,
+        folderPath,
+        accessToken,
+        application,
+        moduleTag,
+        applicationScope,
+        maxFiles,
+        maxDepth,
+      })
+      .then((result) => {
+        console.log(
+          `[KnowledgeBase] SharePoint crawl complete: ` +
+          `${result.filesIngested}/${result.filesFound} ingested, ${result.errors.length} errors`
+        );
+      })
+      .catch((err) => {
+        console.error("[KnowledgeBase] SharePoint crawl crashed:", err);
+      });
+
+    // 3) Respond immediately - the UI will poll for status
+    res.status(201).json({
+      ...parentSource,
+      message: "SharePoint crawl started. Each discovered file will appear as a separate source.",
+    });
+  } catch (error: any) {
+    console.error("[KnowledgeBase] SharePoint error:", error);
+    res.status(500).json({ error: error.message || "SharePoint crawl failed" });
   }
 });
 

@@ -104,7 +104,7 @@ export class ExecutionWorker {
           await job.progress(progress as any);
 
           // Store result
-          await storage.createTestResult({
+          await storage.createResult({
             executionId,
             testCaseId,
             status: result.status,

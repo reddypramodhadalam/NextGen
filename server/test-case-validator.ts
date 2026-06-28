@@ -111,6 +111,20 @@ export class TestCaseValidator {
       for (let j = 0; j < tc.steps.length; j++) {
         const step = tc.steps[j];
 
+        // Steps arrive in two valid shapes:
+        //   • selector-based { action, target, expected } — automation-ready
+        //   • narrative      { step, expected }           — detailed functional
+        //     business flow (the knowledge-driven format users ask for, e.g.
+        //     "Navigate to Contract Management and click Create Contract").
+        // Only selector-based steps get action/target validation; narrative
+        // steps are validated for a meaningful instruction + observable result.
+        const hasAction =
+          typeof step.action === "string" && step.action.trim().length > 0;
+        const instructionText =
+          (typeof step.step === "string" && step.step.trim()) ||
+          (typeof step.action === "string" && step.action.trim()) ||
+          "";
+
         // Check if step combines multiple actions
         if (!this.isAtomicStep(step)) {
           errors.push(
@@ -120,84 +134,101 @@ export class TestCaseValidator {
           score -= 10;
         }
 
-        // Validate action is in allowed list
-        const validActions = [
-          "navigate",
-          "click",
-          "enter",
-          "fillInput",
-          "select",
-          "verify",
-          "wait",
-          "scroll",
-          "hover",
-          "screenshot",
-          "switchWindow",
-          "acceptAlert",
-          "fillForm",
-          "logout",
-        ];
+        if (hasAction) {
+          // ===== SELECTOR-BASED STEP VALIDATION =====
+          // Validate action is in allowed list
+          const validActions = [
+            "navigate",
+            "click",
+            "enter",
+            "fillInput",
+            "select",
+            "verify",
+            "wait",
+            "scroll",
+            "hover",
+            "screenshot",
+            "switchWindow",
+            "acceptAlert",
+            "fillForm",
+            "logout",
+          ];
 
-        if (!validActions.includes(step.action)) {
-          warnings.push(
-            `Test case ${i + 1}, Step ${j + 1}: action "${step.action}" not in standard list`
-          );
-          score -= 3;
-        }
-
-        // ===== SELECTOR VALIDATION =====
-        // Actions that don't require a target selector
-        const noTargetActions = ["logout", "screenshot", "acceptAlert", "switchWindow", "wait"];
-        
-        if (!step.target && !noTargetActions.includes(step.action)) {
-          errors.push(`Test case ${i + 1}, Step ${j + 1}: missing target (selector or URL)`);
-          details.selectorScore -= 15;
-          score -= 15;
-        }
-
-        if (step.target) {
-          const selectorValidation = this.validateSelector(step.target);
-          if (!selectorValidation.isValid) {
-            errors.push(
-              `Test case ${i + 1}, Step ${j + 1}: invalid selector format - "${step.target}". ${selectorValidation.reason}`
-            );
-            details.selectorScore -= 10;
-            score -= 10;
-          }
-
-          if (selectorValidation.warnings && selectorValidation.warnings.length > 0) {
-            selectorValidation.warnings.forEach((w) => {
-              warnings.push(`Test case ${i + 1}, Step ${j + 1}: ${w}`);
-            });
-            details.selectorScore -= 2;
-            score -= 2;
-          }
-
-          // Check for vague selectors - but allow specific patterns
-          const isSpecificSelector = 
-            step.target.includes("[") ||      // Has attribute selector
-            step.target.includes("#") ||       // Has ID selector
-            step.target.includes(".") ||       // Has class selector
-            step.target.startsWith("//") ||    // XPath
-            step.target.startsWith("http") ||  // URL
-            step.target.startsWith("/") ||     // Path
-            step.target.includes("data-") ||   // Data attribute
-            step.target.includes(":has-text"); // Playwright selector
-            
-          if (
-            !isSpecificSelector &&
-            (step.target.includes("the ") ||
-             /^(button|field|element|input|link)$/i.test(step.target.trim()))
-          ) {
+          if (!validActions.includes(step.action)) {
             warnings.push(
-              `Test case ${i + 1}, Step ${j + 1}: selector may be too vague - "${step.target}"`
+              `Test case ${i + 1}, Step ${j + 1}: action "${step.action}" not in standard list`
             );
-            details.selectorScore -= 3;
             score -= 3;
           }
+
+          // ===== SELECTOR VALIDATION =====
+          // Actions that don't require a target selector
+          const noTargetActions = ["logout", "screenshot", "acceptAlert", "switchWindow", "wait"];
+
+          if (!step.target && !noTargetActions.includes(step.action)) {
+            errors.push(`Test case ${i + 1}, Step ${j + 1}: missing target (selector or URL)`);
+            details.selectorScore -= 15;
+            score -= 15;
+          }
+
+          if (step.target) {
+            const selectorValidation = this.validateSelector(step.target);
+            if (!selectorValidation.isValid) {
+              errors.push(
+                `Test case ${i + 1}, Step ${j + 1}: invalid selector format - "${step.target}". ${selectorValidation.reason}`
+              );
+              details.selectorScore -= 10;
+              score -= 10;
+            }
+
+            if (selectorValidation.warnings && selectorValidation.warnings.length > 0) {
+              selectorValidation.warnings.forEach((w) => {
+                warnings.push(`Test case ${i + 1}, Step ${j + 1}: ${w}`);
+              });
+              details.selectorScore -= 2;
+              score -= 2;
+            }
+
+            // Check for vague selectors - but allow specific patterns
+            const isSpecificSelector =
+              step.target.includes("[") ||      // Has attribute selector
+              step.target.includes("#") ||       // Has ID selector
+              step.target.includes(".") ||       // Has class selector
+              step.target.startsWith("//") ||    // XPath
+              step.target.startsWith("http") ||  // URL
+              step.target.startsWith("/") ||     // Path
+              step.target.includes("data-") ||   // Data attribute
+              step.target.includes(":has-text"); // Playwright selector
+
+            if (
+              !isSpecificSelector &&
+              (step.target.includes("the ") ||
+               /^(button|field|element|input|link)$/i.test(step.target.trim()))
+            ) {
+              warnings.push(
+                `Test case ${i + 1}, Step ${j + 1}: selector may be too vague - "${step.target}"`
+              );
+              details.selectorScore -= 3;
+              score -= 3;
+            }
+          }
+        } else {
+          // ===== NARRATIVE STEP VALIDATION =====
+          // Detailed functional steps don't carry CSS selectors — validate that
+          // the instruction is present and substantive instead.
+          if (!instructionText) {
+            errors.push(`Test case ${i + 1}, Step ${j + 1}: missing step instruction`);
+            details.atomicityScore -= 10;
+            score -= 10;
+          } else if (instructionText.length < 8) {
+            warnings.push(
+              `Test case ${i + 1}, Step ${j + 1}: step instruction too short - "${instructionText}"`
+            );
+            score -= 2;
+          }
         }
 
-        // ===== EXPECTED RESULT VALIDATION =====
+        // ===== EXPECTED RESULT VALIDATION (both shapes) =====
         if (!step.expected) {
           errors.push(`Test case ${i + 1}, Step ${j + 1}: missing expected result`);
           details.observabilityScore -= 15;
@@ -228,8 +259,13 @@ export class TestCaseValidator {
         const hasSpecificSelectors = tc.steps?.some((s: any) =>
           s.target && s.target.includes("[") && s.target.length > 10
         );
+        // Narrative (knowledge-driven) steps carry no CSS selectors by design —
+        // don't penalise their confidence for lacking them.
+        const isNarrativeSuite = tc.steps?.every(
+          (s: any) => !s.action && (typeof s.step === "string")
+        );
 
-        if (tc.confidenceScore >= 90 && !hasSpecificSelectors) {
+        if (tc.confidenceScore >= 90 && !hasSpecificSelectors && !isNarrativeSuite) {
           warnings.push(
             `Test case ${i + 1}: high confidence score (${tc.confidenceScore}) but lacks specific selectors`
           );

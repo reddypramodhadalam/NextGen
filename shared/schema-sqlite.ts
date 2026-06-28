@@ -183,6 +183,9 @@ export const testReports = sqliteTable("test_reports", {
   format: text("format").default("html"),
   content: text("content"),
   summary: text("summary", { mode: "json" }),
+  passRate: integer("pass_rate"),
+  totalDuration: integer("total_duration"),
+  insights: text("insights", { mode: "json" }),
   createdAt: integer("created_at", { mode: "timestamp" }).default(sql`(unixepoch())`).notNull(),
 });
 

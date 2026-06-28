@@ -1,0 +1,1151 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta name="ProgId" content="Word.Document">
+<meta name="Generator" content="Microsoft Word 15">
+<meta name="Originator" content="Microsoft Word 15">
+<title>AITAS Project Documentation</title>
+
+<!--[if gte mso 9]>
+<xml>
+ <w:WordDocument>
+  <w:View>Print</w:View>
+  <w:Zoom>100</w:Zoom>
+  <w:DoNotOptimizeForBrowser/>
+ </w:WordDocument>
+</xml>
+<![endif]-->
+
+<style>
+/* ====================================================================
+   AITAS PROJECT DOCUMENTATION — MICROSOFT WORD STYLESHEET
+   Baxter brand system · Calibri typography · A4 / Letter print layout
+   ==================================================================== */
+
+@page Section1 {                       /* Cover page — no header/footer  */
+  size: 8.5in 11.0in;
+  margin: 1.0in 1.0in 1.0in 1.0in;
+  mso-header-margin: 0.5in;
+  mso-footer-margin: 0.5in;
+  mso-paper-source: 0;
+}
+div.Section1 { page: Section1; }
+
+@page Section2 {                       /* Body — branded header + footer */
+  size: 8.5in 11.0in;
+  margin: 1.1in 1.0in 1.0in 1.0in;
+  mso-header-margin: 0.5in;
+  mso-footer-margin: 0.5in;
+  mso-header: h2;
+  mso-footer: f2;
+  mso-paper-source: 0;
+}
+div.Section2 { page: Section2; }
+
+/* ---- Base typography --------------------------------------------- */
+body {
+  font-family: Calibri, "Segoe UI", Arial, sans-serif;
+  font-size: 11.0pt;
+  color: #0F1F35;
+  line-height: 1.5;
+}
+p, li, td, th { font-family: Calibri, "Segoe UI", Arial, sans-serif; }
+
+p.MsoNormal, li.MsoNormal, div.MsoNormal {
+  margin: 0in 0in 8.0pt 0in;
+  font-size: 11.0pt;
+  line-height: 1.5;
+  color: #0F1F35;
+  text-align: justify;
+}
+
+/* ---- Headings ---------------------------------------------------- */
+h1 {
+  font-family: Calibri, "Segoe UI", Arial, sans-serif;
+  font-size: 22.0pt;
+  font-weight: 700;
+  color: #00549F;
+  margin: 22.0pt 0in 8.0pt 0in;
+  page-break-after: avoid;
+  border-bottom: 1.5pt solid #00549F;
+  padding-bottom: 4.0pt;
+}
+h2 {
+  font-family: Calibri, "Segoe UI", Arial, sans-serif;
+  font-size: 15.0pt;
+  font-weight: 700;
+  color: #00549F;
+  margin: 16.0pt 0in 6.0pt 0in;
+  page-break-after: avoid;
+}
+h3 {
+  font-family: Calibri, "Segoe UI", Arial, sans-serif;
+  font-size: 12.5pt;
+  font-weight: 700;
+  color: #0F1F35;
+  margin: 12.0pt 0in 4.0pt 0in;
+  page-break-after: avoid;
+}
+h4 {
+  font-family: Calibri, "Segoe UI", Arial, sans-serif;
+  font-size: 11.0pt;
+  font-weight: 700;
+  color: #3D4D63;
+  margin: 10.0pt 0in 3.0pt 0in;
+  page-break-after: avoid;
+}
+
+/* ---- Header / Footer styles -------------------------------------- */
+p.MsoHeader, li.MsoHeader, div.MsoHeader {
+  margin: 0in;
+  font-size: 8.5pt;
+  color: #00549F;
+  border-bottom: 0.75pt solid #D6E1ED;
+  padding-bottom: 2.0pt;
+  letter-spacing: .4pt;
+}
+p.MsoFooter, li.MsoFooter, div.MsoFooter {
+  margin: 0in;
+  font-size: 8.5pt;
+  color: #6B7A8C;
+  border-top: 0.75pt solid #D6E1ED;
+  padding-top: 2.0pt;
+}
+
+/* ---- Tables ------------------------------------------------------ */
+table.brand {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 6.0pt 0in 12.0pt 0in;
+  font-size: 9.5pt;
+}
+table.brand th {
+  background: #00549F;
+  color: #FFFFFF;
+  font-weight: 700;
+  text-align: left;
+  padding: 6.0pt 8.0pt;
+  border: 0.5pt solid #00549F;
+  font-size: 9.5pt;
+}
+table.brand td {
+  padding: 5.0pt 8.0pt;
+  border: 0.5pt solid #D6E1ED;
+  vertical-align: top;
+  color: #0F1F35;
+}
+table.brand tr.alt td { background: #F2F7FC; }
+
+/* ---- Info table (label / value) ---------------------------------- */
+table.kv {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 6.0pt 0in 12.0pt 0in;
+  font-size: 10.0pt;
+}
+table.kv td.k {
+  background: #E8F1FA;
+  color: #00549F;
+  font-weight: 700;
+  padding: 5.0pt 8.0pt;
+  border: 0.5pt solid #D6E1ED;
+  width: 30%;
+  vertical-align: top;
+}
+table.kv td.v {
+  padding: 5.0pt 8.0pt;
+  border: 0.5pt solid #D6E1ED;
+  vertical-align: top;
+}
+
+/* ---- Callouts ---------------------------------------------------- */
+table.callout {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8.0pt 0in 12.0pt 0in;
+}
+table.callout td {
+  padding: 8.0pt 12.0pt;
+  font-size: 10.0pt;
+  line-height: 1.45;
+}
+td.c-info    { background: #E8F1FA; border-left: 4.0pt solid #00549F; color: #1A3A5C; }
+td.c-warn    { background: #FFF4E5; border-left: 4.0pt solid #ED6C02; color: #5C3A00; }
+td.c-success { background: #E8F5E9; border-left: 4.0pt solid #2E7D32; color: #1B5E20; }
+td.c-tip     { background: #F3EEFB; border-left: 4.0pt solid #6A3CB5; color: #3B2566; }
+
+/* ---- Lists ------------------------------------------------------- */
+ul, ol { margin: 4.0pt 0in 10.0pt 0.3in; }
+li { margin: 0in 0in 4.0pt 0in; line-height: 1.45; }
+
+/* ---- Utility ----------------------------------------------------- */
+.muted   { color: #6B7A8C; }
+.accent  { color: #00549F; }
+.ink     { color: #0F1F35; }
+.small   { font-size: 9.0pt; }
+.mono    { font-family: "Consolas", "Courier New", monospace; font-size: 9.5pt; color: #1A3A5C; }
+.pill    {
+  background: #E8F1FA; color: #00549F; font-weight: 700;
+  padding: 1.0pt 6.0pt; font-size: 8.5pt; letter-spacing: .5pt;
+  border: 0.5pt solid #C5D9EF;
+}
+.pagebreak { page-break-before: always; }
+
+/* ---- TOC --------------------------------------------------------- */
+p.MsoToc1 { margin: 6.0pt 0in 2.0pt 0in; font-weight: 700; color: #00549F; font-size: 11.0pt; }
+p.MsoToc2 { margin: 2.0pt 0in 2.0pt 0.25in; color: #0F1F35; font-size: 10.5pt; }
+p.MsoToc3 { margin: 2.0pt 0in 2.0pt 0.5in; color: #3D4D63; font-size: 10.0pt; }
+span.MsoHyperlink { color: #00549F; text-decoration: none; }
+</style>
+</head>
+
+<body lang=EN-US>
+
+<!-- ====================================================================
+     SECTION 1 — COVER PAGE
+     ==================================================================== -->
+<div class=Section1>
+
+  <div style="height:0.7in"></div>
+
+  <p class=MsoNormal style="text-align:left;margin-bottom:0">
+    <span style="font-size:46.0pt;font-weight:800;color:#00549F;letter-spacing:-2.0pt;">baxter</span><span style="font-size:14.0pt;font-weight:700;color:#00549F;vertical-align:super;">&reg;</span>
+  </p>
+  <p class=MsoNormal style="text-align:left;margin-top:2.0pt">
+    <span style="font-size:11.0pt;font-weight:700;letter-spacing:3.0pt;color:#6B7A8C;">AI&nbsp;TEST&nbsp;AUTOMATION&nbsp;SYSTEM</span>
+  </p>
+
+  <div style="height:1.6in"></div>
+
+  <p class=MsoNormal style="text-align:left;margin-bottom:0">
+    <span style="font-size:40.0pt;font-weight:700;color:#0F1F35;line-height:1.05;">AITAS</span>
+  </p>
+  <p class=MsoNormal style="text-align:left;margin-top:2.0pt;margin-bottom:0">
+    <span style="font-size:26.0pt;font-weight:600;color:#00549F;line-height:1.1;">Project&nbsp;Documentation</span>
+  </p>
+  <p class=MsoNormal style="text-align:left;margin-top:10.0pt">
+    <span style="font-size:13.0pt;color:#3D4D63;">Comprehensive Product, Architecture &amp; User Guide</span>
+  </p>
+
+  <div style="height:0.35in"></div>
+  <table class=brand style="width:62%;font-size:10.5pt;">
+    <tr class=alt><td style="font-weight:700;color:#00549F;width:42%;">Document Version</td><td>1.0</td></tr>
+    <tr><td style="font-weight:700;color:#00549F;">Release Date</td><td>June 2026</td></tr>
+    <tr class=alt><td style="font-weight:700;color:#00549F;">Classification</td><td>Confidential &mdash; Internal Use Only</td></tr>
+    <tr><td style="font-weight:700;color:#00549F;">Product</td><td>AITAS &mdash; AI Test Automation System</td></tr>
+    <tr class=alt><td style="font-weight:700;color:#00549F;">Status</td><td>Production Release</td></tr>
+  </table>
+
+  <div style="height:1.1in"></div>
+
+  <table class=callout><tr><td class=c-info>
+    <b>SECURE &middot; AUDITABLE &middot; COMPLIANT.</b>&nbsp; AITAS is engineered for
+    regulated healthcare environments. Every AI-generated artifact is governed by a
+    human-in-the-loop review workflow and recorded in a tamper-evident audit trail
+    aligned to 21 CFR Part 11, GxP, and SOX control expectations.
+  </td></tr></table>
+
+  <p class=MsoNormal class=small style="margin-top:0.5in;color:#6B7A8C;font-size:8.5pt;">
+    &copy; 2026 Baxter International Inc. All rights reserved. The Baxter wordmark is a
+    trademark of Baxter International Inc. This document is provided for internal
+    enablement and may not be reproduced or distributed outside the organization
+    without written authorization.
+  </p>
+
+</div>
+
+<!-- ====================================================================
+     SECTION 2 — MAIN BODY (with header + footer)
+     ==================================================================== -->
+<div class=Section2>
+
+  <!-- ============ DOCUMENT CONTROL ============ -->
+  <h1>Document Control</h1>
+
+  <h2>Revision History</h2>
+  <table class=brand>
+    <tr><th style="width:14%">Version</th><th style="width:18%">Date</th><th style="width:24%">Author</th><th>Summary of Changes</th></tr>
+    <tr><td>0.1</td><td>May 2026</td><td>AITAS Delivery Team</td><td>Initial draft &mdash; architecture &amp; module inventory.</td></tr>
+    <tr class=alt><td>0.5</td><td>Jun 2026</td><td>AITAS Delivery Team</td><td>Added workflows, testing, security &amp; compliance sections.</td></tr>
+    <tr><td>1.0</td><td>Jun 2026</td><td>AITAS Delivery Team</td><td>Production release. Full module guide, appendices, brand pass.</td></tr>
+  </table>
+
+  <h2>Document Information</h2>
+  <table class=kv>
+    <tr><td class=k>Title</td><td class=v>AITAS &mdash; Project Documentation</td></tr>
+    <tr><td class=k>Owner</td><td class=v>AITAS Platform Engineering</td></tr>
+    <tr><td class=k>Audience</td><td class=v>QA Engineers, Automation Engineers, Test Leads, Validation/Compliance, Platform Administrators, Project Stakeholders</td></tr>
+    <tr><td class=k>Scope</td><td class=v>Functional capabilities, technology stack, architecture, module-by-module usage, workflows, testing, security, and operations.</td></tr>
+    <tr><td class=k>Review Cycle</td><td class=v>Quarterly, or upon any major feature release.</td></tr>
+  </table>
+
+  <table class=callout><tr><td class=c-tip>
+    <b>How to use this document.</b>&nbsp; Section&nbsp;1&ndash;4 give you the big picture
+    (what AITAS is, what it does, and how it is built). Section&nbsp;5 is the hands-on
+    <i>module-by-module</i> guide &mdash; use it to navigate and operate every screen.
+    Section&nbsp;6 walks through complete end-to-end workflows. The Appendices provide
+    quick-reference route maps, API endpoints, and a glossary.
+  </td></tr></table>
+
+  <!-- ============ TABLE OF CONTENTS ============ -->
+  <div class=pagebreak></div>
+  <h1>Table of Contents</h1>
+
+  <p class=MsoNormal class=muted style="font-size:9.5pt;font-style:italic;">
+    The table below lists every section. In Microsoft Word, the page numbers populate
+    automatically &mdash; right-click anywhere in the contents and choose
+    &ldquo;Update Field&rdquo; &rarr; &ldquo;Update entire table&rdquo;.
+  </p>
+
+  <!--[if supportFields]>
+  <p class=MsoToc1><span style='mso-element:field-begin'></span><span
+    style="mso-spacerun:yes"> </span>TOC \o &quot;1-3&quot; \h \z \u <span
+    style='mso-element:field-separator'></span></p>
+  <![endif]-->
+
+  <table class=brand>
+    <tr><th style="width:10%">Section</th><th>Title</th></tr>
+    <tr><td>1</td><td>Executive Overview</td></tr>
+    <tr class=alt><td>2</td><td>Key Features &amp; Capabilities</td></tr>
+    <tr><td>3</td><td>Technology Stack</td></tr>
+    <tr class=alt><td>4</td><td>System Architecture</td></tr>
+    <tr><td>5</td><td>Module-by-Module Guide (Navigation, Purpose, Actions)</td></tr>
+    <tr class=alt><td>6</td><td>End-to-End Workflows</td></tr>
+    <tr><td>7</td><td>Testing &amp; Validation</td></tr>
+    <tr class=alt><td>8</td><td>Security &amp; Compliance</td></tr>
+    <tr><td>9</td><td>Operations &amp; Maintenance</td></tr>
+    <tr class=alt><td>A&ndash;G</td><td>Appendices (Glossary, Route Map, API, Shortcuts, Conventions, Support, AI Disclaimer)</td></tr>
+  </table>
+
+  <!--[if supportFields]>
+  <p class=MsoNormal><span style='mso-element:field-end'></span></p>
+  <![endif]-->
+
+  <!-- ============ SECTION 1 — EXECUTIVE OVERVIEW ============ -->
+  <div class=pagebreak></div>
+  <h1>1.&nbsp; Executive Overview</h1>
+
+  <h2>1.1&nbsp; What is AITAS?</h2>
+  <p class=MsoNormal>
+    <b>AITAS (AI Test Automation System)</b> is an enterprise platform that uses
+    artificial intelligence to accelerate the entire software testing lifecycle &mdash;
+    from authoring test cases, to generating executable automation scripts, to running
+    them across web, mobile, API, and desktop targets, to healing broken tests and
+    reporting results. It is purpose-built for <b>regulated healthcare environments</b>,
+    where speed must never compromise traceability, control, or compliance.
+  </p>
+  <p class=MsoNormal>
+    Rather than replacing engineers, AITAS amplifies them. AI drafts the first version of
+    every artifact; qualified people review, refine, and approve it. The result is a
+    dramatic reduction in manual effort while preserving the human accountability that
+    regulated validation demands.
+  </p>
+
+  <h2>1.2&nbsp; The Problem It Solves</h2>
+  <ul>
+    <li><b>Slow authoring.</b> Manually writing test cases and scripts is the largest
+        bottleneck in most QA organizations.</li>
+    <li><b>Brittle automation.</b> UI changes break selectors and locators, forcing
+        expensive maintenance cycles.</li>
+    <li><b>Fragmented tooling.</b> Separate tools for web, mobile, API, and performance
+        testing create silos and duplicate effort.</li>
+    <li><b>Compliance overhead.</b> Regulated teams must evidence who did what, when, and
+        why &mdash; for every change.</li>
+  </ul>
+  <p class=MsoNormal>
+    AITAS addresses all four by unifying generation, execution, healing, and governance
+    in a single, auditable platform.
+  </p>
+
+  <h2>1.3&nbsp; Business Value</h2>
+  <table class=brand>
+    <tr><th style="width:32%">Outcome</th><th>Description</th></tr>
+    <tr><td><b>Faster delivery</b></td><td>AI drafts test cases and scripts in seconds, compressing authoring time from days to minutes.</td></tr>
+    <tr class=alt><td><b>Lower maintenance</b></td><td>The AI Self-Healing engine repairs broken selectors automatically, reducing flaky-test triage.</td></tr>
+    <tr><td><b>One platform</b></td><td>Web, mobile, API, desktop, and performance testing are unified under one governance model.</td></tr>
+    <tr class=alt><td><b>Audit confidence</b></td><td>Every action is recorded with user, timestamp, and rationale &mdash; ready for inspection.</td></tr>
+    <tr><td><b>Reusable knowledge</b></td><td>An organizational knowledge base feeds context to the AI so output improves over time.</td></tr>
+  </table>
+
+  <h2>1.4&nbsp; Compliance Posture</h2>
+  <table class=callout><tr><td class=c-success>
+    <b>Designed for validation.</b>&nbsp; AITAS aligns to <b>21 CFR Part 11</b>
+    (electronic records &amp; signatures), <b>GxP</b> good-practice expectations, and
+    <b>SOX</b> change-control principles. Core enablers include human-in-the-loop
+    approvals, role-based access control (RBAC), immutable audit logging, and explicit
+    AI-assistance disclosure on every generated artifact.
+  </td></tr></table>
+
+  <h2>1.5&nbsp; Intended Audience</h2>
+  <ul>
+    <li><b>QA &amp; Automation Engineers</b> &mdash; generate, edit, execute, and heal tests.</li>
+    <li><b>Test Leads &amp; Managers</b> &mdash; track coverage, review reports, govern approvals.</li>
+    <li><b>Validation &amp; Compliance</b> &mdash; inspect the audit trail and compliance dashboards.</li>
+    <li><b>Platform Administrators</b> &mdash; manage users, roles, agents, and environments.</li>
+    <li><b>Stakeholders</b> &mdash; understand capability, value, and posture at a glance.</li>
+  </ul>
+
+  <!-- ============ SECTION 2 — KEY FEATURES ============ -->
+  <div class=pagebreak></div>
+  <h1>2.&nbsp; Key Features &amp; Capabilities</h1>
+  <p class=MsoNormal>
+    The following capabilities form the functional backbone of AITAS. Each is described
+    operationally in Section&nbsp;5 (Module-by-Module Guide).
+  </p>
+
+  <h3>2.1&nbsp; AI Test Generation</h3>
+  <p class=MsoNormal>
+    Describe a requirement in plain language &mdash; or upload a requirements
+    document/spreadsheet &mdash; and AITAS drafts structured test cases with steps,
+    expected results, and priority. It can then convert approved cases into executable
+    automation scripts for your chosen framework.
+  </p>
+
+  <h3>2.2&nbsp; Governed, Human-in-the-Loop Workflow</h3>
+  <p class=MsoNormal>
+    Nothing AI produces is trusted blindly. Generated artifacts enter a review state and
+    must be approved by an authorized user before they are considered validated. The
+    platform records the reviewer, decision, and timestamp.
+  </p>
+
+  <h3>2.3&nbsp; Multi-Platform Execution</h3>
+  <p class=MsoNormal>
+    Run automation against <b>web</b> (Playwright/Selenium), <b>mobile</b>
+    (Appium), <b>API</b> (HTTP-level), and <b>desktop</b> targets &mdash; locally or
+    through distributed execution agents &mdash; with consolidated results.
+  </p>
+
+  <h3>2.4&nbsp; AI Self-Healing</h3>
+  <p class=MsoNormal>
+    When a UI change breaks a locator, the Self-Healing engine proposes a corrected
+    selector using contextual cues, so suites stay green with minimal manual repair.
+    Healing actions are logged and reviewable.
+  </p>
+
+  <h3>2.5&nbsp; Execution Agents (Local &amp; Enterprise)</h3>
+  <p class=MsoNormal>
+    Lightweight agents let you execute tests on your own machines or on a managed grid.
+    Enterprise agents support pooling, health monitoring, and scale-out for high-volume
+    suites.
+  </p>
+
+  <h3>2.6&nbsp; Multi-Agent Orchestration</h3>
+  <p class=MsoNormal>
+    Coordinate multiple specialized AI agents (e.g., generation, review, healing) to
+    collaborate on complex testing tasks, with the platform mediating their hand-offs.
+  </p>
+
+  <h3>2.7&nbsp; Knowledge Base &amp; Retrieval</h3>
+  <p class=MsoNormal>
+    A searchable organizational knowledge base stores domain context, standards, and
+    prior artifacts. Relevant knowledge is retrieved to ground AI output, improving
+    accuracy and consistency.
+  </p>
+
+  <h3>2.8&nbsp; Coverage &amp; Reporting</h3>
+  <p class=MsoNormal>
+    Visualize requirement-to-test coverage, pass/fail trends, execution history, and
+    exportable reports for stakeholders and auditors.
+  </p>
+
+  <h3>2.9&nbsp; Performance &amp; Data Factory</h3>
+  <p class=MsoNormal>
+    Generate load/performance scenarios and synthesize realistic, privacy-safe test data
+    on demand to feed your test runs.
+  </p>
+
+  <h3>2.10&nbsp; CI/CD Integration, RBAC &amp; Audit</h3>
+  <p class=MsoNormal>
+    Trigger suites from pipelines, enforce role-based permissions, and rely on an
+    immutable audit trail spanning generation, approval, execution, and healing.
+  </p>
+
+  <!-- ============ SECTION 3 — TECHNOLOGY STACK ============ -->
+  <div class=pagebreak></div>
+  <h1>3.&nbsp; Technology Stack</h1>
+  <p class=MsoNormal>
+    AITAS is a modern full-stack TypeScript application. The same language spans client
+    and server, simplifying maintenance and enabling shared types end-to-end.
+  </p>
+
+  <h2>3.1&nbsp; Frontend</h2>
+  <table class=brand>
+    <tr><th style="width:30%">Technology</th><th>Role</th></tr>
+    <tr><td>React 18 + TypeScript</td><td>Component-based UI with full type safety.</td></tr>
+    <tr class=alt><td>Vite</td><td>Lightning-fast dev server and optimized production builds.</td></tr>
+    <tr><td>Wouter</td><td>Lightweight client-side routing (see Appendix B route map).</td></tr>
+    <tr class=alt><td>Tailwind CSS</td><td>Utility-first styling with the Baxter design tokens.</td></tr>
+    <tr><td>shadcn/ui + Radix UI</td><td>Accessible, composable component primitives.</td></tr>
+    <tr class=alt><td>TanStack Query</td><td>Server-state management, caching, and data fetching.</td></tr>
+    <tr><td>Lucide Icons</td><td>Consistent iconography across the product.</td></tr>
+  </table>
+
+  <h2>3.2&nbsp; Backend</h2>
+  <table class=brand>
+    <tr><th style="width:30%">Technology</th><th>Role</th></tr>
+    <tr><td>Node.js + Express</td><td>HTTP API server and application orchestration.</td></tr>
+    <tr class=alt><td>TypeScript</td><td>End-to-end type safety shared with the client.</td></tr>
+    <tr><td>Drizzle ORM</td><td>Type-safe database access and schema migrations.</td></tr>
+    <tr class=alt><td>SQLite (dev) / SQL DB (prod)</td><td>Relational persistence for projects, tests, runs, and audit.</td></tr>
+    <tr><td>Session-based Auth</td><td>Secure login, password policy, and RBAC enforcement.</td></tr>
+  </table>
+
+  <h2>3.3&nbsp; Test Execution Engines</h2>
+  <table class=brand>
+    <tr><th style="width:30%">Engine</th><th>Target</th></tr>
+    <tr><td>Playwright</td><td>Modern cross-browser web automation.</td></tr>
+    <tr class=alt><td>Selenium</td><td>Established web automation compatibility.</td></tr>
+    <tr><td>Appium</td><td>Native &amp; hybrid mobile automation.</td></tr>
+    <tr class=alt><td>HTTP/API runners</td><td>Service-level and contract testing.</td></tr>
+  </table>
+
+  <h2>3.4&nbsp; AI &amp; Knowledge</h2>
+  <table class=brand>
+    <tr><th style="width:30%">Component</th><th>Role</th></tr>
+    <tr><td>LLM Integration</td><td>Drafts test cases, scripts, and healing suggestions.</td></tr>
+    <tr class=alt><td>Vector Index</td><td>Semantic retrieval over the knowledge base for grounded generation.</td></tr>
+    <tr><td>Prompt &amp; Governance Layer</td><td>Standardizes generation and enforces review gating.</td></tr>
+  </table>
+
+  <h2>3.5&nbsp; Operations</h2>
+  <table class=brand>
+    <tr><th style="width:30%">Tooling</th><th>Role</th></tr>
+    <tr><td>Docker / docker-compose</td><td>Containerized, reproducible deployment.</td></tr>
+    <tr class=alt><td>Execution Agents</td><td>Local and enterprise distributed test execution.</td></tr>
+    <tr><td>CI/CD Hooks</td><td>Pipeline-triggered test runs.</td></tr>
+    <tr class=alt><td>Structured Logging</td><td>Operational visibility and troubleshooting.</td></tr>
+  </table>
+
+  <!-- ============ SECTION 4 — ARCHITECTURE ============ -->
+  <div class=pagebreak></div>
+  <h1>4.&nbsp; System Architecture</h1>
+
+  <h2>4.1&nbsp; High-Level View</h2>
+  <p class=MsoNormal>
+    AITAS follows a clean three-tier model: a React single-page application (client), an
+    Express API (server), and a relational datastore &mdash; with AI services and
+    execution engines attached as specialized subsystems.
+  </p>
+  <table class=brand>
+    <tr><th style="width:26%">Layer</th><th>Responsibility</th></tr>
+    <tr><td><b>Presentation</b></td><td>React SPA: navigation, forms, dashboards, editors, reporting.</td></tr>
+    <tr class=alt><td><b>Application/API</b></td><td>Express routes: auth, generation, execution control, governance, audit.</td></tr>
+    <tr><td><b>AI Services</b></td><td>LLM orchestration, prompt governance, vector retrieval, self-healing.</td></tr>
+    <tr class=alt><td><b>Execution</b></td><td>Playwright/Selenium/Appium/API runners via local &amp; enterprise agents.</td></tr>
+    <tr><td><b>Data</b></td><td>Drizzle ORM over SQLite/SQL: projects, tests, runs, knowledge, audit.</td></tr>
+  </table>
+
+  <h2>4.2&nbsp; Request &amp; Data Flow</h2>
+  <ol>
+    <li>The user acts in the React client (e.g., &ldquo;Generate test cases&rdquo;).</li>
+    <li>TanStack Query calls the Express API with the authenticated session.</li>
+    <li>The server invokes the AI service, grounded by knowledge-base retrieval.</li>
+    <li>Draft artifacts are persisted in a <i>review</i> state via Drizzle ORM.</li>
+    <li>An authorized user reviews and approves; the decision is audit-logged.</li>
+    <li>Approved scripts are dispatched to execution agents; results stream back.</li>
+    <li>Dashboards, coverage, and reports update from stored run data.</li>
+  </ol>
+
+  <h2>4.3&nbsp; Authentication &amp; Authorization</h2>
+  <p class=MsoNormal>
+    Access begins at a secure login. Sessions are server-managed; a password policy and
+    forced-change flow protect first-use credentials. <b>Role-based access control</b>
+    governs which modules and actions each user may perform (see Section&nbsp;8).
+  </p>
+
+  <h2>4.4&nbsp; Auditability by Design</h2>
+  <p class=MsoNormal>
+    Generation, approval, execution, and healing each emit immutable audit entries
+    capturing the actor, timestamp, and context. This trail is the foundation of the
+    platform&rsquo;s 21 CFR Part 11 alignment.
+  </p>
+
+  <h2>4.5&nbsp; Project Structure (Source Layout)</h2>
+  <table class=kv>
+    <tr><td class=k>client/</td><td class=v>React SPA &mdash; pages, components, hooks, brand assets.</td></tr>
+    <tr><td class=k>server/</td><td class=v>Express API &mdash; routes, AI services, execution control, auth.</td></tr>
+    <tr><td class=k>shared/</td><td class=v>Types &amp; schema shared between client and server.</td></tr>
+    <tr><td class=k>scripts/</td><td class=v>Utilities, seeders, and documentation generators.</td></tr>
+    <tr><td class=k>docs/</td><td class=v>Project documentation (this file).</td></tr>
+  </table>
+
+  <!-- ============ SECTION 5 — MODULE GUIDE ============ -->
+  <div class=pagebreak></div>
+  <h1>5.&nbsp; Module-by-Module Guide</h1>
+  <p class=MsoNormal>
+    This is the hands-on reference for operating AITAS. Each module lists its
+    <b>Navigation</b> path, <b>Purpose</b>, the <b>Key Actions</b> available, and
+    practical <b>Notes</b>. Routes correspond to the application&rsquo;s left-hand
+    navigation; the full route map is in Appendix&nbsp;B.
+  </p>
+
+  <table class=callout><tr><td class=c-info>
+    <b>Getting in.</b>&nbsp; Open the application URL, land on the marketing/landing page,
+    then choose <b>Sign In</b>. After authenticating you arrive at the
+    <b>Dashboard</b> (route <span class=mono>/</span>). All modules below are reachable
+    from the left navigation once signed in.
+  </td></tr></table>
+
+  <!-- 5.1 Dashboard -->
+  <h2>5.1&nbsp; Dashboard</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/</span> &mdash; the landing screen after sign-in.</td></tr>
+    <tr><td class=k>Purpose</td><td class=v>At-a-glance health of your testing program: key metrics, recent executions, and quick links.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Review KPI tiles (tests, pass rate, executions); open recent runs; jump to common tasks.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Use this as your morning &ldquo;mission control&rdquo; before drilling into a module.</td></tr>
+  </table>
+
+  <!-- 5.2 Generator -->
+  <h2>5.2&nbsp; Test Generator</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/generator</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Generate structured test cases from a plain-language requirement, and convert approved cases into automation scripts.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Enter a requirement &rarr; <b>Generate</b>; review the drafted steps/expected results; edit; submit for approval; convert to script.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Generated content is a <i>draft</i> until reviewed. Provide clear, specific requirements for best results.</td></tr>
+  </table>
+
+  <!-- 5.3 Upload -->
+  <h2>5.3&nbsp; Upload Test Cases</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/upload</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Import existing requirements or test cases (e.g., spreadsheet) to bootstrap generation at scale.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Choose a file &rarr; map columns &rarr; import; the platform creates draft artifacts for review.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Ideal for migrating legacy test inventories into the governed workflow.</td></tr>
+  </table>
+
+  <!-- 5.4 Repository -->
+  <h2>5.4&nbsp; Test Repository</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/repository</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>The library of all test cases &mdash; searchable, filterable, and organized by project.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Search/filter; open a case to view or edit; track approval status; organize by project/suite.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>This is the system of record for test-case content and its review state.</td></tr>
+  </table>
+
+  <!-- 5.5 Scripts -->
+  <h2>5.5&nbsp; Automation Scripts</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/scripts</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Manage the executable automation scripts generated from approved test cases.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>View generated scripts; inspect/edit code; select a framework/target; queue for execution.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Scripts are linked back to their source test case for traceability.</td></tr>
+  </table>
+
+  <!-- 5.6 Executions -->
+  <h2>5.6&nbsp; Executions</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/executions</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Launch and monitor test runs; review status, logs, and outcomes.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Start a run; watch live status; open a result to see steps, logs, and artifacts; delete an execution record.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Each execution is retained for history and audit. Failures feed the Self-Healing workflow.</td></tr>
+  </table>
+
+  <!-- 5.7 Enterprise Executions -->
+  <h2>5.7&nbsp; Enterprise Executions</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/enterprise</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Scaled execution management for high-volume suites across distributed agents.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Orchestrate large batches; monitor parallel runs; review aggregate outcomes.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Pairs with Enterprise Agents (5.10) for grid-scale throughput.</td></tr>
+  </table>
+
+  <!-- 5.8 Agents -->
+  <h2>5.8&nbsp; Execution Agents</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/agents</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>View and manage the agents that execute tests on web/mobile/desktop targets.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>See agent status/health; register or remove agents; assign work.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>An agent must be online to receive executions.</td></tr>
+  </table>
+
+  <!-- 5.9 Local Agent Setup -->
+  <h2>5.9&nbsp; Local Agent Setup</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/agents/setup</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Step-by-step guidance to install and connect an execution agent on your own machine.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Follow the setup steps; copy the connection token/command; verify the agent appears online.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Use a local agent when you need to run against a browser/app on your workstation.</td></tr>
+  </table>
+
+  <!-- 5.10 Enterprise Agents -->
+  <h2>5.10&nbsp; Enterprise Agents</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/agents/enterprise</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Manage a managed pool/grid of agents for scale-out execution.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Monitor pool health; scale capacity; balance load across the grid.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Designed for teams running large, frequent suites.</td></tr>
+  </table>
+
+  <!-- 5.11 Multi-Agent -->
+  <h2>5.11&nbsp; Multi-Agent Orchestration</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/multi-agent</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Coordinate multiple specialized AI agents to collaborate on complex tasks.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Configure agent roles; launch a collaborative task; observe hand-offs and results.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Useful for workflows that combine generation, review, and healing.</td></tr>
+  </table>
+
+  <!-- 5.12 AI Healer -->
+  <h2>5.12&nbsp; AI Self-Healing</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/healer</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Detect broken selectors/locators after UI changes and propose corrected ones.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Review healing suggestions; accept/reject; re-run; view healing history.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Accepted heals are logged for audit and learning.</td></tr>
+  </table>
+
+  <!-- 5.13 Enterprise AI Healer -->
+  <h2>5.13&nbsp; Enterprise AI Healer</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/healer/enterprise</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Healing at scale across many suites/agents with centralized oversight.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Review batched heal proposals; apply policies; monitor heal success rates.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Improves suite stability for large estates.</td></tr>
+  </table>
+
+  <!-- 5.14 Knowledge Base -->
+  <h2>5.14&nbsp; Knowledge Base</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/knowledge</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Store and search organizational context, standards, and prior artifacts that ground AI output.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Add knowledge entries; search semantically; curate sources used for generation.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Richer knowledge &rarr; more accurate, consistent generation.</td></tr>
+  </table>
+
+  <!-- 5.15 LLM Tests -->
+  <h2>5.15&nbsp; LLM Tests</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/llm-tests</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Author and run tests that target AI/LLM-driven behavior and prompts.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Define LLM test scenarios; execute; evaluate responses against expectations.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Helps validate AI-enabled features in your applications.</td></tr>
+  </table>
+
+  <!-- 5.16 Performance -->
+  <h2>5.16&nbsp; Performance Testing</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/performance</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Create and run load/performance scenarios to assess responsiveness and scalability.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Configure load profiles; execute; review throughput/latency metrics.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Combine with the Data Factory (5.17) for realistic load data.</td></tr>
+  </table>
+
+  <!-- 5.17 Data Factory -->
+  <h2>5.17&nbsp; Test Data Factory</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/data-factory</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Synthesize realistic, privacy-safe test data on demand.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Define data shapes/volumes; generate; export or feed into runs.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Avoids using sensitive production data in tests.</td></tr>
+  </table>
+
+  <!-- 5.18 Coverage -->
+  <h2>5.18&nbsp; Coverage</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/coverage</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Visualize how requirements map to tests, and where gaps remain.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Inspect coverage by requirement/feature; identify untested areas; prioritize.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>A key artifact for validation and audit conversations.</td></tr>
+  </table>
+
+  <!-- 5.19 Reports -->
+  <h2>5.19&nbsp; Reports</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/reports</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Generate stakeholder- and auditor-ready summaries of testing activity and outcomes.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Select scope/period; view pass/fail trends; export reports.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Use for status reviews and evidence packages.</td></tr>
+  </table>
+
+  <!-- 5.20 Compliance -->
+  <h2>5.20&nbsp; Compliance</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/compliance</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Surface compliance posture and the audit trail in an inspection-friendly view.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Browse audit entries; filter by user/action/date; export evidence.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Central to 21 CFR Part 11 / GxP / SOX conversations.</td></tr>
+  </table>
+
+  <!-- 5.21 Projects -->
+  <h2>5.21&nbsp; Projects</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/projects</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Organize work into projects that scope test cases, scripts, runs, and reports.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Create/select a project; manage membership and settings.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Set your active project to keep artifacts well-organized.</td></tr>
+  </table>
+
+  <!-- 5.22 Environments -->
+  <h2>5.22&nbsp; Environments</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/environments</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Define target environments (URLs, endpoints, credentials) against which tests run.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Add/edit environments; select an environment for a run.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Keep environment secrets managed and least-privilege.</td></tr>
+  </table>
+
+  <!-- 5.23 App Profiles -->
+  <h2>5.23&nbsp; Application Profiles</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/app-profiles</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Capture reusable details about the applications under test to inform generation and execution.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Create profiles; attach to projects/runs.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Improves AI grounding for app-specific behavior.</td></tr>
+  </table>
+
+  <!-- 5.24 CI/CD -->
+  <h2>5.24&nbsp; CI/CD Integration</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/cicd</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Connect AITAS to your pipelines so suites run automatically on build/deploy.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Configure triggers/hooks; map suites to pipeline stages; review pipeline runs.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Brings continuous testing into your delivery flow.</td></tr>
+  </table>
+
+  <!-- 5.25 Admin -->
+  <h2>5.25&nbsp; Administration</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/admin</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Manage users, roles, and platform-level settings.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Create users; assign roles (RBAC); manage access and policies.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Restricted to administrators. Drives least-privilege access.</td></tr>
+  </table>
+
+  <!-- 5.26 Settings -->
+  <h2>5.26&nbsp; Settings</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/settings</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Personal and workspace preferences (e.g., theme, defaults).</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Adjust preferences; manage your profile.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>The header also offers a light/dark theme toggle.</td></tr>
+  </table>
+
+  <!-- 5.27 Documentation -->
+  <h2>5.27&nbsp; In-App Documentation</h2>
+  <table class=kv>
+    <tr><td class=k>Navigation</td><td class=v><span class=mono>/docs</span></td></tr>
+    <tr><td class=k>Purpose</td><td class=v>Built-in help and reference available within the application.</td></tr>
+    <tr><td class=k>Key Actions</td><td class=v>Browse guidance; reference module help.</td></tr>
+    <tr><td class=k>Notes</td><td class=v>Accessible both before and after sign-in.</td></tr>
+  </table>
+
+  <!-- 5.28 Auth screens -->
+  <h2>5.28&nbsp; Sign-In, Landing &amp; Change-Password</h2>
+  <table class=kv>
+    <tr><td class=k>Landing</td><td class=v><span class=mono>/</span> (unauthenticated) &mdash; product introduction with a single <b>Sign In</b> call-to-action.</td></tr>
+    <tr><td class=k>Login</td><td class=v><span class=mono>/login</span> &mdash; secure authentication entry point.</td></tr>
+    <tr><td class=k>Change Password</td><td class=v><span class=mono>/change-password</span> &mdash; enforced on first login or when a reset is required.</td></tr>
+  </table>
+
+  <!-- ============ SECTION 6 — WORKFLOWS ============ -->
+  <div class=pagebreak></div>
+  <h1>6.&nbsp; End-to-End Workflows</h1>
+  <p class=MsoNormal>
+    The following workflows tie the modules together into the way teams actually work.
+  </p>
+
+  <h2>6.1&nbsp; From Requirement to Approved Test Case</h2>
+  <ol>
+    <li>Open <b>Test Generator</b> (<span class=mono>/generator</span>).</li>
+    <li>Enter a clear requirement (or import via <b>Upload</b>).</li>
+    <li>Click <b>Generate</b>; review the drafted steps and expected results.</li>
+    <li>Edit as needed, then submit for approval.</li>
+    <li>An authorized reviewer approves; the decision is audit-logged.</li>
+    <li>The approved case appears in the <b>Repository</b>.</li>
+  </ol>
+
+  <h2>6.2&nbsp; From Test Case to Executable Script</h2>
+  <ol>
+    <li>Open an approved case and choose <b>Convert to Script</b>.</li>
+    <li>Select the framework/target (web/mobile/API).</li>
+    <li>Review the generated script in <b>Scripts</b> (<span class=mono>/scripts</span>).</li>
+    <li>Adjust if required; the script links back to its source case.</li>
+  </ol>
+
+  <h2>6.3&nbsp; Running &amp; Monitoring a Suite</h2>
+  <ol>
+    <li>Ensure an <b>Agent</b> is online (see 5.8&ndash;5.10).</li>
+    <li>Select an <b>Environment</b> (<span class=mono>/environments</span>).</li>
+    <li>Launch from <b>Executions</b> (<span class=mono>/executions</span>).</li>
+    <li>Watch live status; open a result for steps, logs, and artifacts.</li>
+  </ol>
+
+  <h2>6.4&nbsp; Healing a Broken Test</h2>
+  <ol>
+    <li>A run fails due to a changed selector.</li>
+    <li>Open <b>AI Self-Healing</b> (<span class=mono>/healer</span>).</li>
+    <li>Review the proposed corrected selector; accept or reject.</li>
+    <li>Re-run; the heal is recorded in history.</li>
+  </ol>
+
+  <h2>6.5&nbsp; Reporting &amp; Audit</h2>
+  <ol>
+    <li>Use <b>Coverage</b> (<span class=mono>/coverage</span>) to confirm requirement coverage.</li>
+    <li>Generate a summary in <b>Reports</b> (<span class=mono>/reports</span>).</li>
+    <li>Inspect the trail in <b>Compliance</b> (<span class=mono>/compliance</span>) and export evidence.</li>
+  </ol>
+
+  <h2>6.6&nbsp; Continuous Testing in CI/CD</h2>
+  <ol>
+    <li>Configure triggers in <b>CI/CD</b> (<span class=mono>/cicd</span>).</li>
+    <li>Map suites to pipeline stages.</li>
+    <li>On each build/deploy, suites run automatically and results flow back to AITAS.</li>
+  </ol>
+
+  <!-- ============ SECTION 7 — TESTING & VALIDATION ============ -->
+  <div class=pagebreak></div>
+  <h1>7.&nbsp; Testing &amp; Validation</h1>
+
+  <h2>7.1&nbsp; How to Test the Platform Itself</h2>
+  <p class=MsoNormal>
+    To validate an AITAS deployment end-to-end, walk the following smoke path. It
+    exercises authentication, generation, governance, execution, and reporting.
+  </p>
+  <table class=brand>
+    <tr><th style="width:8%">Step</th><th>Action</th><th style="width:34%">Expected Result</th></tr>
+    <tr><td>1</td><td>Sign in with valid credentials.</td><td>Dashboard loads; metrics render.</td></tr>
+    <tr class=alt><td>2</td><td>Generate a test case from a sample requirement.</td><td>A structured draft with steps appears.</td></tr>
+    <tr><td>3</td><td>Approve the draft.</td><td>Status changes; audit entry recorded.</td></tr>
+    <tr class=alt><td>4</td><td>Convert to a script.</td><td>Script generated and linked to the case.</td></tr>
+    <tr><td>5</td><td>Bring an agent online and run it.</td><td>Execution completes; result visible.</td></tr>
+    <tr class=alt><td>6</td><td>Trigger a heal on a deliberately broken selector.</td><td>A correction is proposed.</td></tr>
+    <tr><td>7</td><td>Open Coverage and Reports.</td><td>Coverage maps; report exports.</td></tr>
+    <tr class=alt><td>8</td><td>Open Compliance.</td><td>Audit entries for the above are present.</td></tr>
+  </table>
+
+  <h2>7.2&nbsp; Tips for Reliable Results</h2>
+  <ul>
+    <li>Write specific requirements &mdash; ambiguity reduces generation quality.</li>
+    <li>Keep the Knowledge Base current so AI output stays grounded.</li>
+    <li>Confirm the target Environment and Agent before launching runs.</li>
+    <li>Always review AI output before approval &mdash; this is required by design.</li>
+  </ul>
+
+  <h2>7.3&nbsp; Building &amp; Running the Application</h2>
+  <table class=kv>
+    <tr><td class=k>Install</td><td class=v><span class=mono>npm install</span></td></tr>
+    <tr><td class=k>Develop</td><td class=v><span class=mono>npm run dev</span> &mdash; starts the dev server (default port 5000).</td></tr>
+    <tr><td class=k>Build</td><td class=v><span class=mono>npm run build</span> &mdash; produces optimized client + server bundles.</td></tr>
+    <tr><td class=k>Containers</td><td class=v><span class=mono>docker-compose up</span> &mdash; reproducible deployment.</td></tr>
+  </table>
+
+  <!-- ============ SECTION 8 — SECURITY & COMPLIANCE ============ -->
+  <div class=pagebreak></div>
+  <h1>8.&nbsp; Security &amp; Compliance</h1>
+
+  <h2>8.1&nbsp; Authentication &amp; Access Control</h2>
+  <ul>
+    <li>Secure, session-based login with a password policy.</li>
+    <li>Forced password change on first use / reset.</li>
+    <li><b>Role-based access control (RBAC)</b> gates modules and actions.</li>
+  </ul>
+
+  <h2>8.2&nbsp; Human-in-the-Loop Governance</h2>
+  <p class=MsoNormal>
+    AI is an accelerator, not an authority. Every generated artifact requires explicit
+    human review and approval before it is treated as validated, ensuring accountable
+    decision-making.
+  </p>
+
+  <h2>8.3&nbsp; Audit Trail</h2>
+  <p class=MsoNormal>
+    Generation, approval, execution, and healing are recorded with actor, timestamp, and
+    context. The trail is designed to be inspection-ready.
+  </p>
+
+  <h2>8.4&nbsp; Regulatory Alignment</h2>
+  <table class=brand>
+    <tr><th style="width:26%">Standard</th><th>How AITAS Supports It</th></tr>
+    <tr><td><b>21 CFR Part 11</b></td><td>Electronic records &amp; signatures: unique users, approvals, immutable audit, AI-assistance disclosure.</td></tr>
+    <tr class=alt><td><b>GxP</b></td><td>Good-practice controls: documented workflows, traceability, reviewer accountability.</td></tr>
+    <tr><td><b>SOX</b></td><td>Change-control discipline: who changed what, when, and with what approval.</td></tr>
+  </table>
+
+  <table class=callout><tr><td class=c-warn>
+    <b>Validation note.</b>&nbsp; AITAS provides the <i>controls and evidence</i> that
+    support compliance. Formal validation (IQ/OQ/PQ) and qualification remain the
+    responsibility of the deploying organization per its quality system.
+  </td></tr></table>
+
+  <!-- ============ SECTION 9 — OPERATIONS ============ -->
+  <div class=pagebreak></div>
+  <h1>9.&nbsp; Operations &amp; Maintenance</h1>
+
+  <h2>9.1&nbsp; Deployment</h2>
+  <p class=MsoNormal>
+    AITAS ships with Docker support for reproducible deployment. Use environment
+    configuration for database connections, secrets, and integration endpoints.
+  </p>
+
+  <h2>9.2&nbsp; Agents</h2>
+  <p class=MsoNormal>
+    Keep at least one agent online for execution. For scale, use Enterprise Agents to
+    pool capacity and monitor health.
+  </p>
+
+  <h2>9.3&nbsp; Backups &amp; Data</h2>
+  <ul>
+    <li>Back up the application database (projects, tests, runs, knowledge, audit).</li>
+    <li>Protect the audit store &mdash; it is your compliance evidence.</li>
+    <li>Preserve the vector index for consistent knowledge retrieval.</li>
+  </ul>
+
+  <h2>9.4&nbsp; Monitoring &amp; Logs</h2>
+  <p class=MsoNormal>
+    Structured logs provide operational visibility. Monitor agent health, execution
+    throughput, and error rates; alert on anomalies.
+  </p>
+
+  <h2>9.5&nbsp; Routine Maintenance</h2>
+  <ul>
+    <li>Keep dependencies and execution engines patched.</li>
+    <li>Curate the Knowledge Base to sustain generation quality.</li>
+    <li>Periodically review RBAC assignments for least privilege.</li>
+  </ul>
+
+  <!-- ============ APPENDICES ============ -->
+  <div class=pagebreak></div>
+  <h1>Appendix A&nbsp; &mdash; Glossary</h1>
+  <table class=brand>
+    <tr><th style="width:26%">Term</th><th>Definition</th></tr>
+    <tr><td><b>AITAS</b></td><td>AI Test Automation System &mdash; this platform.</td></tr>
+    <tr class=alt><td><b>Agent</b></td><td>A runner that executes tests on a target machine (local or enterprise grid).</td></tr>
+    <tr><td><b>Artifact</b></td><td>Any generated item: a test case, a script, or a heal suggestion.</td></tr>
+    <tr class=alt><td><b>Healing</b></td><td>Automatic repair of broken selectors/locators after UI change.</td></tr>
+    <tr><td><b>Human-in-the-loop</b></td><td>A workflow requiring human review/approval of AI output.</td></tr>
+    <tr class=alt><td><b>Knowledge Base</b></td><td>Curated organizational context used to ground AI generation.</td></tr>
+    <tr><td><b>RBAC</b></td><td>Role-Based Access Control.</td></tr>
+    <tr class=alt><td><b>Vector Index</b></td><td>Semantic search structure enabling relevant knowledge retrieval.</td></tr>
+    <tr><td><b>21 CFR Part 11</b></td><td>FDA regulation governing electronic records and signatures.</td></tr>
+    <tr class=alt><td><b>GxP</b></td><td>Collective &ldquo;good practice&rdquo; quality guidelines in regulated industries.</td></tr>
+  </table>
+
+  <h1>Appendix B&nbsp; &mdash; Route Map</h1>
+  <table class=brand>
+    <tr><th style="width:34%">Route</th><th>Module</th></tr>
+    <tr><td><span class=mono>/</span></td><td>Dashboard (authenticated) / Landing (unauthenticated)</td></tr>
+    <tr class=alt><td><span class=mono>/login</span></td><td>Sign In</td></tr>
+    <tr><td><span class=mono>/change-password</span></td><td>Change Password</td></tr>
+    <tr class=alt><td><span class=mono>/generator</span></td><td>Test Generator</td></tr>
+    <tr><td><span class=mono>/upload</span></td><td>Upload Test Cases</td></tr>
+    <tr class=alt><td><span class=mono>/repository</span></td><td>Test Repository</td></tr>
+    <tr><td><span class=mono>/scripts</span></td><td>Automation Scripts</td></tr>
+    <tr class=alt><td><span class=mono>/executions</span></td><td>Executions</td></tr>
+    <tr><td><span class=mono>/enterprise</span></td><td>Enterprise Executions</td></tr>
+    <tr class=alt><td><span class=mono>/agents</span></td><td>Execution Agents</td></tr>
+    <tr><td><span class=mono>/agents/setup</span></td><td>Local Agent Setup</td></tr>
+    <tr class=alt><td><span class=mono>/agents/enterprise</span></td><td>Enterprise Agents</td></tr>
+    <tr><td><span class=mono>/multi-agent</span></td><td>Multi-Agent Orchestration</td></tr>
+    <tr class=alt><td><span class=mono>/healer</span></td><td>AI Self-Healing</td></tr>
+    <tr><td><span class=mono>/healer/enterprise</span></td><td>Enterprise AI Healer</td></tr>
+    <tr class=alt><td><span class=mono>/knowledge</span></td><td>Knowledge Base</td></tr>
+    <tr><td><span class=mono>/llm-tests</span></td><td>LLM Tests</td></tr>
+    <tr class=alt><td><span class=mono>/performance</span></td><td>Performance Testing</td></tr>
+    <tr><td><span class=mono>/data-factory</span></td><td>Test Data Factory</td></tr>
+    <tr class=alt><td><span class=mono>/coverage</span></td><td>Coverage</td></tr>
+    <tr><td><span class=mono>/reports</span></td><td>Reports</td></tr>
+    <tr class=alt><td><span class=mono>/compliance</span></td><td>Compliance</td></tr>
+    <tr><td><span class=mono>/projects</span></td><td>Projects</td></tr>
+    <tr class=alt><td><span class=mono>/environments</span></td><td>Environments</td></tr>
+    <tr><td><span class=mono>/app-profiles</span></td><td>Application Profiles</td></tr>
+    <tr class=alt><td><span class=mono>/cicd</span></td><td>CI/CD Integration</td></tr>
+    <tr><td><span class=mono>/admin</span></td><td>Administration</td></tr>
+    <tr class=alt><td><span class=mono>/settings</span></td><td>Settings</td></tr>
+    <tr><td><span class=mono>/docs</span></td><td>In-App Documentation</td></tr>
+  </table>
+
+  <h1>Appendix C&nbsp; &mdash; Representative API Endpoints</h1>
+  <p class=MsoNormal class=muted style="font-size:9.5pt;font-style:italic;">
+    Indicative server endpoints grouped by capability. Exact paths and payloads are
+    defined in the server route layer.
+  </p>
+  <table class=brand>
+    <tr><th style="width:30%">Capability</th><th>Endpoint Group</th></tr>
+    <tr><td>Authentication</td><td><span class=mono>/api/auth/*</span> (login, logout, session, password)</td></tr>
+    <tr class=alt><td>Test Generation</td><td><span class=mono>/api/generate/*</span></td></tr>
+    <tr><td>Test Cases</td><td><span class=mono>/api/tests/*</span></td></tr>
+    <tr class=alt><td>Scripts</td><td><span class=mono>/api/scripts/*</span></td></tr>
+    <tr><td>Executions</td><td><span class=mono>/api/executions/*</span></td></tr>
+    <tr class=alt><td>Agents</td><td><span class=mono>/api/agents/*</span></td></tr>
+    <tr><td>Healing</td><td><span class=mono>/api/healer/*</span></td></tr>
+    <tr class=alt><td>Knowledge</td><td><span class=mono>/api/knowledge/*</span></td></tr>
+    <tr><td>Coverage &amp; Reports</td><td><span class=mono>/api/coverage/*</span>, <span class=mono>/api/reports/*</span></td></tr>
+    <tr class=alt><td>Compliance/Audit</td><td><span class=mono>/api/compliance/*</span>, <span class=mono>/api/audit/*</span></td></tr>
+    <tr><td>Projects/Environments</td><td><span class=mono>/api/projects/*</span>, <span class=mono>/api/environments/*</span></td></tr>
+    <tr class=alt><td>Administration</td><td><span class=mono>/api/admin/*</span> (users, roles)</td></tr>
+  </table>
+
+  <h1>Appendix D&nbsp; &mdash; Quick-Start Cheat Sheet</h1>
+  <table class=brand>
+    <tr><th style="width:40%">I want to&hellip;</th><th>Go to</th></tr>
+    <tr><td>Create test cases from a requirement</td><td>Test Generator (<span class=mono>/generator</span>)</td></tr>
+    <tr class=alt><td>Import existing test cases</td><td>Upload (<span class=mono>/upload</span>)</td></tr>
+    <tr><td>Find an existing test</td><td>Repository (<span class=mono>/repository</span>)</td></tr>
+    <tr class=alt><td>Run tests</td><td>Executions (<span class=mono>/executions</span>)</td></tr>
+    <tr><td>Fix broken tests</td><td>AI Healer (<span class=mono>/healer</span>)</td></tr>
+    <tr class=alt><td>Check coverage</td><td>Coverage (<span class=mono>/coverage</span>)</td></tr>
+    <tr><td>Show results to stakeholders</td><td>Reports (<span class=mono>/reports</span>)</td></tr>
+    <tr class=alt><td>Prepare for an audit</td><td>Compliance (<span class=mono>/compliance</span>)</td></tr>
+    <tr><td>Add a teammate</td><td>Administration (<span class=mono>/admin</span>)</td></tr>
+  </table>
+
+  <h1>Appendix E&nbsp; &mdash; Documentation Conventions</h1>
+  <ul>
+    <li><span class=mono>monospace</span> denotes routes, commands, or code.</li>
+    <li><b>Bold</b> denotes UI elements and emphasis.</li>
+    <li>Blue callouts are informational; amber are cautionary; green are confirmations; purple are tips.</li>
+  </ul>
+
+  <h1>Appendix F&nbsp; &mdash; Support &amp; Ownership</h1>
+  <table class=kv>
+    <tr><td class=k>Platform Owner</td><td class=v>AITAS Platform Engineering</td></tr>
+    <tr><td class=k>Documentation</td><td class=v>This file plus the in-app <span class=mono>/docs</span> module.</td></tr>
+    <tr><td class=k>Issue Reporting</td><td class=v>Raise through your organization&rsquo;s standard support channel.</td></tr>
+  </table>
+
+  <h1>Appendix G&nbsp; &mdash; AI Assistance Disclaimer</h1>
+  <table class=callout><tr><td class=c-info>
+    AITAS uses artificial intelligence to <b>draft</b> test cases, scripts, and healing
+    suggestions. All AI-generated content is clearly identified and must be
+    <b>reviewed and approved by a qualified person</b> before it is relied upon. AI
+    output may contain errors and does not constitute validation. The deploying
+    organization retains full responsibility for verification, validation, and regulatory
+    compliance.
+  </td></tr></table>
+
+  <p class=MsoNormal class=small style="margin-top:18.0pt;color:#6B7A8C;border-top:0.75pt solid #D6E1ED;padding-top:8.0pt;">
+    <b>End of Document.</b>&nbsp; &copy; 2026 Baxter International Inc. &mdash; Confidential, Internal Use Only.
+    AITAS Project Documentation, Version 1.0.
+  </p>
+
+</div>
+
+<!-- ====================================================================
+     HEADER / FOOTER DEFINITIONS FOR SECTION 2
+     ==================================================================== -->
+<div style='mso-element:header' id=h2>
+  <p class=MsoHeader>
+    <span style="font-weight:700;letter-spacing:1.5pt;">baxter</span>
+    <span style="color:#6B7A8C;font-weight:400;">&nbsp;&middot;&nbsp; AITAS Project Documentation</span>
+    <span style="mso-tab-count:1"></span>
+  </p>
+</div>
+
+<div style='mso-element:footer' id=f2>
+  <p class=MsoFooter>
+    Confidential &mdash; Internal Use Only
+    <span style="mso-tab-count:1"></span>
+    Page
+    <!--[if supportFields]><span style='mso-element:field-begin'></span><span
+      style="mso-spacerun:yes"> </span>PAGE <span style='mso-element:field-end'></span><![endif]-->
+    of
+    <!--[if supportFields]><span style='mso-element:field-begin'></span><span
+      style="mso-spacerun:yes"> </span>NUMPAGES <span style='mso-element:field-end'></span><![endif]-->
+  </p>
+</div>
+
+</body>
+</html>

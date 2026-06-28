@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import StepEditor, { TestStep } from './StepEditor';
 import { useStepManagement } from '@/hooks/useStepManagement';
+import { toEditorSteps, toStorageSteps } from '@/lib/stepAdapter';
 import {
   Save,
   AlertCircle,
@@ -79,7 +80,10 @@ export const EnhancedTestCaseEditor: React.FC<EnhancedTestCaseEditorProps> = ({
     importSteps,
     setSteps: setAllSteps,
   } = useStepManagement({
-    initialSteps: testCase?.steps || [],
+    // Convert persisted `{ step, expected }` steps into the rich editor shape
+    // so the detected ACTION / TARGET / VALUE display correctly (instead of
+    // "UNKNOWN"). Tolerates already-structured steps and bare strings too.
+    initialSteps: toEditorSteps(testCase?.steps as any),
   });
 
   // Validate form
@@ -116,7 +120,9 @@ export const EnhancedTestCaseEditor: React.FC<EnhancedTestCaseEditorProps> = ({
         preconditions,
         priority,
         testType,
-        steps: getAllSteps(),
+        // Convert the rich editor steps back into the persisted
+        // `{ step, expected }` shape so we never corrupt the stored data.
+        steps: toStorageSteps(getAllSteps()) as any,
         expectedResult,
         tags: tags
           .split(',')

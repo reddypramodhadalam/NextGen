@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -9,6 +9,48 @@
    Chief Architect Design System v2.0
    "Where Intelligence Meets Quality"
    ============================================================ */
+
+/* ============================================================
+   BAXTER BRAND TOKENS
+   Used by the pre-login / marketing screens (landing + login) to
+   align with Baxter International corporate identity and the
+   healthcare / regulated-industry tone of voice.
+   ------------------------------------------------------------
+   These are raw RGB/HEX values (not Tailwind HSL tokens) because
+   they must render identically regardless of theme switching.
+   Reference via Tailwind arbitrary values, e.g.:
+     bg-[color:var(--baxter-primary)]
+     text-[color:var(--baxter-primary)]
+   ============================================================ */
+:root {
+  /* Core brand palette */
+  --baxter-primary:        #00549F;  /* Baxter signature blue (deeper) */
+  --baxter-primary-dark:   #003366;  /* Hover / pressed */
+  --baxter-primary-light:  #1A6FB8;  /* Hover lift on dark */
+  --baxter-secondary:      #0072CE;  /* Hyperlinks, accent */
+  --baxter-accent:         #00A3E0;  /* Bright accent / chart highlight */
+  --baxter-light:          #E8F1FA;  /* Banner / surface tint */
+  --baxter-light-2:        #F0F6FC;  /* Softer tint */
+  --baxter-surface:        #F7FAFD;  /* Page background */
+  --baxter-surface-alt:    #ECF2F8;  /* Section separator */
+
+  /* Neutrals */
+  --baxter-ink:            #0F1F35;  /* Primary text (slate-ink) */
+  --baxter-ink-soft:       #3D4D63;  /* Secondary text */
+  --baxter-ink-mute:       #6B7A8C;  /* Tertiary / meta */
+  --baxter-line:           #D6E1ED;  /* Borders, dividers */
+  --baxter-line-strong:    #B7C6D6;  /* Form borders */
+
+  /* Semantic / status */
+  --baxter-success:        #2E7D32;
+  --baxter-success-bg:     #E8F5E9;
+  --baxter-warning:        #ED6C02;
+  --baxter-warning-bg:     #FFF4E5;
+  --baxter-error:          #D32F2F;
+  --baxter-error-bg:       #FDECEC;
+  --baxter-info:           #0277BD;
+  --baxter-info-bg:        #E1F5FE;
+}
 
 :root {
   --button-outline: rgba(0,0,0, .10);

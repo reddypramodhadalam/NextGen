@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 90" role="img" aria-label="Baxter">
+  <title>Baxter</title>
+  <!--
+    Baxter wordmark — the corporate signature "Baxter" in the official Baxter
+    blue (#00549F), bold + italic with a raised registered-trademark symbol.
+    Modelled on the mark used at baxter.com. To use the *official* artwork
+    instead, replace this file with the Baxter logo from your brand portal
+    (keep the same filename: baxter-logo.svg).
+  -->
+  <text x="6" y="64"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="64" font-weight="800" font-style="italic"
+        letter-spacing="-2" fill="#00549F">Baxter</text>
+  <text x="244" y="30"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="17" font-weight="600" fill="#00549F" opacity="0.85">&#174;</text>
+</svg>

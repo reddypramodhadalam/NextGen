@@ -1,11 +1,11 @@
 /**
- * AITAS Knowledge Base Page
+ * AITAS AI Knowledge Hub Page
  * ═══════════════════════════════════════════════════════════════════════════════
  * UI for managing knowledge sources, viewing extracted knowledge, and governance rules
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   Database, 
@@ -23,7 +23,16 @@ import {
   Filter,
   Github,
   FileCode,
-  Layers
+  Layers,
+  Upload,
+  FileImage,
+  FileType2,
+  Presentation,
+  Eye,
+  X,
+  Sparkles,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,6 +55,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogClose,
 } from "@/components/ui/dialog";
 import {
   Table,
@@ -57,6 +67,7 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { cn } from "@/lib/utils";
 
 // Types
 interface KnowledgeSource {
@@ -103,8 +114,20 @@ const SOURCE_TYPES = [
   { value: "SALESFORCE_DOCS", label: "Salesforce Documentation", icon: FileText },
   { value: "JIRA", label: "Jira Project", icon: Layers },
   { value: "CONFLUENCE", label: "Confluence Space", icon: FileText },
+  { value: "SHAREPOINT", label: "SharePoint Site", icon: Database },
   { value: "CUSTOM_URL", label: "Custom URL", icon: ExternalLink },
 ];
+
+const FILE_TYPE_INFO = [
+  { ext: ".pptx,.ppt", label: "PowerPoint", icon: Presentation, color: "text-orange-600" },
+  { ext: ".pdf", label: "PDF", icon: FileText, color: "text-red-600" },
+  { ext: ".docx,.doc", label: "Word Document", icon: FileType2, color: "text-blue-600" },
+  { ext: ".png,.jpg,.jpeg,.gif,.bmp,.webp", label: "Images (OCR)", icon: FileImage, color: "text-purple-600" },
+  { ext: ".txt,.md,.csv", label: "Text/Markdown", icon: FileText, color: "text-gray-600" },
+];
+
+const ACCEPTED_FILE_EXTENSIONS =
+  ".pptx,.ppt,.pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.bmp,.webp,.txt,.md,.csv";
 
 const MODULE_TAGS = [
   // JDE
@@ -122,6 +145,10 @@ const MODULE_TAGS = [
   // Salesforce
   { value: "SF_SALES", label: "Salesforce - Sales Cloud", app: "SALESFORCE" },
   { value: "SF_SERVICE", label: "Salesforce - Service Cloud", app: "SALESFORCE" },
+  // General / Custom — for documents that don't belong to a specific ERP module
+  { value: "GENERAL_PROCESS", label: "General - Process / Work Instruction", app: "CUSTOM" },
+  { value: "GENERAL_FUNCTIONAL", label: "General - Functional Spec", app: "CUSTOM" },
+  { value: "GENERAL_OTHER", label: "General - Other / Uncategorized", app: "CUSTOM" },
 ];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -157,6 +184,20 @@ export default function KnowledgeBasePage() {
     queryKey: ["/api/knowledge/stats"],
   });
 
+  // Fetch KB integration health (DB + Vector Index + Extractors + AI client + Retrieval)
+  const { data: health } = useQuery<{
+    overall: "HEALTHY" | "DEGRADED" | "BROKEN";
+    checks: Array<{ name: string; status: "PASS" | "WARN" | "FAIL"; detail: string }>;
+    stats: { sources: number; structuredKnowledge: number; vectorIndexEntries: number };
+  }>({
+    queryKey: ["/api/knowledge/health"],
+    queryFn: async () => {
+      const r = await fetch("/api/knowledge/health", { credentials: "include" });
+      return r.json();
+    },
+    refetchInterval: 60000, // refresh every minute
+  });
+
   // Fetch sources
   const { data: sources, isLoading: sourcesLoading } = useQuery<KnowledgeSource[]>({
     queryKey: ["/api/knowledge/sources"],
@@ -188,7 +229,7 @@ export default function KnowledgeBasePage() {
     refetchKnowledge().finally(() => setIsSearching(false));
   };
 
-  // Create source mutation
+  // Create source mutation (URL-based)
   const createSourceMutation = useMutation({
     mutationFn: async (data: Partial<KnowledgeSource>) => {
       return apiRequest("POST", "/api/knowledge/sources", data);
@@ -206,6 +247,61 @@ export default function KnowledgeBasePage() {
       toast({
         title: "Error",
         description: error.message || "Failed to add knowledge source",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // File upload mutation (PPT/PDF/Image/DOCX)
+  const uploadSourceMutation = useMutation({
+    mutationFn: async (formData: FormData) => {
+      const response = await fetch("/api/knowledge/sources/upload", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: "Upload failed" }));
+        throw new Error(err.error || "Upload failed");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/knowledge/sources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/knowledge/stats"] });
+      setIsAddSourceOpen(false);
+      toast({
+        title: "File Uploaded",
+        description: "Ingestion has started. Track status in the Sources tab.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Upload Failed",
+        description: error.message || "Failed to upload file",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // SharePoint crawl mutation
+  const sharepointMutation = useMutation({
+    mutationFn: async (data: any) => {
+      return apiRequest("POST", "/api/knowledge/sources/sharepoint", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/knowledge/sources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/knowledge/stats"] });
+      setIsAddSourceOpen(false);
+      toast({
+        title: "SharePoint Crawl Started",
+        description: "Each discovered file will appear as its own source. Watch the Sources tab.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "SharePoint Error",
+        description: error.message || "SharePoint crawl failed",
         variant: "destructive",
       });
     },
@@ -251,10 +347,30 @@ export default function KnowledgeBasePage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
             <Database className="h-8 w-8 text-primary" />
-            Knowledge Base
+            AI Knowledge Hub
+            {health && (
+              <Badge
+                className={
+                  health.overall === "HEALTHY"
+                    ? "bg-green-100 text-green-800 border-green-300"
+                    : health.overall === "DEGRADED"
+                    ? "bg-amber-100 text-amber-800 border-amber-300"
+                    : "bg-red-100 text-red-800 border-red-300"
+                }
+                title={health.checks.map((c) => `${c.status === "PASS" ? "✓" : c.status === "WARN" ? "⚠" : "✗"} ${c.name}: ${c.detail}`).join("\n")}
+              >
+                {health.overall === "HEALTHY" ? "✓ " : health.overall === "DEGRADED" ? "⚠ " : "✗ "}
+                {health.overall}
+              </Badge>
+            )}
           </h1>
           <p className="text-muted-foreground mt-1">
             Manage knowledge sources for intelligent test generation
+            {health && health.stats && (
+              <span className="ml-2 text-xs">
+                · {health.stats.sources} sources · {health.stats.structuredKnowledge} knowledge items · {health.stats.vectorIndexEntries} indexed for RAG
+              </span>
+            )}
           </p>
         </div>
         <Dialog open={isAddSourceOpen} onOpenChange={setIsAddSourceOpen}>
@@ -266,7 +382,9 @@ export default function KnowledgeBasePage() {
           </DialogTrigger>
           <AddSourceDialog 
             onSubmit={(data) => createSourceMutation.mutate(data)}
-            isLoading={createSourceMutation.isPending}
+            onUpload={(formData) => uploadSourceMutation.mutate(formData)}
+            onSharepoint={(data) => sharepointMutation.mutate(data)}
+            isLoading={createSourceMutation.isPending || uploadSourceMutation.isPending || sharepointMutation.isPending}
           />
         </Dialog>
       </div>
@@ -696,7 +814,7 @@ export default function KnowledgeBasePage() {
                   <p className="text-sm mt-2">
                     {sources && sources.length > 0 
                       ? "Try a different search term, or click 'Refresh' on a source to re-ingest."
-                      : "Add knowledge sources to start building your knowledge base."}
+                      : "Add knowledge sources to start building your AI Knowledge Hub."}
                   </p>
                 </div>
               )}
@@ -708,14 +826,21 @@ export default function KnowledgeBasePage() {
   );
 }
 
-// Add Source Dialog Component
-function AddSourceDialog({ 
-  onSubmit, 
-  isLoading 
-}: { 
+// Add Source Dialog Component — supports URL + File Upload + SharePoint with preview
+function AddSourceDialog({
+  onSubmit,
+  onUpload,
+  onSharepoint,
+  isLoading,
+}: {
   onSubmit: (data: Partial<KnowledgeSource>) => void;
+  onUpload: (formData: FormData) => void;
+  onSharepoint: (data: any) => void;
   isLoading: boolean;
 }) {
+  const [tab, setTab] = useState<"url" | "file" | "sharepoint">("url");
+
+  // URL form state
   const [formData, setFormData] = useState({
     name: "",
     sourceType: "",
@@ -725,110 +850,734 @@ function AddSourceDialog({
     authType: "NONE",
   });
 
+  // File upload state
+  const [file, setFile] = useState<File | null>(null);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadModuleTag, setUploadModuleTag] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // SharePoint form state
+  const [sp, setSp] = useState({
+    name: "",
+    siteUrl: "",
+    folderPath: "",
+    accessToken: "",
+    moduleTag: "",
+    application: "" as "JDE" | "SAP" | "SALESFORCE" | "CUSTOM" | "",
+    applicationScope: [] as string[],
+    maxFiles: 50,
+  });
+
+  // Preview state
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState<any>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [showAllKnowledge, setShowAllKnowledge] = useState(false);
+  const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
+
+  const toggleItem = (i: number) =>
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Derive application from moduleTag
-    const moduleInfo = MODULE_TAGS.find(m => m.value === formData.moduleTag);
+    const moduleInfo = MODULE_TAGS.find((m) => m.value === formData.moduleTag);
     const application = moduleInfo?.app || "CUSTOM";
-    
-    onSubmit({
-      ...formData,
-      application,
-    });
+    onSubmit({ ...formData, application });
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) {
+      setFile(f);
+      if (!uploadName) setUploadName(f.name);
+      setPreviewData(null);
+      setPreviewError(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files?.[0];
+    if (f) {
+      setFile(f);
+      if (!uploadName) setUploadName(f.name);
+      setPreviewData(null);
+      setPreviewError(null);
+    }
+  };
+
+  const handlePreview = async () => {
+    if (!file) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewData(null);
+    setShowAllKnowledge(false);
+    setExpandedItems(new Set());
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("name", uploadName || file.name);
+      if (uploadModuleTag) fd.append("moduleTag", uploadModuleTag);
+      const mt = MODULE_TAGS.find((m) => m.value === uploadModuleTag);
+      if (mt?.app) fd.append("application", mt.app);
+
+      const res = await fetch("/api/knowledge/preview", {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setPreviewError(json.error || "Preview failed");
+      } else {
+        setPreviewData(json);
+      }
+    } catch (e: any) {
+      setPreviewError(e.message || "Preview failed");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleUpload = () => {
+    if (!file) {
+      setPreviewError("Please choose a file to upload first.");
+      return;
+    }
+    if (!uploadModuleTag) {
+      setPreviewError("Module Tag is required — pick one from the dropdown above to enable ingestion.");
+      return;
+    }
+    setPreviewError(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", uploadName || file.name);
+    fd.append("moduleTag", uploadModuleTag);
+    const mt = MODULE_TAGS.find((m) => m.value === uploadModuleTag);
+    fd.append("application", mt?.app || "CUSTOM");
+    fd.append("sourceType", "FILE_UPLOAD");
+    onUpload(fd);
   };
 
   return (
-    <DialogContent className="sm:max-w-[500px]">
+    <DialogContent className="sm:max-w-[640px] max-h-[90vh] flex flex-col overflow-hidden">
       <DialogHeader>
         <DialogTitle>Add Knowledge Source</DialogTitle>
         <DialogDescription>
-          Add a new source to extract knowledge for test generation.
+          Add a knowledge source from a URL or upload a document (PPT, PDF, DOCX, Image).
         </DialogDescription>
       </DialogHeader>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="name">Source Name</Label>
-          <Input
-            id="name"
-            placeholder="e.g., JDE Procurement Docs"
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            required
-          />
-        </div>
-        
-        <div className="space-y-2">
-          <Label htmlFor="sourceType">Source Type</Label>
-          <Select 
-            value={formData.sourceType} 
-            onValueChange={(v) => setFormData({ ...formData, sourceType: v })}
+
+      <Tabs value={tab} onValueChange={(v) => setTab(v as any)} className="flex flex-col flex-1 min-h-0">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="url" className="gap-2">
+            <ExternalLink className="h-4 w-4" />
+            URL Source
+          </TabsTrigger>
+          <TabsTrigger value="file" className="gap-2">
+            <Upload className="h-4 w-4" />
+            File Upload
+          </TabsTrigger>
+          <TabsTrigger value="sharepoint" className="gap-2">
+            <Database className="h-4 w-4" />
+            SharePoint
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Scrollable body — keeps the dialog header (with close ✕) and the
+            tab bar pinned while long previews scroll inside this region.
+            This prevents the close button from scrolling away on tall previews. */}
+        <div className="flex-1 overflow-y-auto -mr-3 pr-3 mt-1">
+
+        {/* URL TAB */}
+        <TabsContent value="url" className="space-y-4 mt-4">
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="name">Source Name</Label>
+              <Input
+                id="name"
+                placeholder="e.g., JDE Procurement Docs"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sourceType">Source Type</Label>
+              <Select
+                value={formData.sourceType}
+                onValueChange={(v) => setFormData({ ...formData, sourceType: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select source type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SOURCE_TYPES.map((type) => (
+                    <SelectItem key={type.value} value={type.value}>
+                      <div className="flex items-center gap-2">
+                        <type.icon className="h-4 w-4" />
+                        {type.label}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="sourceUrl">Source URL</Label>
+              <Input
+                id="sourceUrl"
+                placeholder="https://..."
+                value={formData.sourceUrl}
+                onChange={(e) => setFormData({ ...formData, sourceUrl: e.target.value })}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="moduleTag">Module Tag (Required)</Label>
+              <Select
+                value={formData.moduleTag}
+                onValueChange={(v) => setFormData({ ...formData, moduleTag: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select module" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MODULE_TAGS.map((tag) => (
+                    <SelectItem key={tag.value} value={tag.value}>
+                      {tag.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Determines how knowledge is classified and retrieved.
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button type="submit" disabled={isLoading}>
+                {isLoading ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Source
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </TabsContent>
+
+        {/* FILE UPLOAD TAB */}
+        <TabsContent value="file" className="space-y-4 mt-4">
+          {/* Drag-drop zone */}
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-muted/40 transition"
           >
-            <SelectTrigger>
-              <SelectValue placeholder="Select source type" />
-            </SelectTrigger>
-            <SelectContent>
-              {SOURCE_TYPES.map((type) => (
-                <SelectItem key={type.value} value={type.value}>
-                  <div className="flex items-center gap-2">
-                    <type.icon className="h-4 w-4" />
-                    {type.label}
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        
-        <div className="space-y-2">
-          <Label htmlFor="sourceUrl">Source URL</Label>
-          <Input
-            id="sourceUrl"
-            placeholder="https://..."
-            value={formData.sourceUrl}
-            onChange={(e) => setFormData({ ...formData, sourceUrl: e.target.value })}
-            required
-          />
-        </div>
-        
-        <div className="space-y-2">
-          <Label htmlFor="moduleTag">Module Tag (Required)</Label>
-          <Select 
-            value={formData.moduleTag} 
-            onValueChange={(v) => setFormData({ ...formData, moduleTag: v })}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select module" />
-            </SelectTrigger>
-            <SelectContent>
-              {MODULE_TAGS.map((tag) => (
-                <SelectItem key={tag.value} value={tag.value}>
-                  {tag.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            Module tag determines how knowledge is classified and retrieved.
-          </p>
-        </div>
-        
-        <DialogFooter>
-          <Button type="submit" disabled={isLoading}>
-            {isLoading ? (
-              <>
-                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                Adding...
-              </>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept={ACCEPTED_FILE_EXTENSIONS}
+              onChange={handleFileChange}
+            />
+            {file ? (
+              <div className="space-y-2">
+                <CheckCircle2 className="h-10 w-10 mx-auto text-green-600" />
+                <p className="font-medium">{file.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {(file.size / 1024).toFixed(1)} KB · {file.type || "unknown type"}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFile(null);
+                    setPreviewData(null);
+                    setUploadName("");
+                  }}
+                >
+                  <X className="h-3 w-3 mr-1" /> Remove
+                </Button>
+              </div>
             ) : (
-              <>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Source
-              </>
+              <div className="space-y-2">
+                <Upload className="h-10 w-10 mx-auto text-muted-foreground" />
+                <p className="font-medium">Click to upload or drag &amp; drop</p>
+                <p className="text-xs text-muted-foreground">
+                  Max 50MB · Supported file types below
+                </p>
+              </div>
             )}
-          </Button>
-        </DialogFooter>
-      </form>
+          </div>
+
+          {/* Supported file types */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {FILE_TYPE_INFO.map((ft) => (
+              <div
+                key={ft.label}
+                className="flex items-center gap-2 px-2 py-1 border rounded text-xs"
+              >
+                <ft.icon className={`h-4 w-4 ${ft.color}`} />
+                <span className="font-medium">{ft.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Form fields */}
+          <div className="space-y-2">
+            <Label htmlFor="uploadName">Display Name</Label>
+            <Input
+              id="uploadName"
+              placeholder="e.g., Order-to-Cash Process Doc"
+              value={uploadName}
+              onChange={(e) => setUploadName(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="uploadModuleTag" className="flex items-center gap-1.5">
+              Module Tag <span className="text-destructive">*</span>
+              {file && !uploadModuleTag && (
+                <span className="text-[11px] font-normal text-amber-600 dark:text-amber-400">
+                  — required to enable ingestion
+                </span>
+              )}
+            </Label>
+            <Select value={uploadModuleTag} onValueChange={setUploadModuleTag}>
+              <SelectTrigger
+                className={cn(
+                  file && !uploadModuleTag && "border-amber-500/60 ring-1 ring-amber-500/30"
+                )}
+              >
+                <SelectValue placeholder="Select module (required)" />
+              </SelectTrigger>
+              <SelectContent>
+                {MODULE_TAGS.map((tag) => (
+                  <SelectItem key={tag.value} value={tag.value}>
+                    {tag.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Not an ERP doc? Use a <span className="font-medium">General</span> option at the bottom of the list.
+            </p>
+          </div>
+
+          {previewError && (
+            <div className="border border-destructive/40 bg-destructive/10 text-destructive p-3 rounded text-sm">
+              {previewError}
+            </div>
+          )}
+
+          {/* Preview shown inline */}
+          {previewData && (
+            <Card className="border-primary/30 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2 text-foreground">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  Preview Result
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Extracted {previewData.extraction?.units} units ·{" "}
+                  {previewData.extraction?.wordCount} words
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 pt-0">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="border rounded p-2 bg-card">
+                    <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                      {previewData.counts?.valid || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Valid</div>
+                  </div>
+                  <div className="border rounded p-2 bg-card">
+                    <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                      {previewData.counts?.rejected || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Rejected</div>
+                  </div>
+                  <div className="border rounded p-2 bg-card">
+                    <div className="text-2xl font-bold text-foreground">
+                      {previewData.counts?.total || 0}
+                    </div>
+                    <div className="text-xs text-muted-foreground">Total</div>
+                  </div>
+                </div>
+
+                {previewData.knowledge?.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-xs font-medium text-foreground">
+                      Knowledge items found ({previewData.knowledge.length}):
+                    </div>
+                    <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                      {(showAllKnowledge
+                        ? previewData.knowledge
+                        : previewData.knowledge.slice(0, 5)
+                      ).map((k: any, i: number) => {
+                        const isOpen = expandedItems.has(i);
+                        const facts = k.facts || {};
+                        const hasDetail =
+                          !!facts.description ||
+                          (facts.requiredFields?.length ?? 0) > 0 ||
+                          (facts.tables?.length ?? 0) > 0 ||
+                          (facts.testPoints?.length ?? 0) > 0 ||
+                          (facts.validations?.length ?? 0) > 0;
+                        return (
+                          <div
+                            key={i}
+                            className="text-xs border rounded bg-card text-card-foreground overflow-hidden"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => hasDetail && toggleItem(i)}
+                              className={cn(
+                                "w-full flex items-center justify-between gap-2 p-2 text-left",
+                                hasDetail && "hover:bg-muted/50 cursor-pointer"
+                              )}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {hasDetail ? (
+                                  isOpen ? (
+                                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                  ) : (
+                                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                  )
+                                ) : (
+                                  <span className="w-3.5 shrink-0" />
+                                )}
+                                <Badge variant="outline" className="font-mono shrink-0">
+                                  {k.objectName}
+                                </Badge>
+                                <span className="truncate text-muted-foreground">
+                                  {facts.description?.slice(0, 60) || "—"}
+                                </span>
+                              </div>
+                              <Badge variant="secondary" className="text-xs shrink-0">
+                                {k.confidenceScore}%
+                              </Badge>
+                            </button>
+
+                            {isOpen && hasDetail && (
+                              <div className="border-t bg-muted/30 p-2.5 space-y-2">
+                                {facts.description && (
+                                  <p className="text-muted-foreground leading-relaxed">
+                                    {facts.description}
+                                  </p>
+                                )}
+                                {facts.requiredFields?.length > 0 && (
+                                  <div>
+                                    <p className="font-medium text-foreground mb-1">Required Fields:</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {facts.requiredFields.map((f: string, j: number) => (
+                                        <Badge key={j} variant="secondary" className="text-[10px]">{f}</Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {facts.tables?.length > 0 && (
+                                  <div>
+                                    <p className="font-medium text-foreground mb-1">Tables:</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {facts.tables.map((t: string, j: number) => (
+                                        <Badge key={j} variant="outline" className="text-[10px] font-mono">{t}</Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {facts.testPoints?.length > 0 && (
+                                  <div>
+                                    <p className="font-medium text-foreground mb-1">
+                                      Test Points ({facts.testPoints.length}):
+                                    </p>
+                                    <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                                      {facts.testPoints.map((p: string, j: number) => (
+                                        <li key={j}>{p}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                {facts.validations?.length > 0 && (
+                                  <div>
+                                    <p className="font-medium text-foreground mb-1">
+                                      Validations ({facts.validations.length}):
+                                    </p>
+                                    <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                                      {facts.validations.map((v: string, j: number) => (
+                                        <li key={j}>{v}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {previewData.knowledge.length > 5 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllKnowledge((v) => !v)}
+                        className="text-xs text-primary hover:underline w-full text-center pt-1"
+                      >
+                        {showAllKnowledge
+                          ? "Show less"
+                          : `Show all ${previewData.knowledge.length} items`}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {previewData.extraction?.warnings?.length > 0 && (
+                  <div className="text-xs">
+                    <div className="font-medium text-amber-600 dark:text-amber-400">Warnings:</div>
+                    <ul className="list-disc list-inside text-muted-foreground">
+                      {previewData.extraction.warnings
+                        .slice(0, 3)
+                        .map((w: string, i: number) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          <DialogFooter className="gap-2 sm:justify-between">
+            <DialogClose asChild>
+              <Button type="button" variant="ghost">
+                <X className="mr-2 h-4 w-4" />
+                Cancel
+              </Button>
+            </DialogClose>
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:items-center">
+              {file && !uploadModuleTag && (
+                <span className="text-xs text-amber-600 dark:text-amber-400">
+                  Pick a Module Tag above
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handlePreview}
+                disabled={!file || previewLoading}
+              >
+                {previewLoading ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Previewing...
+                  </>
+                ) : (
+                  <>
+                    <Eye className="mr-2 h-4 w-4" />
+                    Preview
+                  </>
+                )}
+              </Button>
+              <Button
+                type="button"
+                onClick={handleUpload}
+                disabled={!file || isLoading}
+                title={!uploadModuleTag ? "Select a Module Tag first" : undefined}
+              >
+                {isLoading ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload &amp; Ingest
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogFooter>
+        </TabsContent>
+
+        {/* SHAREPOINT TAB */}
+        <TabsContent value="sharepoint" className="space-y-4 mt-4">
+          <div className="rounded border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+            <strong>SharePoint Crawler:</strong> Recursively scans a SharePoint site, downloads every supported file (PDF/PPT/DOCX/Image), filters by application, and runs each file through the same ingestion pipeline. Each discovered file becomes its own source so you can track status.
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="spName">Display Name</Label>
+            <Input
+              id="spName"
+              placeholder="e.g., JDE Functional Specs"
+              value={sp.name}
+              onChange={(e) => setSp({ ...sp, name: e.target.value })}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="spSiteUrl">SharePoint Site URL</Label>
+            <Input
+              id="spSiteUrl"
+              placeholder="https://contoso.sharepoint.com/sites/JDEDocs"
+              value={sp.siteUrl}
+              onChange={(e) => setSp({ ...sp, siteUrl: e.target.value })}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="spFolder">Folder Path (optional)</Label>
+            <Input
+              id="spFolder"
+              placeholder="Shared Documents/Procurement Specs"
+              value={sp.folderPath}
+              onChange={(e) => setSp({ ...sp, folderPath: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">Leave blank to crawl the entire site root.</p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="spToken">OAuth Access Token (Graph API)</Label>
+            <Input
+              id="spToken"
+              type="password"
+              placeholder="eyJ0eXAiOiJKV1QiLCJhbGc..."
+              value={sp.accessToken}
+              onChange={(e) => setSp({ ...sp, accessToken: e.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Required Graph scopes: <code>Sites.Read.All</code>, <code>Files.Read.All</code>. Token is used in memory only — never stored.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <Label htmlFor="spApp">Application</Label>
+              <Select value={sp.application} onValueChange={(v: any) => setSp({ ...sp, application: v })}>
+                <SelectTrigger><SelectValue placeholder="Select application" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="JDE">JDE</SelectItem>
+                  <SelectItem value="SAP">SAP</SelectItem>
+                  <SelectItem value="SALESFORCE">Salesforce</SelectItem>
+                  <SelectItem value="CUSTOM">Custom</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spMaxFiles">Max Files</Label>
+              <Input
+                id="spMaxFiles"
+                type="number"
+                min={1}
+                max={500}
+                value={sp.maxFiles}
+                onChange={(e) => setSp({ ...sp, maxFiles: parseInt(e.target.value) || 50 })}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="spModuleTag">Module Tag</Label>
+            <Select value={sp.moduleTag} onValueChange={(v) => setSp({ ...sp, moduleTag: v })}>
+              <SelectTrigger><SelectValue placeholder="Select module" /></SelectTrigger>
+              <SelectContent>
+                {MODULE_TAGS.map((tag) => (
+                  <SelectItem key={tag.value} value={tag.value}>
+                    {tag.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Application Scope (filter what gets ingested)</Label>
+            <div className="flex flex-wrap gap-2">
+              {["JDE", "SAP", "SALESFORCE"].map((app) => {
+                const checked = sp.applicationScope.includes(app);
+                return (
+                  <Button
+                    key={app}
+                    type="button"
+                    variant={checked ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      setSp({
+                        ...sp,
+                        applicationScope: checked
+                          ? sp.applicationScope.filter((a) => a !== app)
+                          : [...sp.applicationScope, app],
+                      });
+                    }}
+                  >
+                    {app}
+                  </Button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Only files matching these applications will be ingested. Leave empty to ingest everything.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!sp.siteUrl || !sp.accessToken || !sp.application || !sp.moduleTag) {
+                  return;
+                }
+                onSharepoint({
+                  name: sp.name || `SharePoint: ${sp.siteUrl}`,
+                  siteUrl: sp.siteUrl,
+                  folderPath: sp.folderPath || undefined,
+                  accessToken: sp.accessToken,
+                  application: sp.application,
+                  moduleTag: sp.moduleTag,
+                  applicationScope: sp.applicationScope.length > 0 ? sp.applicationScope : undefined,
+                  maxFiles: sp.maxFiles,
+                });
+              }}
+              disabled={
+                isLoading ||
+                !sp.siteUrl ||
+                !sp.accessToken ||
+                !sp.application ||
+                !sp.moduleTag
+              }
+            >
+              {isLoading ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Crawling...
+                </>
+              ) : (
+                <>
+                  <Database className="mr-2 h-4 w-4" />
+                  Start SharePoint Crawl
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </TabsContent>
+        </div>
+      </Tabs>
     </DialogContent>
   );
 }

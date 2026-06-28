@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { BaxterLogo } from "@/components/brand/baxter-logo";
 import {
   BookOpen,
   Rocket,
@@ -1604,72 +1605,129 @@ export default function Documentation() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container flex h-14 items-center justify-between px-4">
+    <div
+      className="min-h-screen"
+      style={{
+        backgroundColor: "var(--baxter-surface)",
+        color: "var(--baxter-ink)",
+        fontFamily: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+      }}
+    >
+      <header
+        className="sticky top-0 z-50 backdrop-blur"
+        style={{
+          backgroundColor: "rgba(255,255,255,0.88)",
+          borderBottom: "1px solid var(--baxter-line)",
+        }}
+      >
+        <div className="container flex h-16 items-center justify-between px-4">
           <div className="flex items-center gap-4">
             <Link href="/">
-              <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-home">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2"
+                data-testid="button-back-home"
+                style={{ color: "var(--baxter-ink-soft)" }}
+              >
                 <ArrowLeft className="h-4 w-4" />
                 Back to Home
               </Button>
             </Link>
-            <div className="flex items-center gap-2">
-              <BookOpen className="h-5 w-5 text-primary" />
-              <span className="font-semibold">AITAS Documentation</span>
+            <span
+              aria-hidden="true"
+              className="hidden sm:block h-6 w-px"
+              style={{ backgroundColor: "var(--baxter-line)" }}
+            />
+            <div className="hidden sm:flex items-center gap-2.5">
+              <BaxterLogo height={26} />
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
+                style={{
+                  backgroundColor: "var(--baxter-light)",
+                  color: "var(--baxter-primary)",
+                  border: "1px solid rgba(0,84,159,0.14)",
+                }}
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                Documentation
+              </span>
             </div>
           </div>
           <Link href="/login">
-            <Button size="sm" data-testid="button-login-docs">Sign In</Button>
+            <Button
+              size="sm"
+              data-testid="button-login-docs"
+              className="font-semibold text-white shadow-sm transition-all hover:translate-y-[-1px] hover:shadow-md"
+              style={{ backgroundColor: "var(--baxter-primary)" }}
+            >
+              Sign In
+              <ChevronRight className="h-3.5 w-3.5 ml-1" />
+            </Button>
           </Link>
         </div>
       </header>
 
       <div className="container flex">
-        <aside className="hidden md:block w-64 shrink-0 border-r">
-          <ScrollArea className="h-[calc(100vh-3.5rem)] py-6 pr-4">
+        <aside
+          className="hidden md:block w-64 shrink-0"
+          style={{ borderRight: "1px solid var(--baxter-line)" }}
+        >
+          <ScrollArea className="h-[calc(100vh-4rem)] py-6 pr-4">
             <nav className="space-y-1">
-              {sections.map((section) => (
-                <div key={section.id}>
-                  <button
-                    onClick={() => {
-                      setActiveSection(section.id);
-                      toggleSection(section.id);
-                    }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${
-                      activeSection === section.id
-                        ? "bg-primary/10 text-primary font-medium"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    }`}
-                    data-testid={`nav-${section.id}`}
-                  >
-                    {section.icon}
-                    <span>{section.title}</span>
-                    {section.subsections && (
-                      <ChevronRight
-                        className={`h-4 w-4 ml-auto transition-transform ${
-                          expandedSections.includes(section.id) ? "rotate-90" : ""
-                        }`}
-                      />
+              {sections.map((section) => {
+                const isActive = activeSection === section.id;
+                return (
+                  <div key={section.id}>
+                    <button
+                      onClick={() => {
+                        setActiveSection(section.id);
+                        toggleSection(section.id);
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors"
+                      style={
+                        isActive
+                          ? {
+                              backgroundColor: "var(--baxter-light)",
+                              color: "var(--baxter-primary)",
+                              fontWeight: 600,
+                            }
+                          : { color: "var(--baxter-ink-soft)" }
+                      }
+                      data-testid={`nav-${section.id}`}
+                    >
+                      {section.icon}
+                      <span>{section.title}</span>
+                      {section.subsections && (
+                        <ChevronRight
+                          className={`h-4 w-4 ml-auto transition-transform ${
+                            expandedSections.includes(section.id) ? "rotate-90" : ""
+                          }`}
+                        />
+                      )}
+                    </button>
+                    {section.subsections && expandedSections.includes(section.id) && (
+                      <div
+                        className="ml-6 mt-1 space-y-1"
+                        style={{ borderLeft: "1px solid var(--baxter-line)" }}
+                      >
+                        {section.subsections.map((sub) => (
+                          <a
+                            key={sub.id}
+                            href={`#${sub.id}`}
+                            onClick={() => setActiveSection(section.id)}
+                            className="block px-3 py-1.5 text-sm transition-colors hover:underline"
+                            style={{ color: "var(--baxter-ink-mute)" }}
+                            data-testid={`nav-${sub.id}`}
+                          >
+                            {sub.title}
+                          </a>
+                        ))}
+                      </div>
                     )}
-                  </button>
-                  {section.subsections && expandedSections.includes(section.id) && (
-                    <div className="ml-6 mt-1 space-y-1">
-                      {section.subsections.map((sub) => (
-                        <a
-                          key={sub.id}
-                          href={`#${sub.id}`}
-                          onClick={() => setActiveSection(section.id)}
-                          className="block px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                          data-testid={`nav-${sub.id}`}
-                        >
-                          {sub.title}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </nav>
           </ScrollArea>
         </aside>

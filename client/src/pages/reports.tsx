@@ -2,6 +2,7 @@ import { useState } from "react";
   import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
   import { Button } from "@/components/ui/button";
   import { Badge } from "@/components/ui/badge";
+  import { Checkbox } from "@/components/ui/checkbox";
   import { EmptyState } from "@/components/empty-state";
   import { useQuery } from "@tanstack/react-query";
   import { useToast } from "@/hooks/use-toast";
@@ -25,6 +26,7 @@ import { useState } from "react";
     BarChart3,
     FileJson,
     FileCode,
+    Trash2,
   } from "lucide-react";
   import type { TestReport, TestExecution, TestSuite } from "@shared/schema";
   import { useEffect } from "react";
@@ -45,11 +47,78 @@ import { useState } from "react";
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [passFailStats, setPassFailStats] = useState<any[]>([]);
 
-  useEffect(() => {
+  // Selection + delete state for the analytics tables
+  const [selectedFailures, setSelectedFailures] = useState<Set<string>>(new Set());
+  const [selectedRecommendations, setSelectedRecommendations] = useState<Set<string>>(new Set());
+  const [isDeletingFailures, setIsDeletingFailures] = useState(false);
+  const [isDeletingRecommendations, setIsDeletingRecommendations] = useState(false);
+
+  const loadAnalytics = () => {
     fetch("/api/reports/predictive-failure").then(r => r.json()).then(setFailureAnalysis);
     fetch("/api/reports/test-optimization").then(r => r.json()).then(setRecommendations);
     fetch("/api/reports/pass-fail-stats").then(r => r.json()).then(setPassFailStats);
+  };
+
+  useEffect(() => {
+    loadAnalytics();
   }, []);
+
+  // Generic helper to toggle a name within a selection Set
+  const toggleSelection = (
+    setter: React.Dispatch<React.SetStateAction<Set<string>>>,
+    name: string,
+  ) => {
+    setter(prev => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  };
+
+  const deleteAnalytics = async (testNames: string[]) => {
+    const res = await fetch("/api/reports/analytics/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ testNames }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || "Delete failed");
+    }
+    return res.json();
+  };
+
+  const handleDeleteFailures = async () => {
+    const names = Array.from(selectedFailures);
+    if (names.length === 0) return;
+    setIsDeletingFailures(true);
+    try {
+      const { removed } = await deleteAnalytics(names);
+      toast({ title: "Deleted", description: `Removed ${removed} record(s) for ${names.length} test(s).` });
+      setSelectedFailures(new Set());
+      loadAnalytics();
+    } catch (err: any) {
+      toast({ title: "Delete Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsDeletingFailures(false);
+    }
+  };
+
+  const handleDeleteRecommendations = async () => {
+    const names = Array.from(selectedRecommendations);
+    if (names.length === 0) return;
+    setIsDeletingRecommendations(true);
+    try {
+      const { removed } = await deleteAnalytics(names);
+      toast({ title: "Deleted", description: `Removed ${removed} record(s) for ${names.length} test(s).` });
+      setSelectedRecommendations(new Set());
+      loadAnalytics();
+    } catch (err: any) {
+      toast({ title: "Delete Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsDeletingRecommendations(false);
+    }
+  };
     const { data: executions = [], isLoading: executionsLoading } = useQuery<TestExecution[]>({
       queryKey: ["/api/executions"],
     });
@@ -538,8 +607,26 @@ import { useState } from "react";
         </Card>
         <Card colorSeed="reports-predictive-failure-analysis">
     <CardHeader>
-      <CardTitle className="text-base">Predictive Failure Analysis</CardTitle>
-      <CardDescription>AI-powered prediction of likely test failures</CardDescription>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <CardTitle className="text-base">Predictive Failure Analysis</CardTitle>
+          <CardDescription>AI-powered prediction of likely test failures</CardDescription>
+        </div>
+        {failureAnalysis.length > 0 && selectedFailures.size > 0 && (
+          <Button
+            variant="destructive"
+            size="sm"
+            className="shrink-0 gap-1.5"
+            onClick={handleDeleteFailures}
+            disabled={isDeletingFailures}
+          >
+            {isDeletingFailures
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Trash2 className="h-3.5 w-3.5" />}
+            Delete ({selectedFailures.size})
+          </Button>
+        )}
+      </div>
     </CardHeader>
     <CardContent>
       {failureAnalysis.length === 0 ? (
@@ -551,7 +638,18 @@ import { useState } from "react";
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
-              <tr>
+              <tr className="border-b">
+                <th className="px-2 py-1.5 text-left w-8">
+                  <Checkbox
+                    checked={selectedFailures.size === failureAnalysis.length && failureAnalysis.length > 0}
+                    onCheckedChange={(checked) => {
+                      setSelectedFailures(
+                        checked ? new Set(failureAnalysis.map(r => r.testName)) : new Set()
+                      );
+                    }}
+                    aria-label="Select all"
+                  />
+                </th>
                 <th className="px-2 py-1 text-left">Test Name</th>
                 <th className="px-2 py-1 text-left">Failure Rate</th>
                 <th className="px-2 py-1 text-left">Last Fail</th>
@@ -560,7 +658,17 @@ import { useState } from "react";
             </thead>
             <tbody>
               {failureAnalysis.map(row => (
-                <tr key={row.testName}>
+                <tr
+                  key={row.testName}
+                  className={selectedFailures.has(row.testName) ? "bg-primary/5" : undefined}
+                >
+                  <td className="px-2 py-1">
+                    <Checkbox
+                      checked={selectedFailures.has(row.testName)}
+                      onCheckedChange={() => toggleSelection(setSelectedFailures, row.testName)}
+                      aria-label={`Select ${row.testName}`}
+                    />
+                  </td>
                   <td className="px-2 py-1">{row.testName}</td>
                   <td className="px-2 py-1">{(row.failureRate * 100).toFixed(1)}%</td>
                   <td className="px-2 py-1">{row.lastFail ? new Date(row.lastFail).toLocaleString() : "-"}</td>
@@ -575,8 +683,26 @@ import { useState } from "react";
   </Card>
   <Card colorSeed="reports-optimization-recommendations">
   <CardHeader>
-    <CardTitle className="text-base">Test Optimization Recommendations</CardTitle>
-    <CardDescription>Suggestions to optimize your test suite</CardDescription>
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <CardTitle className="text-base">Test Optimization Recommendations</CardTitle>
+        <CardDescription>Suggestions to optimize your test suite</CardDescription>
+      </div>
+      {recommendations.length > 0 && selectedRecommendations.size > 0 && (
+        <Button
+          variant="destructive"
+          size="sm"
+          className="shrink-0 gap-1.5"
+          onClick={handleDeleteRecommendations}
+          disabled={isDeletingRecommendations}
+        >
+          {isDeletingRecommendations
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Trash2 className="h-3.5 w-3.5" />}
+          Delete ({selectedRecommendations.size})
+        </Button>
+      )}
+    </div>
   </CardHeader>
   <CardContent>
     {recommendations.length === 0 ? (
@@ -588,7 +714,18 @@ import { useState } from "react";
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead>
-            <tr>
+            <tr className="border-b">
+              <th className="px-2 py-1.5 text-left w-8">
+                <Checkbox
+                  checked={selectedRecommendations.size === recommendations.length && recommendations.length > 0}
+                  onCheckedChange={(checked) => {
+                    setSelectedRecommendations(
+                      checked ? new Set(recommendations.map(r => r.testName)) : new Set()
+                    );
+                  }}
+                  aria-label="Select all"
+                />
+              </th>
               <th className="px-2 py-1 text-left">Test Name</th>
               <th className="px-2 py-1 text-left">Recommendation</th>
               <th className="px-2 py-1 text-left">Common Failure Reason</th>
@@ -596,7 +733,17 @@ import { useState } from "react";
           </thead>
           <tbody>
             {recommendations.map(row => (
-              <tr key={row.testName}>
+              <tr
+                key={row.testName}
+                className={selectedRecommendations.has(row.testName) ? "bg-primary/5" : undefined}
+              >
+                <td className="px-2 py-1">
+                  <Checkbox
+                    checked={selectedRecommendations.has(row.testName)}
+                    onCheckedChange={() => toggleSelection(setSelectedRecommendations, row.testName)}
+                    aria-label={`Select ${row.testName}`}
+                  />
+                </td>
                 <td className="px-2 py-1">{row.testName}</td>
                 <td className="px-2 py-1">{row.recommendation}</td>
                 <td className="px-2 py-1">{row.commonError || "-"}</td>

@@ -375,7 +375,7 @@ function FixSuggestionCard({
 // MAIN PAGE COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export default function EnterpriseAIHealerPage() {
+export function EnterpriseAIHealerPage() {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("dashboard");
   const [selectedTestCase, setSelectedTestCase] = useState("");
@@ -475,7 +475,7 @@ export default function EnterpriseAIHealerPage() {
 
   if (dashboardLoading) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex items-center justify-center h-[400px]">
         <div className="flex flex-col items-center gap-4">
           <Brain className="h-12 w-12 animate-pulse text-purple-500" />
           <p className="text-muted-foreground">Loading Enterprise AI Healer...</p>
@@ -485,26 +485,17 @@ export default function EnterpriseAIHealerPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg">
-            <Brain className="h-6 w-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold">Enterprise AI Healer</h1>
-            <p className="text-muted-foreground">
-              State Machine Control • Automatic Rollback • Confidence Scoring
-            </p>
-          </div>
+    <div className="space-y-6">
+      {/* Sub-header: enterprise tagline + refresh (page-level header lives in the unified AI Healer page) */}
+      <div className="flex items-center justify-between gap-3 rounded-xl border bg-gradient-to-r from-purple-500/5 to-pink-500/5 px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Shield className="h-4 w-4 text-purple-500" />
+          State Machine Control • Automatic Rollback • Confidence Scoring
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => refetchDashboard()}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
-        </div>
+        <Button variant="outline" size="sm" onClick={() => refetchDashboard()}>
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Refresh
+        </Button>
       </div>
 
       {/* Summary Cards */}
@@ -1091,3 +1082,8 @@ export default function EnterpriseAIHealerPage() {
     </div>
   );
 }
+
+// Backwards-compatible default export (the page is now embedded as the "Pro"
+// panel inside the unified AI Healer page, but the standalone route still works).
+export default EnterpriseAIHealerPage;
+

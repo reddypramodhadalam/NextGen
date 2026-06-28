@@ -6,20 +6,42 @@ vite.config.ts.*
 *.tar.gz
 .git
 
-# SQLite database files
+# Local runtime databases (SQLite) — should not be committed
 *.db
-*.db-wal
 *.db-shm
+*.db-wal
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+aitas-vector-index.json
+
+# Logs & build artifacts
+*.log
+build-output.txt
+temp_output.txt
+test-output.txt
+server.pid
 
 # Replit / local state
 .local/
+.upm/
+.config/
 .replit
 replit.nix
 
-# Logs and temp
-*.log
-server.pid
-test-output.txt
+# Environment files
+.env
+.env.*
+
+# Office temp/lock files
+~$*
+
+# Throwaway inspection / generation scripts
+check-*.cjs
+write-sop-*.cjs
+scripts/_tmp_*.cjs
+
+# Generated doc/presentation test outputs
+test-*.docx
+AITAS_*.pptx
+AITAS_*.docx

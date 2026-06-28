@@ -88,6 +88,15 @@ function initializeTables() {
           status TEXT DEFAULT 'active',
           generated_by_ai INTEGER DEFAULT 0,
           "order" INTEGER DEFAULT 0,
+          -- ── HUMAN-IN-THE-LOOP GOVERNANCE COLUMNS ──────────────────────────────
+          review_status TEXT DEFAULT 'NOT_REQUIRED',
+          reviewed_by TEXT,
+          reviewed_at INTEGER,
+          review_comment TEXT,
+          review_version INTEGER DEFAULT 0,
+          content_hash TEXT,
+          system_type_at_review TEXT,
+          ai_provenance TEXT,
           created_at INTEGER NOT NULL DEFAULT (unixepoch()),
           updated_at INTEGER
         );
@@ -147,6 +156,9 @@ function initializeTables() {
       format TEXT DEFAULT 'html',
       content TEXT,
       summary TEXT,
+      pass_rate INTEGER,
+      total_duration INTEGER,
+      insights TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
@@ -305,6 +317,188 @@ function initializeTables() {
   } catch (migErr: any) {
     console.warn("[SQLite] Test cases migration warning:", migErr.message);
   }
+
+  // ─── Migration 3: Human-In-The-Loop governance columns on test_cases ────────
+  // Required for regulated-enterprise (GxP/SOX/ISO) compliance.
+  try {
+    const tableInfo = sqliteConnection.prepare("PRAGMA table_info(test_cases)").all() as any[];
+    const existing = new Set(tableInfo.map((c: any) => c.name));
+    const hitlCols: Array<{ name: string; ddl: string }> = [
+      { name: "review_status",         ddl: "review_status TEXT DEFAULT 'NOT_REQUIRED'" },
+      { name: "reviewed_by",           ddl: "reviewed_by TEXT" },
+      { name: "reviewed_at",           ddl: "reviewed_at INTEGER" },
+      { name: "review_comment",        ddl: "review_comment TEXT" },
+      { name: "review_version",        ddl: "review_version INTEGER DEFAULT 0" },
+      { name: "content_hash",          ddl: "content_hash TEXT" },
+      { name: "system_type_at_review", ddl: "system_type_at_review TEXT" },
+      { name: "ai_provenance",         ddl: "ai_provenance TEXT" },
+    ];
+    for (const col of hitlCols) {
+      if (!existing.has(col.name)) {
+        sqliteConnection.prepare(`ALTER TABLE test_cases ADD COLUMN ${col.ddl}`).run();
+        console.log(`[SQLite] ✅ HITL column added: test_cases.${col.name}`);
+      }
+    }
+
+    // Back-fill review_status for legacy AI-generated rows so they show as DRAFT
+    sqliteConnection.prepare(`
+      UPDATE test_cases
+         SET review_status = 'DRAFT'
+       WHERE generated_by_ai = 1
+         AND (review_status IS NULL OR review_status = 'NOT_REQUIRED')
+    `).run();
+  } catch (migErr: any) {
+    console.warn("[SQLite] HITL governance migration warning:", migErr.message);
+  }
+
+  // ─── Migration 3b: Reports analytics columns (pass_rate, total_duration, insights) ──
+  // The Generated Reports card on the Reports page needs these columns to render
+  // the pass-rate badge and report insights. Older databases were created without them.
+  try {
+    const reportCols = sqliteConnection.prepare("PRAGMA table_info(test_reports)").all() as any[];
+    const existingReportCols = new Set(reportCols.map((c: any) => c.name));
+    const newReportCols: Array<{ name: string; ddl: string }> = [
+      { name: "pass_rate",      ddl: "pass_rate INTEGER" },
+      { name: "total_duration", ddl: "total_duration INTEGER" },
+      { name: "insights",       ddl: "insights TEXT" },
+    ];
+    for (const col of newReportCols) {
+      if (!existingReportCols.has(col.name)) {
+        sqliteConnection.prepare(`ALTER TABLE test_reports ADD COLUMN ${col.ddl}`).run();
+        console.log(`[SQLite] ✅ Report column added: test_reports.${col.name}`);
+      }
+    }
+  } catch (migErr: any) {
+    console.warn("[SQLite] Reports analytics migration warning:", migErr.message);
+  }
+
+  // ─── Migration 3c: Backfill reports for completed executions without one ─────
+  // Existing databases have completed executions but no report rows (reports were
+  // never auto-generated before this fix). Generate one report per finished
+  // execution so the "Generated Reports" list is populated immediately.
+  try {
+    const orphanExecutions = sqliteConnection.prepare(`
+      SELECT e.* FROM test_executions e
+      LEFT JOIN test_reports r ON r.execution_id = e.id
+      WHERE r.id IS NULL
+        AND e.status IN ('passed', 'failed', 'completed')
+    `).all() as any[];
+
+    if (orphanExecutions.length > 0) {
+      console.log(`[SQLite] Backfilling reports for ${orphanExecutions.length} completed execution(s)...`);
+      const insertReport = sqliteConnection.prepare(`
+        INSERT INTO test_reports (id, execution_id, name, type, format, content, summary, pass_rate, total_duration, insights, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const e of orphanExecutions) {
+        const total = e.total_tests || 0;
+        const passed = e.passed_tests || 0;
+        const failed = e.failed_tests || 0;
+        const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
+        const createdAt = e.completed_at || e.created_at || Math.floor(Date.now() / 1000);
+        const reportName = `Execution Report - ${new Date((e.created_at || Math.floor(Date.now() / 1000)) * 1000).toISOString().split("T")[0]}`;
+        insertReport.run(
+          randomUUID(),
+          e.id,
+          reportName,
+          "execution",
+          "html",
+          null,
+          JSON.stringify({ status: e.status, total, passed, failed, framework: e.framework }),
+          passRate,
+          null,
+          JSON.stringify([
+            { type: "info", message: `Framework: ${e.framework || "unknown"}` },
+            failed > 0
+              ? { type: "warning", message: `${failed} test(s) failed - review needed` }
+              : { type: "success", message: "All tests passed" },
+          ]),
+          createdAt,
+        );
+      }
+      console.log(`[SQLite] ✅ Backfilled ${orphanExecutions.length} report(s)`);
+    }
+  } catch (migErr: any) {
+    console.warn("[SQLite] Reports backfill migration warning:", migErr.message);
+  }
+
+  // ─── Migration 4: Governance audit log table (append-only) ──────────────────
+  try {
+    sqliteConnection.exec(`
+      CREATE TABLE IF NOT EXISTS governance_audit_log (
+        id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        severity TEXT DEFAULT 'INFO',
+        resource_type TEXT NOT NULL,
+        resource_id TEXT,
+        actor_id TEXT,
+        actor_email TEXT,
+        actor_role TEXT,
+        system_type TEXT,
+        payload TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        signature TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_resource ON governance_audit_log(resource_type, resource_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_event_time ON governance_audit_log(event_type, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_actor ON governance_audit_log(actor_id, created_at DESC);
+    `);
+
+    // ─── Migration 5: Review records table ────────────────────────────────────
+    sqliteConnection.exec(`
+      CREATE TABLE IF NOT EXISTS review_records (
+        id TEXT PRIMARY KEY,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        resource_version INTEGER DEFAULT 1,
+        decision TEXT NOT NULL,
+        reviewer_id TEXT NOT NULL,
+        reviewer_name TEXT,
+        reviewer_email TEXT,
+        reviewer_role TEXT,
+        comment TEXT,
+        content_hash_at_review TEXT NOT NULL,
+        signature TEXT,
+        ip_address TEXT,
+        system_type TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_reviews_resource ON review_records(resource_type, resource_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_reviews_reviewer ON review_records(reviewer_id, created_at DESC);
+    `);
+
+    // ─── Migration 6: Evidence reviews table ──────────────────────────────────
+    sqliteConnection.exec(`
+      CREATE TABLE IF NOT EXISTS evidence_reviews (
+        id TEXT PRIMARY KEY,
+        evidence_type TEXT NOT NULL,
+        evidence_uri TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        execution_id TEXT,
+        test_case_id TEXT,
+        step_index INTEGER,
+        attested_no_sensitive_data INTEGER DEFAULT 0,
+        attested_correctness INTEGER DEFAULT 0,
+        attested_matches_step INTEGER DEFAULT 0,
+        reviewer_id TEXT,
+        reviewer_email TEXT,
+        reviewed_at INTEGER,
+        comment TEXT,
+        uploaded_to_aqm INTEGER DEFAULT 0,
+        aqm_uploaded_at INTEGER,
+        aqm_reference TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_evidence_test_case ON evidence_reviews(test_case_id);
+      CREATE INDEX IF NOT EXISTS idx_evidence_execution ON evidence_reviews(execution_id);
+      CREATE INDEX IF NOT EXISTS idx_evidence_hash ON evidence_reviews(content_hash);
+    `);
+    console.log("[SQLite] ✅ Governance tables ready: governance_audit_log, review_records, evidence_reviews");
+  } catch (migErr: any) {
+    console.warn("[SQLite] Governance tables migration warning:", migErr.message);
+  }
 }
 
 // Initialize tables on module load
@@ -317,6 +511,12 @@ function toDate(ts: number | null): Date | null {
 
 function now(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+// Tolerant JSON parser - never throws (used for legacy/empty governance fields)
+function safeJsonParse(text: string | null | undefined): any | null {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 // ============================================================================
@@ -474,10 +674,19 @@ export class SQLiteStorage implements IStorage {
       tags: r.tags ? JSON.parse(r.tags) : null,
       status: r.status,
       generatedByAi: r.generated_by_ai === 1,
+      // ── Governance / HITL surfaced to API consumers ──
+      reviewStatus: r.review_status || "NOT_REQUIRED",
+      reviewedBy: r.reviewed_by || null,
+      reviewedAt: r.reviewed_at ? new Date(r.reviewed_at * 1000) : null,
+      reviewComment: r.review_comment || null,
+      reviewVersion: r.review_version ?? 0,
+      contentHash: r.content_hash || null,
+      systemTypeAtReview: r.system_type_at_review || null,
+      aiProvenance: r.ai_provenance ? safeJsonParse(r.ai_provenance) : null,
       order: r.order || 0,
       createdAt: new Date(r.created_at * 1000),
       updatedAt: toDate(r.updated_at),
-    };
+    } as any;
   }
 
     async createTestCase(tc: InsertTestCase): Promise<TestCase> {
@@ -486,14 +695,29 @@ export class SQLiteStorage implements IStorage {
       const nextOrder = tc.suiteId ? 
         (sqliteConnection.prepare('SELECT MAX("order") as maxOrder FROM test_cases WHERE suite_id = ?').get(tc.suiteId) as any)?.maxOrder || 0 + 1 :
         0;
-    
+
+      // ── Governance fields (HITL) ────────────────────────────────────────
+      const reviewStatus = (tc as any).reviewStatus
+        || ((tc as any).generatedByAI || (tc as any).generatedByAi ? "DRAFT" : "NOT_REQUIRED");
+      const aiProvenance = (tc as any).aiProvenance
+        ? JSON.stringify((tc as any).aiProvenance)
+        : null;
+      const reviewVersion = (tc as any).reviewVersion ?? 0;
+
       sqliteConnection.prepare(`
-        INSERT INTO test_cases (id, suite_id, title, description, preconditions, target_url, steps, priority, tags, status, generated_by_ai, "order", created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO test_cases (
+          id, suite_id, title, description, preconditions, target_url, steps, priority, tags,
+          status, generated_by_ai, "order", created_at,
+          review_status, review_version, ai_provenance
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id, tc.suiteId, tc.title, tc.description || null, tc.preconditions || null, tc.targetUrl || null,
         tc.steps ? JSON.stringify(tc.steps) : null, tc.priority || 'medium',
-        tc.tags ? JSON.stringify(tc.tags) : null, tc.status || 'active', tc.generatedByAi ? 1 : 0, nextOrder, now()
+        tc.tags ? JSON.stringify(tc.tags) : null, tc.status || 'active',
+        ((tc as any).generatedByAI || (tc as any).generatedByAi) ? 1 : 0,
+        nextOrder, now(),
+        reviewStatus, reviewVersion, aiProvenance,
       );
       return this.getTestCase(id) as Promise<TestCase>;
     }
@@ -509,8 +733,16 @@ export class SQLiteStorage implements IStorage {
       if (tc.priority !== undefined) { fields.push("priority = ?"); vals.push(tc.priority); }
       if (tc.tags !== undefined) { fields.push("tags = ?"); vals.push(JSON.stringify(tc.tags)); }
       if (tc.status !== undefined) { fields.push("status = ?"); vals.push(tc.status); }
-      if (tc.generatedByAi !== undefined) { fields.push("generated_by_ai = ?"); vals.push(tc.generatedByAi ? 1 : 0); }
+      const aiFlag = (tc as any).generatedByAi ?? (tc as any).generatedByAI;
+      if (aiFlag !== undefined) { fields.push("generated_by_ai = ?"); vals.push(aiFlag ? 1 : 0); }
       if ((tc as any).order !== undefined) { fields.push('"order" = ?'); vals.push((tc as any).order); }
+      // ── Governance / HITL fields ──
+      if ((tc as any).reviewStatus !== undefined) { fields.push("review_status = ?"); vals.push((tc as any).reviewStatus); }
+      if ((tc as any).reviewVersion !== undefined) { fields.push("review_version = ?"); vals.push((tc as any).reviewVersion); }
+      if ((tc as any).aiProvenance !== undefined) {
+        fields.push("ai_provenance = ?");
+        vals.push((tc as any).aiProvenance ? JSON.stringify((tc as any).aiProvenance) : null);
+      }
       if (fields.length === 0) return this.getTestCase(id);
       fields.push("updated_at = ?"); vals.push(now());
       vals.push(id);
@@ -746,6 +978,9 @@ export class SQLiteStorage implements IStorage {
       format: r.format,
       content: r.content,
       summary: r.summary ? JSON.parse(r.summary) : null,
+      passRate: r.pass_rate ?? null,
+      totalDuration: r.total_duration ?? null,
+      insights: r.insights ? JSON.parse(r.insights) : null,
       createdAt: new Date(r.created_at * 1000),
     }));
   }
@@ -761,17 +996,23 @@ export class SQLiteStorage implements IStorage {
       format: r.format,
       content: r.content,
       summary: r.summary ? JSON.parse(r.summary) : null,
+      passRate: r.pass_rate ?? null,
+      totalDuration: r.total_duration ?? null,
+      insights: r.insights ? JSON.parse(r.insights) : null,
       createdAt: new Date(r.created_at * 1000),
     };
   }
 
   async createReport(report: InsertTestReport): Promise<TestReport> {
     const id = randomUUID();
+    const anyReport = report as any;
     sqliteConnection.prepare(`
-      INSERT INTO test_reports (id, execution_id, name, type, format, content, summary, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO test_reports (id, execution_id, name, type, format, content, summary, pass_rate, total_duration, insights, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, report.executionId, report.name, report.type || 'execution', report.format || 'html',
-      report.content || null, report.summary ? JSON.stringify(report.summary) : null, now());
+      report.content || null, report.summary ? JSON.stringify(report.summary) : null,
+      anyReport.passRate ?? null, anyReport.totalDuration ?? null,
+      anyReport.insights ? JSON.stringify(anyReport.insights) : null, now());
     return this.getReport(id) as Promise<TestReport>;
   }
 

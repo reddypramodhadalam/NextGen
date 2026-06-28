@@ -17,6 +17,12 @@
 import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestResult } from "@shared/schema";
+import {
+  persistHealSession,
+  loadHealSessions,
+  clearHealSessions,
+  type PersistedHealSession,
+} from "./healer-persistence";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -253,6 +259,204 @@ export class EnterpriseAIHealer {
     dailyStats: new Map<string, { heals: number; success: number }>(),
   };
 
+  constructor() {
+    this.hydrateFromDisk();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PERSISTENCE (survives server restarts)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /** Persist a completed/terminal session so the Pro dashboard survives restarts. */
+  private persistSession(session: HealingSession): void {
+    persistHealSession({
+      id: session.id,
+      engine: "enterprise",
+      testCaseId: session.testCaseId,
+      testCaseTitle: session.testCaseTitle,
+      mode: session.environment,
+      outcome: session.outcome,
+      confidenceScore: session.confidenceScore,
+      suggestionsCount: session.proposedFixes.length,
+      healedSteps: session.outcome === "accepted" ? 1 : 0,
+      failureMessage: session.rejectionReason ?? null,
+      triggeredBy: session.triggeredBy,
+      executionId: null,
+      completed: true,
+      stateHistory: (session.stateHistory || []).map(h => ({
+        state: h.state,
+        timestamp: (h.timestamp instanceof Date ? h.timestamp : new Date(h.timestamp)).toISOString(),
+        details: h.details,
+      })),
+      startedAt: (session.startedAt instanceof Date ? session.startedAt : new Date(session.startedAt)).toISOString(),
+      completedAt: session.completedAt
+        ? (session.completedAt instanceof Date ? session.completedAt : new Date(session.completedAt)).toISOString()
+        : new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Move a rejected/terminal session out of the active map into history,
+   * update KPI counters, and persist it. Centralizes the bookkeeping that
+   * the early-return rejection paths previously skipped (which left sessions
+   * stuck as "active" and unpersisted).
+   */
+  private finalizeRejectedSession(session: HealingSession): void {
+    if (!session.completedAt) session.completedAt = new Date();
+    this.kpiData.fixesRejected++;
+    this.kpiData.sessionsCompleted++;
+    this.sessionHistory.unshift(session);
+    this.activeSessions.delete(session.id);
+    this.persistSession(session);
+  }
+
+  /** Rebuild session history + KPI counters from persisted rows on startup. */
+  private hydrateFromDisk(): void {
+    try {
+      const rows = loadHealSessions("enterprise");
+      if (rows.length === 0) return;
+
+      for (const row of rows) {
+        const session = this.persistedToSession(row);
+        this.sessionHistory.push(session);
+
+        // Replay KPI counters
+        this.kpiData.sessionsStarted++;
+        this.kpiData.sessionsCompleted++;
+        if (row.confidenceScore > 0) this.kpiData.confidenceScores.push(row.confidenceScore);
+
+        const day = (row.completedAt || row.startedAt || new Date().toISOString()).split("T")[0];
+        const daily = this.kpiData.dailyStats.get(day) || { heals: 0, success: 0 };
+        daily.heals++;
+
+        if (row.outcome === "accepted") {
+          this.kpiData.fixesAccepted++;
+          daily.success++;
+        } else if (row.outcome === "rolled_back") {
+          this.kpiData.rollbacks++;
+          this.kpiData.regressionsDetected++;
+        } else if (row.outcome === "rejected") {
+          this.kpiData.fixesRejected++;
+        }
+        this.kpiData.dailyStats.set(day, daily);
+      }
+
+      console.log(`[EnterpriseHealer] Restored ${rows.length} healing session(s) from disk`);
+    } catch (e: any) {
+      console.warn(`[EnterpriseHealer] Hydrate from disk failed: ${e.message}`);
+    }
+  }
+
+  private persistedToSession(row: PersistedHealSession): HealingSession {
+    const env = (["QA", "UAT", "STAGING", "PROD"].includes(row.mode) ? row.mode : "QA") as HealingSession["environment"];
+    return {
+      id: row.id,
+      testCaseId: row.testCaseId,
+      testCaseTitle: row.testCaseTitle,
+      state: row.outcome === "accepted" ? "FIX_ACCEPTED" : "FIX_REJECTED",
+      stateHistory: (row.stateHistory || []).map(h => ({
+        state: h.state as HealerState,
+        timestamp: new Date(h.timestamp),
+        details: h.details,
+      })),
+      baseline: {
+        testCaseId: row.testCaseId,
+        steps: [],
+        stepResults: [],
+        totalPassed: 0,
+        totalFailed: 0,
+        capturedAt: new Date(row.startedAt),
+      },
+      proposedFixes: [],
+      outcome: (row.outcome as HealingSession["outcome"]) || "pending",
+      rejectionReason: row.failureMessage ?? undefined,
+      confidenceScore: row.confidenceScore,
+      startedAt: new Date(row.startedAt),
+      completedAt: row.completedAt ? new Date(row.completedAt) : undefined,
+      triggeredBy: row.triggeredBy,
+      environment: env,
+    };
+  }
+
+  /**
+   * OPTION 3 — Auto-population from execution failures.
+   * Called when a test fails during execution so the Pro/Enterprise dashboard
+   * reflects real activity without the user manually starting a session.
+   * Records a lightweight completed session (no live browser validation).
+   */
+  recordObservedHealing(params: {
+    testCaseId: string;
+    testCaseTitle: string;
+    environment?: "QA" | "UAT" | "STAGING" | "PROD";
+    confidence: number;
+    outcome: "accepted" | "rejected" | "pending";
+    failureMessage?: string;
+    suggestionsCount?: number;
+  }): void {
+    const now = new Date();
+    const session: HealingSession = {
+      id: this.generateId(),
+      testCaseId: params.testCaseId,
+      testCaseTitle: params.testCaseTitle,
+      state: params.outcome === "accepted" ? "FIX_ACCEPTED" : "FIX_REJECTED",
+      stateHistory: [
+        { state: "IDLE", timestamp: now },
+        { state: "ANALYSING", timestamp: now, details: "Observed from execution failure" },
+        {
+          state: params.outcome === "accepted" ? "FIX_ACCEPTED" : "FIX_REJECTED",
+          timestamp: now,
+        },
+      ],
+      baseline: {
+        testCaseId: params.testCaseId,
+        steps: [],
+        stepResults: [],
+        totalPassed: 0,
+        totalFailed: 1,
+        capturedAt: now,
+      },
+      proposedFixes: [],
+      outcome: params.outcome,
+      rejectionReason: params.failureMessage,
+      confidenceScore: params.confidence,
+      startedAt: now,
+      completedAt: now,
+      triggeredBy: "execution-failure",
+      environment: params.environment || "QA",
+    };
+
+    this.kpiData.sessionsStarted++;
+    this.kpiData.sessionsCompleted++;
+    if (params.confidence > 0) this.kpiData.confidenceScores.push(params.confidence);
+
+    const day = now.toISOString().split("T")[0];
+    const daily = this.kpiData.dailyStats.get(day) || { heals: 0, success: 0 };
+    daily.heals++;
+    if (params.outcome === "accepted") {
+      this.kpiData.fixesAccepted++;
+      daily.success++;
+    } else if (params.outcome === "rejected") {
+      this.kpiData.fixesRejected++;
+    }
+    this.kpiData.dailyStats.set(day, daily);
+
+    this.sessionHistory.unshift(session);
+    if (this.sessionHistory.length > 200) this.sessionHistory.pop();
+
+    this.persistSession(session);
+  }
+
+  /** Clear persisted + in-memory Pro session history. */
+  clearPersistedHistory(testCaseId?: string): number {
+    const removed = clearHealSessions("enterprise", testCaseId);
+    if (testCaseId) {
+      this.sessionHistory = this.sessionHistory.filter(s => s.testCaseId !== testCaseId);
+    } else {
+      this.sessionHistory = [];
+    }
+    return removed;
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // STATE MACHINE CONTROL
   // ─────────────────────────────────────────────────────────────────────────────
@@ -333,12 +537,17 @@ export class EnterpriseAIHealer {
     
     try {
       const fixes = await this.analyzeAndProposeFixes(testCase, baseline, options.appType);
-      session.proposedFixes = fixes;
-      session.confidenceScore = fixes.length > 0 
-        ? Math.max(...fixes.map(f => f.confidence))
+      session.proposedFixes = fixes.length > 0
+        ? fixes
+        // Fallback: when there are no recorded failures the AI proposes nothing.
+        // Run a deterministic static analysis so the Pro workflow always has
+        // actionable, reviewable fixes to display (consistent with Standard).
+        : this.proposeStaticFixes(baseline, options.appType);
+      session.confidenceScore = session.proposedFixes.length > 0 
+        ? Math.max(...session.proposedFixes.map(f => f.confidence))
         : 0;
       
-      this.transitionState(session, "FIX_PROPOSED", `${fixes.length} fixes proposed`);
+      this.transitionState(session, "FIX_PROPOSED", `${session.proposedFixes.length} fixes proposed`);
     } catch (error: any) {
       console.error("[Healer] Analysis failed:", error);
       this.transitionState(session, "IDLE", `Analysis failed: ${error.message}`);
@@ -346,6 +555,108 @@ export class EnterpriseAIHealer {
 
     return session;
   }
+
+  /**
+   * Deterministic static fix proposals for the enterprise flow. Used when no
+   * execution failures exist yet, so the Pro panel always shows reviewable
+   * fixes (fragile selectors, missing waits, hardcoded data, brittle asserts).
+   */
+  private proposeStaticFixes(
+    baseline: BaselineSnapshot,
+    appType?: string
+  ): HealSuggestion[] {
+    const steps = baseline.steps || [];
+    const out: HealSuggestion[] = [];
+
+    const slugSelector = (text: string): string => {
+      const quoted = text.match(/['"]([^'"]+)['"]/);
+      let label = quoted?.[1];
+      if (!label) {
+        const after = text.match(/\b(?:click|press|tap|select|enter|type|verify|check|hover|on|the)\s+(.+)$/i);
+        label = after?.[1];
+      }
+      const slug = (label || text)
+        .toLowerCase()
+        .replace(/\b(button|field|input|link|menu|icon|the|a|an)\b/g, "")
+        .trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+      return appType === "salesforce"
+        ? `lightning-input[data-name="${slug}"]`
+        : `[data-testid="${slug}"]`;
+    };
+
+    steps.forEach((s, index) => {
+      const text = (s?.step || "").toString();
+      const expected = (s?.expected || "").toString();
+      if (!text.trim()) return;
+      const lower = text.toLowerCase();
+
+      let category: string | null = null;
+      let issue = "";
+      let explanation = "";
+      let confidence = 60;
+      let suggestedStep: string | undefined;
+      let suggestedExpected: string | undefined;
+      let regressionRisk: "LOW" | "MEDIUM" | "HIGH" = "LOW";
+
+      if (/\/html\/|\/\/\*\[\d+\]|:nth-child\(/.test(text)) {
+        category = "selector_stale";
+        issue = "Brittle absolute selector";
+        explanation = "Replace the absolute XPath/nth-child locator with a stable data-testid/role based selector.";
+        confidence = 72;
+      } else if (/\b(click|press|tap|enter|type|select)\b/.test(lower) && !/\b(wait|until|visible|present)\b/.test(lower)) {
+        category = "timing_issue";
+        issue = "No explicit wait before interaction";
+        explanation = "Add an explicit visibility/enabled wait before interacting to avoid flaky timing failures.";
+        suggestedStep = /^wait\b/i.test(text) ? text : `Wait for element to be visible, then ${text}`;
+        confidence = 64;
+      } else if (/(password|passwd|pwd)\s*[=:]\s*\S+/i.test(text)) {
+        category = "data_mismatch";
+        issue = "Hardcoded credentials";
+        explanation = "Parameterise credentials via secure test data instead of hardcoding them in the step.";
+        confidence = 55;
+        regressionRisk = "MEDIUM";
+      } else if (/\b(verify|assert|expect|should)\b/.test(lower) && expected && !/contains|partial|matches/i.test(expected)) {
+        category = "data_mismatch";
+        issue = "Exact-match assertion may be brittle";
+        explanation = "Use a contains/partial assertion to tolerate dynamic content.";
+        suggestedExpected = `${expected} (use a contains/partial match)`;
+        confidence = 50;
+      }
+
+      if (category) {
+        out.push({
+          id: this.generateId(),
+          stepIndex: index,
+          originalStep: text,
+          originalExpected: expected,
+          issue,
+          category,
+          confidence,
+          confidenceFactors: {
+            selectorUniqueness: 0.7,
+            domStability: 0.7,
+            scopeSafety: 1.0,
+            historicalSuccess: 0.6,
+            partialRunSuccess: 0,
+          },
+          regressionRisk,
+          suggestedStep,
+          suggestedExpected,
+          suggestedSelector: category === "selector_stale" ? slugSelector(text) : undefined,
+          alternativeSelectors: category === "selector_stale"
+            ? [slugSelector(text), `text=${(text.match(/['"]([^'"]+)['"]/)?.[1] || "").trim()}`].filter(Boolean)
+            : undefined,
+          explanation,
+          autoHealable: confidence >= 70,
+          scope: "STEP_ONLY",
+          affectedTargets: [],
+        } as HealSuggestion);
+      }
+    });
+
+    return out;
+  }
+
 
   /** Capture baseline snapshot before any changes */
   private async captureBaseline(testCaseId: string): Promise<BaselineSnapshot> {
@@ -561,6 +872,7 @@ Analyze ONLY the failing steps and propose safe fixes.`;
       this.transitionState(session, "FIX_REJECTED", "Pre-validation failed");
       session.outcome = "rejected";
       session.rejectionReason = "Fix failed pre-validation checks";
+      this.finalizeRejectedSession(session);
       return {
         success: false,
         session,
@@ -583,6 +895,7 @@ Analyze ONLY the failing steps and propose safe fixes.`;
       session.outcome = "rejected";
       session.rejectionReason = "Fix failed partial rerun";
       this.recordLearning(suggestion, false);
+      this.finalizeRejectedSession(session);
       return {
         success: false,
         session,
@@ -604,6 +917,7 @@ Analyze ONLY the failing steps and propose safe fixes.`;
       this.transitionState(session, "FIX_REJECTED", "Full rerun failed");
       session.outcome = "rejected";
       session.rejectionReason = "Full rerun produced no results";
+      this.finalizeRejectedSession(session);
       return {
         success: false,
         session,
@@ -620,9 +934,14 @@ Analyze ONLY the failing steps and propose safe fixes.`;
       this.transitionState(session, "FIX_REJECTED", "Regression detected");
       session.outcome = "rolled_back";
       session.rejectionReason = `Fix caused ${fullResult.newFailures} new failures`;
+      session.completedAt = new Date();
       this.kpiData.regressionsDetected++;
       this.kpiData.rollbacks++;
+      this.kpiData.sessionsCompleted++;
       this.recordLearning(suggestion, false);
+      this.sessionHistory.unshift(session);
+      this.activeSessions.delete(sessionId);
+      this.persistSession(session);
       return {
         success: false,
         session,
@@ -649,6 +968,7 @@ Analyze ONLY the failing steps and propose safe fixes.`;
     // Move to history
     this.sessionHistory.unshift(session);
     this.activeSessions.delete(sessionId);
+    this.persistSession(session);
 
     return {
       success: true,
@@ -1369,6 +1689,8 @@ Analyze ONLY the failing steps and propose safe fixes.`;
     this.sessionHistory.unshift(session);
     this.activeSessions.delete(sessionId);
     this.kpiData.fixesRejected++;
+    this.kpiData.sessionsCompleted++;
+    this.persistSession(session);
   }
 
   /** Approve a pending fix (for manual approval workflow) */

@@ -72,7 +72,12 @@ async function callCustomLlm(
   const requestBody = JSON.stringify({
     model: modelId,
     messages: openaiMessages,
-    max_tokens: 4096,
+    // 32K accommodates 25-35 detailed, knowledge-driven test cases without the
+    // response being truncated mid-JSON (which forces a fall back to generic
+    // rule-based steps). Most modern LLMs (GPT-4o, Claude 3.5, Llama 3.1 70B+)
+    // support 8K-128K output. If your provider caps lower, override with the
+    // LLM_MAX_TOKENS env var.
+    max_tokens: parseInt(process.env.LLM_MAX_TOKENS || "32768", 10),
     temperature: 0.7,
   });
 
@@ -81,9 +86,11 @@ async function callCustomLlm(
     "Authorization": `Bearer ${accessKey}`,
   };
 
-  // 60-second timeout to prevent indefinite hangs on slow/unavailable LLMs
+  // Configurable timeout. Generating 15-20 detailed test cases can take 90-180s
+  // on smaller models. Default 180s; override with LLM_TIMEOUT_MS.
+  const timeoutMs = parseInt(process.env.LLM_TIMEOUT_MS || "180000", 10);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   let response: Response;
   try {
@@ -187,6 +194,9 @@ class OpenAiClient implements AiClient {
       model: "gpt-4o",
       messages: openaiMessages,
       temperature: 0.7,
+      // Match the custom LLM client - large enough for 25-35 detailed test cases
+      // so the JSON response isn't truncated mid-stream.
+      max_tokens: parseInt(process.env.LLM_MAX_TOKENS || "32768", 10),
     });
 
     return response.choices[0]?.message?.content || "";

@@ -41,6 +41,28 @@ export const testCases = pgTable("test_cases", {
   tags: text("tags").array(),
   generatedByAI: boolean("generated_by_ai").default(false),
   order: integer("order").default(0), // Execution order within suite (0 = first, 1 = second, etc.)
+  // ── HUMAN-IN-THE-LOOP GOVERNANCE FIELDS ────────────────────────────────────
+  // These power the regulated-enterprise review workflow.
+  reviewStatus: text("review_status").default("NOT_REQUIRED"),
+  // NOT_REQUIRED  → manually authored content (no AI involvement)
+  // DRAFT         → AI-generated, awaiting human review
+  // PENDING       → submitted for approval, not yet decided
+  // APPROVED      → reviewer signed off; safe to execute/export
+  // REJECTED      → reviewer rejected; cannot be executed
+  // SUPERSEDED    → newer reviewed version exists
+  reviewedBy: varchar("reviewed_by"), // userId of the human reviewer
+  reviewedAt: timestamp("reviewed_at"),
+  reviewComment: text("review_comment"),
+  reviewVersion: integer("review_version").default(0), // increments on each edit-then-re-review cycle
+  contentHash: text("content_hash"), // SHA-256 of steps+title+preconditions at review time; tamper evidence
+  systemTypeAtReview: text("system_type_at_review"), // VALIDATED or NON_VALIDATED at the time of approval
+  aiProvenance: jsonb("ai_provenance").$type<{
+    generatedBy: string; // "ai" | "ai-jde" | "rule-based" | "manual"
+    model?: string;
+    promptHash?: string;
+    ragSourceIds?: string[];
+    generatedAt?: string;
+  }>(),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp("updated_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
@@ -550,3 +572,114 @@ export const insertTeamMembershipSchema = createInsertSchema(teamMemberships).om
 
 export type InsertTeamMembership = z.infer<typeof insertTeamMembershipSchema>;
 export type TeamMembership = typeof teamMemberships.$inferSelect;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GOVERNANCE - HUMAN-IN-THE-LOOP CONTROLS (regulated-enterprise compliance)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Append-only audit log for ALL governance-relevant events.
+ * NEVER UPDATE OR DELETE rows in this table - it's the regulator's record.
+ * Use platform-level DB constraints if possible to enforce immutability.
+ */
+export const governanceAuditLog = pgTable("governance_audit_log", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // What happened
+  eventType: text("event_type").notNull(),
+  // AI_TEST_CASE_GENERATED | AI_TEST_CASE_EDITED | HUMAN_REVIEW_SUBMITTED |
+  // HUMAN_REVIEW_APPROVED | HUMAN_REVIEW_REJECTED | AI_HEALER_FIX_PROPOSED |
+  // AI_HEALER_FIX_APPLIED | EVIDENCE_REVIEWED | EVIDENCE_UPLOADED |
+  // EXECUTION_BLOCKED_NO_REVIEW | SYSTEM_TYPE_CHANGED | REVIEW_BYPASS_DENIED
+  severity: text("severity").default("INFO"), // INFO, WARNING, CRITICAL
+  // Where it happened
+  resourceType: text("resource_type").notNull(), // TEST_CASE, EXECUTION, HEAL_SUGGESTION, EVIDENCE, SETTINGS
+  resourceId: varchar("resource_id"), // ID of the resource (test case id, etc.)
+  // Who did it
+  actorId: varchar("actor_id"), // userId, agentId, or "system"
+  actorEmail: text("actor_email"),
+  actorRole: text("actor_role"),
+  // System state at time of event
+  systemType: text("system_type"), // VALIDATED | NON_VALIDATED
+  // Payload
+  payload: jsonb("payload").$type<Record<string, any>>(), // before/after, hash, comment, etc.
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  // Tamper evidence - the SHA-256 hash of the row at insert time
+  // (computed from eventType + resourceId + actorId + timestamp + payload)
+  signature: text("signature"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertGovernanceAuditLogSchema = createInsertSchema(governanceAuditLog).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertGovernanceAuditLog = z.infer<typeof insertGovernanceAuditLogSchema>;
+export type GovernanceAuditLog = typeof governanceAuditLog.$inferSelect;
+
+/**
+ * Review records - one per human approval action.
+ * Multiple reviewers may sign off (depending on policy / minApprovers).
+ */
+export const reviewRecords = pgTable("review_records", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  resourceType: text("resource_type").notNull(), // TEST_CASE | HEAL_SUGGESTION | EVIDENCE
+  resourceId: varchar("resource_id").notNull(),
+  resourceVersion: integer("resource_version").default(1),
+  decision: text("decision").notNull(), // APPROVED | REJECTED | NEEDS_CHANGES
+  reviewerId: varchar("reviewer_id").notNull(),
+  reviewerName: text("reviewer_name"),
+  reviewerEmail: text("reviewer_email"),
+  reviewerRole: text("reviewer_role"),
+  comment: text("comment"), // required for REJECTED; optional otherwise
+  // Tamper evidence
+  contentHashAtReview: text("content_hash_at_review").notNull(),
+  signature: text("signature"), // SHA-256 of (resourceId+reviewerId+decision+contentHash+timestamp)
+  ipAddress: text("ip_address"),
+  systemType: text("system_type"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertReviewRecordSchema = createInsertSchema(reviewRecords).omit({
+  id: true,
+  createdAt: true,
+  signature: true,
+});
+
+export type InsertReviewRecord = z.infer<typeof insertReviewRecordSchema>;
+export type ReviewRecord = typeof reviewRecords.$inferSelect;
+
+/**
+ * Evidence (screenshots, logs, artifacts) review tracking.
+ * Required before uploading to AQM in VALIDATED mode.
+ */
+export const evidenceReviews = pgTable("evidence_reviews", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  evidenceType: text("evidence_type").notNull(), // SCREENSHOT | LOG | HAR | VIDEO
+  evidenceUri: text("evidence_uri").notNull(),
+  contentHash: text("content_hash").notNull(),
+  executionId: varchar("execution_id"),
+  testCaseId: varchar("test_case_id"),
+  stepIndex: integer("step_index"),
+  // Review attestations (all must be true to allow upload in VALIDATED mode)
+  attestedNoSensitiveData: boolean("attested_no_sensitive_data").default(false),
+  attestedCorrectness: boolean("attested_correctness").default(false),
+  attestedMatchesStep: boolean("attested_matches_step").default(false),
+  reviewerId: varchar("reviewer_id"),
+  reviewerEmail: text("reviewer_email"),
+  reviewedAt: timestamp("reviewed_at"),
+  comment: text("comment"),
+  uploadedToAqm: boolean("uploaded_to_aqm").default(false),
+  aqmUploadedAt: timestamp("aqm_uploaded_at"),
+  aqmReference: text("aqm_reference"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
+export const insertEvidenceReviewSchema = createInsertSchema(evidenceReviews).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertEvidenceReview = z.infer<typeof insertEvidenceReviewSchema>;
+export type EvidenceReview = typeof evidenceReviews.$inferSelect;
