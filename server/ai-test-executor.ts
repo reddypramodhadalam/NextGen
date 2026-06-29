@@ -138,9 +138,23 @@ export class AITestExecutor {
   // ── iframe context tracking ─────────────────────────────────────────────────
   // -1 = top-level document  |  >= 0 = currently inside that iframe index
   private currentIframeIndex: number = -1;
+  // Full nested frame path (e.g. JDE: [outer placeholder, inner app]). Authoritative.
+  private framePath: number[] = [];
   // ── Per-step iframe search tracking (reset per step, not per findElement call)
   private stepDidNestedSearch: boolean = false;
   private stepDidDynamicWait: boolean = false;
+
+  /** Restore the saved nested frame context from top: defaultContent → frame(a) → frame(b)… */
+  private async restoreFramePath(): Promise<void> {
+    if (!this.driver) return;
+    try {
+      await this.driver.switchTo().defaultContent();
+      for (const idx of this.framePath) {
+        await this.driver.switchTo().frame(idx);
+      }
+      this.currentIframeIndex = this.framePath.length ? this.framePath[this.framePath.length - 1] : -1;
+    } catch { /* frame went stale; caller re-derives */ }
+  }
 
   // ============================================================================
   // MAIN EXECUTION ENTRY POINT
@@ -936,25 +950,16 @@ export class AITestExecutor {
     };
 
     // Check for alerts (but preserve iframe context)
-    const savedIframeIndex = this.currentIframeIndex;
     try {
       await this.driver.switchTo().alert();
       snapshot.alerts = true;
-      // After alert check, restore context
-      if (savedIframeIndex >= 0) {
-        await this.driver.switchTo().defaultContent();
-        await this.driver.switchTo().frame(savedIframeIndex);
-      } else {
-        await this.driver.switchTo().defaultContent();
-      }
+      // After alert check, restore FULL nested context
+      await this.restoreFramePath();
     } catch {
       snapshot.alerts = false;
-      // Restore iframe context if we were in one
-      if (savedIframeIndex >= 0) {
-        try {
-          await this.driver.switchTo().defaultContent();
-          await this.driver.switchTo().frame(savedIframeIndex);
-        } catch { }
+      // Restore FULL nested frame context if we were in one
+      if (this.framePath.length) {
+        await this.restoreFramePath();
       }
     }
 
@@ -1925,6 +1930,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
             // Clear cache after navigation - page content has changed
             this.aiPlanCache.clear();
             this.currentIframeIndex = -1;
+            this.framePath = [];
             logs.push(`Navigated to: ${navUrl}`);
           } else {
             logs.push(`[navigate] No URL provided — skipping`);
@@ -1938,6 +1944,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
           // Clear cache after refresh - page may have changed
           this.aiPlanCache.clear();
           this.currentIframeIndex = -1;
+          this.framePath = [];
           logs.push("Page refreshed");
           break;
 
@@ -1947,6 +1954,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
           // Clear cache after navigation
           this.aiPlanCache.clear();
           this.currentIframeIndex = -1;
+          this.framePath = [];
           logs.push("Navigated back");
           break;
 
@@ -1956,6 +1964,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
           // Clear cache after navigation
           this.aiPlanCache.clear();
           this.currentIframeIndex = -1;
+          this.framePath = [];
           logs.push("Navigated forward");
           break;
 
@@ -2007,6 +2016,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
                 
                 // Also reset iframe index since we're in a new window
                 this.currentIframeIndex = -1;
+                this.framePath = [];
                 
                 // Switch to the new window
                 for (const handle of currentHandles) {
@@ -2045,6 +2055,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
                       try {
                         await this.driver.switchTo().frame(0);
                         this.currentIframeIndex = 0; // track context
+                        this.framePath = [0];
                         logs.push(`✓ Switched to iframe[0] automatically`);
                         console.log(`[AIExecutor] ✓ Switched to iframe[0]`);
                         await this.driver.sleep(300); // iframe settle
@@ -2061,6 +2072,8 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
                               if (bodyText < 50 && nestedIframes.length > 0) {
                                 console.log(`[AIExecutor] Parent iframe seems empty, switching to nested iframe[0]`);
                                 await this.driver.switchTo().frame(0);
+                                this.framePath.push(0);
+                                this.currentIframeIndex = 0;
                                 logs.push(`✓ Switched to nested iframe[0]`);
                               }
                             } catch { }
@@ -2398,16 +2411,15 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
                       } catch { }
                     }
                     
-                    // Switch back to original iframe
-                    if (this.currentIframeIndex >= 0) {
-                      await this.driver.switchTo().frame(this.currentIframeIndex);
+                    // Switch back to original (nested) iframe context
+                    if (this.framePath.length) {
+                      await this.restoreFramePath();
                     }
                   } catch {
                     // Restore iframe context on error
                     try {
-                      if (this.currentIframeIndex >= 0) {
-                        await this.driver.switchTo().defaultContent();
-                        await this.driver.switchTo().frame(this.currentIframeIndex);
+                      if (this.framePath.length) {
+                        await this.restoreFramePath();
                       }
                     } catch { }
                   }
@@ -2826,41 +2838,40 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
         // ================== IFRAME ACTIONS ==================
                 case "switchToIframe":
           if (action.iframeName) {
-            try {
-              // Try by name/id first
-              await this.driver.switchTo().frame(action.iframeName);
-              // If iframeName is numeric, track the index; otherwise use -2 (named frame)
-              const numIdx = parseInt(action.iframeName);
-              this.currentIframeIndex = isNaN(numIdx) ? 0 : numIdx;
-            } catch {
-              // Try by index
-              const index = parseInt(action.iframeName);
-              if (!isNaN(index)) {
-                await this.driver.switchTo().frame(index);
-                this.currentIframeIndex = index;
-              } else {
-                // Try by xpath
-                const iframe = await this.findElement(`//iframe[@name='${action.iframeName}' or @id='${action.iframeName}']`);
-                await this.driver.switchTo().frame(iframe);
-                this.currentIframeIndex = 0; // switched into a named iframe
+            // Always switch from a known base (top) using the existing path, then add one.
+            await this.restoreFramePath();
+            const iframes = await this.driver.findElements(By.tagName("iframe"));
+            let idx = parseInt(action.iframeName);
+            if (isNaN(idx)) {
+              // Resolve a name/id to its numeric index among current iframes
+              idx = 0;
+              for (let i = 0; i < iframes.length; i++) {
+                const nm = (await iframes[i].getAttribute("name")) || "";
+                const id = (await iframes[i].getAttribute("id")) || "";
+                if (nm === action.iframeName || id === action.iframeName) { idx = i; break; }
               }
             }
-            // JDE/ERP apps load the inner app via AJAX after the frame switches.
-            // Wait for real content before any verify runs, else body reads "...".
+            await this.driver.switchTo().frame(idx);
+            this.framePath.push(idx);
+            this.currentIframeIndex = idx;
+            // JDE/ERP apps load the inner app via AJAX after the frame switches; outer frame
+            // may only show "IFrame support required" — waitForIframeContent drills nested.
             await this.waitForIframeContent(logs);
-            logs.push(`Switched to iframe: ${action.iframeName}`);
+            logs.push(`Switched to iframe: ${action.iframeName} (depth ${this.framePath.length})`);
           }
           break;
 
         case "switchToDefaultContent":
           await this.driver.switchTo().defaultContent();
           this.currentIframeIndex = -1; // ← back to top-level
+          this.framePath = [];
           logs.push("Switched to default content");
           break;
 
         case "switchToParentFrame":
           await this.driver.switchTo().parentFrame();
-          this.currentIframeIndex = -1;
+          this.framePath.pop();
+          this.currentIframeIndex = this.framePath.length ? this.framePath[this.framePath.length - 1] : -1;
           logs.push("Switched to parent frame");
           break;
 
@@ -2873,6 +2884,7 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
             // Clear cache when switching windows - different page content
             this.aiPlanCache.clear();
             this.currentIframeIndex = -1;
+            this.framePath = [];
             logs.push(`Switched to window index: ${windowIndex}`);
           } else {
             throw new Error(`Window index ${windowIndex} not found (${handles.length} windows available)`);
@@ -3672,13 +3684,9 @@ logs.push(`✓ Switched to iframe[0] automatically`);
 
         case "alertPresent":
           try {
-            const savedIdx = this.currentIframeIndex;
             await this.driver.switchTo().alert();
-            await this.driver.switchTo().defaultContent();
-            // Restore iframe context after alert check
-            if (savedIdx >= 0) {
-              await this.driver.switchTo().frame(savedIdx);
-            }
+            // Restore full nested iframe context after alert check
+            await this.restoreFramePath();
             logs.push("✓ Alert is present");
           } catch {
             throw new Error("No alert present");
@@ -3734,14 +3742,12 @@ logs.push(`✓ Switched to iframe[0] automatically`);
       return null;
     };
 
-    /** Restore the iframe context we started in (best-effort). */
+    /** Restore the iframe context we started in (full nested path, best-effort). */
     const restoreCtx = async () => {
       try {
-        if (this.currentIframeIndex >= 0) {
-          await this.driver!.switchTo().defaultContent();
-          await this.driver!.switchTo().frame(this.currentIframeIndex);
-        } else {
-          await this.driver!.switchTo().defaultContent();
+        await this.driver!.switchTo().defaultContent();
+        for (const idx of this.framePath) {
+          await this.driver!.switchTo().frame(idx);
         }
       } catch { /* best-effort */ }
     };
@@ -3764,6 +3770,7 @@ logs.push(`✓ Switched to iframe[0] automatically`);
         if (inMain) {
           console.log(`[findElement] ✓ Found in main document: ${xpath.substring(0,80)}`);
           this.currentIframeIndex = -1;
+          this.framePath = [];
           return inMain;
         }
 
@@ -3777,6 +3784,7 @@ logs.push(`✓ Switched to iframe[0] automatically`);
             if (inFrame) {
               console.log(`[findElement] ✓ Found in iframe[${i}]: ${xpath.substring(0,80)}`);
               this.currentIframeIndex = i;
+              this.framePath = [i];
               return inFrame;
             }
             await this.driver!.switchTo().defaultContent();
@@ -3807,7 +3815,8 @@ logs.push(`✓ Switched to iframe[0] automatically`);
                   const inNested = await searchCurrentCtx();
                   if (inNested) {
                     console.log(`[findElement] ✓ Found in iframe[${i}>${j}]: ${xpath.substring(0, 60)}`);
-                    this.currentIframeIndex = i; // Track top-level iframe
+                    this.framePath = [i, j];
+                    this.currentIframeIndex = j;
                     return inNested;
                   }
                   
@@ -3821,7 +3830,8 @@ logs.push(`✓ Switched to iframe[0] automatically`);
                       const inDeep = await searchCurrentCtx();
                       if (inDeep) {
                         console.log(`[findElement] ✓ Found in iframe[${i}>${j}>${k}]: ${xpath.substring(0, 60)}`);
-                        this.currentIframeIndex = i;
+                        this.framePath = [i, j, k];
+                        this.currentIframeIndex = k;
                         return inDeep;
                       }
                       
@@ -3873,6 +3883,7 @@ logs.push(`✓ Switched to iframe[0] automatically`);
               const el = await searchCurrentCtx();
               if (el) {
                 this.currentIframeIndex = i;
+                this.framePath = [i];
                 console.log(`[findElement] ✓ Found in iframe[${i}] after dynamic wait`);
                 return el;
               }
@@ -4000,6 +4011,8 @@ logs.push(`✓ Switched to iframe[0] automatically`);
           const inner = await this.driver.findElements(By.tagName("iframe"));
           if (inner.length > 0) {
             await this.driver.switchTo().frame(0);
+            this.framePath.push(0);
+            this.currentIframeIndex = 0;
             logs.push("[iframe] drilled into nested app iframe");
             await this.driver.sleep(300);
             continue;
