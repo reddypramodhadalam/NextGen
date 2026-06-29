@@ -1395,6 +1395,33 @@ Your goal is to generate a runtime-resilient execution plan using LIVE DOM DATA 
 - type action.value MUST be the actual string, NEVER a placeholder like {{x}} or [VALUE]
 - Use the highest-confidence locator from the element's locators chain as primary
 
+\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+7. DOMAIN PLAYBOOK (ported best practices \u2014 still emit the JSON action format above)
+\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+DOM-GROUNDED: Every locator MUST be an EXACT value from ELEMENT DATA. Never invent, guess, or
+recall from memory. If DOM shows placeholder="User ID", use placeholder="User ID" \u2014 not "Username".
+
+NATIVE SELECT: If the field is a <select>, use type="select" with value = the visible option text;
+never click-then-type. Custom dropdowns: click trigger first, then click the option.
+
+READONLY [tab-into]: For readonly fields, type into the previous field, then key=Tab, then type.
+
+DATE: When step says "today/current date" in a format, compute it dynamically (dd-MMM-yyyy etc.)
+and use as value. Never hardcode a date.
+
+NEW WINDOW/TAB: The engine auto-switches to new windows. If a step mentions a new window, do NOT
+re-click to open it \u2014 just continue with the next action. Never plan window management yourself.
+
+VERIFY \u2260 SCREENSHOT: For verify/check/confirm/should/assert steps, return type="verify" and READ
+the real value (textContains/valueEquals) \u2014 never treat a screenshot as proof.
+
+JDE GRID: After a Find/Search, the grid fills asynchronously inside e1menuAppIframe. To verify a row,
+use type="verify", verification.type="textContains", expectedValue = the unique key (item/PO number).
+The engine waits for real rows before matching. Use single-char column values only as exact matches.
+
+JDE NAV: Fast Path field id=TE_FAST_PATH_BOX, submit id=fastPathButton; the app renders in the
+NESTED e1menuAppIframe \u2014 if Add/Save/grid isn't in ELEMENT DATA, return switchToIframe first.
+
 OUTPUT FORMAT (return ONLY valid JSON, no markdown fences):
 {
   "action": {
@@ -3427,6 +3454,10 @@ logs.push(`✓ Switched to iframe[0] automatically`);
           break;
 
         case "textContains":
+          // JDE/ERP grids fill asynchronously after a Find/Search. If we're inside an app
+          // iframe, wait (best-effort) for >1 data row before reading, so the verify isn't
+          // racing an empty grid. No-op when not in a grid context.
+          if (this.framePath.length) { await this.waitForGridRows(2000); }
           if (verification.elementXPath && verification.expectedValue) {
             const element = await this.findElement(verification.elementXPath);
             let text = await element.getText();
@@ -4023,6 +4054,21 @@ logs.push(`✓ Switched to iframe[0] automatically`);
       await this.driver.sleep(300);
     }
     logs.push('[iframe] content wait timed out — continuing');
+  }
+
+  /** Best-effort: wait until a JDE/ERP grid has >1 data row (cells>2) before verifying. */
+  private async waitForGridRows(timeout = 4000): Promise<void> {
+    if (!this.driver) return;
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      try {
+        const ok = await this.driver.executeScript(
+          "return Array.from(document.querySelectorAll('table tr')).filter(r=>r.querySelectorAll('td').length>2&&(r.innerText||'').trim()).length>0;"
+        ) as boolean;
+        if (ok) { await this.driver.sleep(150); return; }
+      } catch { /* frame reloading */ }
+      await this.driver.sleep(200);
+    }
   }
 
   // ============================================================================
