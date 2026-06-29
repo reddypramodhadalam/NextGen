@@ -2837,6 +2837,9 @@ Analyze the LIVE DOM data above and return the execution plan as JSON.`;
                 this.currentIframeIndex = 0; // switched into a named iframe
               }
             }
+            // JDE/ERP apps load the inner app via AJAX after the frame switches.
+            // Wait for real content before any verify runs, else body reads "...".
+            await this.waitForIframeContent(logs);
             logs.push(`Switched to iframe: ${action.iframeName}`);
           }
           break;
@@ -3965,6 +3968,29 @@ logs.push(`✓ Switched to iframe[0] automatically`);
       await this.driver.sleep(1000);
     }
     console.log(`[AIExecutor] SSO wait timed out after ${timeout}ms — continuing`);
+  }
+
+  /**
+   * After switching into an iframe (e.g. JDE e1menuAppIframe), the inner app is usually
+   * loaded by AJAX. Wait until the JDE processing spinner is gone AND the body has real
+   * text, so verify/text steps don't run against an empty "..." body. Best-effort.
+   */
+  private async waitForIframeContent(logs: string[], timeout = 20000): Promise<void> {
+    if (!this.driver) return;
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      try {
+        const ready = await this.driver.executeScript(`
+          var sp = document.getElementById('processingDiv');
+          var busy = sp && sp.offsetParent !== null;
+          var len = document.body ? document.body.innerText.trim().length : 0;
+          return !busy && len > 40;
+        `) as boolean;
+        if (ready) { await this.driver.sleep(200); logs.push('[iframe] content loaded'); return; }
+      } catch { /* frame reloading */ }
+      await this.driver.sleep(300);
+    }
+    logs.push('[iframe] content wait timed out — continuing');
   }
 
   // ============================================================================
