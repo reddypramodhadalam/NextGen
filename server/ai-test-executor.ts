@@ -4,6 +4,9 @@ import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam, TestResult } from "@shared/schema";
 import { storeTestResult } from "./reportAnalytics";
+import * as path from "path";
+import * as os from "os";
+import * as fs from "fs";
 
 // Extend the imported types to ensure logs is compatible
 type ExtendedTestResult = Omit<TestResult, 'logs'> & { logs: string[] | null };
@@ -446,6 +449,24 @@ export class AITestExecutor {
       );
       options.excludeSwitches("enable-automation", "enable-logging");  // Suppress DevTools logging
 
+      // ── SSO / Single Sign-On support ───────────────────────────────────────
+      // Apps behind Microsoft Entra / Okta (e.g. JD Edwards, SAP Fiori, Salesforce)
+      // rely on a browser session cookie. A fresh automation profile has none, so the
+      // IdP redirects to a login page. Reusing a PERSISTENT Chrome profile lets the user
+      // authenticate ONCE (interactively); the SSO cookie is then reused on every run —
+      // exactly like the user's normal browser. ON by default; opt out with REUSE_BROWSER_PROFILE=false.
+      if (process.env.REUSE_BROWSER_PROFILE !== "false") {
+        const profileDir =
+          process.env.CHROME_PROFILE_DIR ||
+          path.join(os.homedir(), ".aitas", "chrome-profile");
+        try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+        options.addArguments(
+          `--user-data-dir=${profileDir}`,
+          "--profile-directory=Default",
+        );
+        console.log(`[AIExecutor] SSO profile reuse ON → ${profileDir} (headed; sign in once)`);
+      }
+
       this.driver = await new Builder()
         .forBrowser("chrome")
         .setChromeOptions(options)
@@ -524,6 +545,11 @@ export class AITestExecutor {
           console.log(`[AIExecutor] First run → navigating to ${targetUrl}`);
           await this.driver.get(targetUrl);
           await this.waitForPageLoad();
+          // If reusing a signed-in profile, allow the SSO redirect chain to land on
+          // the app before running steps (avoids typing into the IdP login page).
+          if (process.env.REUSE_BROWSER_PROFILE !== "false") {
+            await this.waitForSsoSettle(targetUrl);
+          }
           logs.push(`Initial navigation to: ${targetUrl}`);
         } else {
           logs.push(`Browser context active at: ${curUrl}`);
@@ -3914,6 +3940,31 @@ logs.push(`✓ Switched to iframe[0] automatically`);
     }
     // Don't throw — page may never reach complete (SPAs, etc.)
     console.log(`[AIExecutor] waitForPageLoad: timed out after ${timeout}ms — continuing anyway`);
+  }
+
+  /**
+   * Wait for an SSO redirect chain (Microsoft Entra / Okta / ADFS) to settle on the
+   * target host. When reusing a logged-in profile the IdP auto-returns to the app in
+   * a few seconds; if no session exists it parks on the login host so the user can
+   * sign in. Either way, steps should not run until we're off the identity provider.
+   */
+  private async waitForSsoSettle(targetUrl: string, timeout = 180000): Promise<void> {
+    if (!this.driver) return;
+    let appHost = "";
+    try { appHost = new URL(targetUrl).host; } catch { return; }
+    const idp = /(login\.microsoftonline|sts\.|adfs|okta\.com|sso\.|login\.live|auth\.)/i;
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const cur = await this.driver.getCurrentUrl().catch(() => "");
+      const onIdp = idp.test(cur);
+      if (cur.includes(appHost) && !onIdp) {
+        console.log(`[AIExecutor] SSO settled on app host: ${appHost}`);
+        return;
+      }
+      if (onIdp) console.log(`[AIExecutor] Waiting on SSO/IdP — sign in if prompted…`);
+      await this.driver.sleep(1000);
+    }
+    console.log(`[AIExecutor] SSO wait timed out after ${timeout}ms — continuing`);
   }
 
   // ============================================================================

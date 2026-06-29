@@ -9,6 +9,9 @@ import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 import { sendExecutionNotifications } from "./notifications";
+import * as path from "path";
+import * as os from "os";
+import * as fs from "fs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -368,6 +371,17 @@ export class JDEExecutor {
       "--log-level=3"
     );
     options.excludeSwitches("enable-automation", "enable-logging");
+
+    // SSO support: reuse a persistent Chrome profile so a one-time Entra/Okta sign-in
+    // is remembered, matching how JDE opens instantly in the user's own browser.
+    if (process.env.REUSE_BROWSER_PROFILE !== "false") {
+      const profileDir =
+        process.env.CHROME_PROFILE_DIR ||
+        path.join(os.homedir(), ".aitas", "chrome-profile");
+      try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+      options.addArguments(`--user-data-dir=${profileDir}`, "--profile-directory=Default");
+      console.log(`[JDE] SSO profile reuse ON → ${profileDir}`);
+    }
 
     this.driver = await new Builder()
       .forBrowser("chrome")

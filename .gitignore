@@ -32,6 +32,7 @@ replit.nix
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Office temp/lock files
 ~$*
