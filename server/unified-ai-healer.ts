@@ -787,13 +787,29 @@ export class UnifiedAIHealer extends EventEmitter {
       }));
 
       const systemPrompt = `You are an AI test automation healer. Analyze failures and suggest fixes.
-Return JSON array of suggestions with alternative selectors and confidence scoring.`;
+Return JSON array of suggestions with alternative selectors and confidence scoring.
 
-      const userPrompt = `Test: "${testCase.title}"
+INTENT LOCK (most important): Fix ONLY the selector/approach for the EXACT SAME action.
+NEVER change the step's GOAL, move to a different action, or alter the action type
+(click stays click, type stays type, select stays select). Same human-facing description, no API names.
+
+HEALING RULES:
+* NEVER use dynamic ids (React #:r4:, #:r5:, UUID-like, numeric IDs > 8 digits) — they always break.
+* LOCATOR ORDER: data-testid → name → placeholder → role+name → label → css/xpath (DOM-grounded only).
+* IFRAME: elements tagged [IN-FRAME:name] need the named frame; prefer a forced/native click. Never invent.
+* ORACLE JET: if placeholder matches 2 elements, target only input[placeholder="..."].
+* RADIO: use click, not check. CHECKBOX (Radix role=checkbox on button): click by role+name.
+* READONLY [tab-into]: click previous field, Tab, then type. DESCRIPTION: keep same, no API names.`;
+
+      const goalFirstLine = (testCase.title || "").split("\n")[0];
+      const userPrompt = `---ORIGINAL GOAL (DO NOT CHANGE):---
+${goalFirstLine}
+
+Test: "${testCase.title}"
 Steps: ${steps.map((s, i) => `${i}: "${s.step}"`).join("\n")}
 Failures: ${recentErrors.map(e => e.error).join("\n")}
 
-Enhance these suggestions with alternatives:
+Fix ONLY the broken selector for the SAME action. Enhance these suggestions with alternatives:
 ${JSON.stringify(suggestions.slice(0, 3), null, 2)}`;
 
       const response = await aiClient.chat([{ role: "user", content: userPrompt }], systemPrompt);
