@@ -878,6 +878,14 @@ export class AITestExecutor {
         const verifyResult = await this.executeVerification(verification, logs);
         
         if (!verifyResult.success) {
+          // Context-switch actions (frame/window) are setup steps, not content assertions.
+          // The AI sometimes attaches the NEXT step's expected text to them; never fail on that.
+          if (plan.action.type === "switchToIframe" || plan.action.type === "switchToWindow" ||
+              plan.action.type === "switchToParentFrame" || plan.action.type === "switchToDefaultContent") {
+            logs.push(`✓ Context switch done (verify mismatch ignored: ${verifyResult.error})`);
+            this.aiPlanCache.clear();
+            return { passed: true };
+          }
           // For navigation actions that succeeded, verification failure is a WARNING not an error
           if (navigationSucceeded) {
             logs.push(`⚠ Verification failed but navigation succeeded: ${verifyResult.error}`);
@@ -3980,13 +3988,24 @@ logs.push(`✓ Switched to iframe[0] automatically`);
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       try {
-        const ready = await this.driver.executeScript(`
-          var sp = document.getElementById('processingDiv');
-          var busy = sp && sp.offsetParent !== null;
-          var len = document.body ? document.body.innerText.trim().length : 0;
-          return !busy && len > 40;
-        `) as boolean;
-        if (ready) { await this.driver.sleep(200); logs.push('[iframe] content loaded'); return; }
+        const txt = (await this.driver.executeScript(
+          "return document.body ? document.body.innerText.trim() : ''"
+        ) as string) || "";
+        const sp = await this.driver.executeScript(
+          "var s=document.getElementById('processingDiv');return !!(s&&s.offsetParent!==null);"
+        ) as boolean;
+        const placeholder = /iframe support is required/i.test(txt);
+        // JDE renders the app in a NESTED iframe; the outer one only shows a placeholder.
+        if (placeholder) {
+          const inner = await this.driver.findElements(By.tagName("iframe"));
+          if (inner.length > 0) {
+            await this.driver.switchTo().frame(0);
+            logs.push("[iframe] drilled into nested app iframe");
+            await this.driver.sleep(300);
+            continue;
+          }
+        }
+        if (!sp && txt.length > 40 && !placeholder) { await this.driver.sleep(200); logs.push('[iframe] content loaded'); return; }
       } catch { /* frame reloading */ }
       await this.driver.sleep(300);
     }
