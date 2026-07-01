@@ -13,6 +13,7 @@ import { BaseExecutionAdapter, ExecutionContext, ExecutionResult, PlatformType }
 import { Keyword, KeywordExecutionResult } from "../domain/keyword-framework";
 import { logger } from "../infrastructure/logger";
 import { getExecutionQueue } from "../infrastructure/queue";
+import { observeAppSteps } from "../learning/observe";
 
 export class ExecutionOrchestratorService {
   /**
@@ -122,8 +123,9 @@ export class ExecutionOrchestratorService {
       // Convert test case steps to keywords
       const keywordsToExecute: Keyword[] = [];
 
-      for (let i = 0; i < testCase.steps.length; i++) {
-        const step = testCase.steps[i];
+      const testCaseSteps = testCase.steps ?? [];
+      for (let i = 0; i < testCaseSteps.length; i++) {
+        const step = testCaseSteps[i];
         const interpreted = await KeywordInterpreter.interpret(step.step, { platform });
         keywordsToExecute.push(...interpreted);
       }
@@ -234,6 +236,23 @@ export class ExecutionOrchestratorService {
       // Determine overall status
       const failedCount = keywords.filter((k) => !k.success).length;
       const status = failedCount === 0 ? "completed" : failedCount === keywords.length ? "failed" : "completed";
+
+      // ── Learning & Memory feed (best-effort, non-fatal). The keyword-driven
+      //    "unified" path previously never recorded outcomes, so the Learning &
+      //    Analytics dashboard stayed empty even after real runs. Feed each
+      //    keyword result so success/heal/failure analytics populate per app.
+      try {
+        observeAppSteps(
+          String(platform || "web").toUpperCase(),
+          keywords.map((k) => ({
+            step: `${k.keyword?.type || "STEP"}${k.keyword?.selector ? ` ${k.keyword.selector}` : ""}`.trim(),
+            passed: k.success,
+            selector: k.keyword?.selector,
+            healed: !!k.healed,
+          })),
+          { sessionId: executionId },
+        );
+      } catch { /* never break execution on a learning write */ }
 
       const stats = adapter.getStats();
 

@@ -9,6 +9,7 @@ import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 import { sendExecutionNotifications } from "./notifications";
+import { observeAppSteps } from "./learning/observe";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
@@ -163,7 +164,7 @@ interface JDECommand {
   action: "navigate" | "click" | "type" | "select" | "verify" | "wait" |
           "grid_select" | "grid_find" | "toolbar_click" | "qbe_enter" |
           "ais_open_form" | "ais_query" | "ais_orchestrator" | "press_key" |
-          "switch_frame" | "accept_alert";
+          "switch_frame" | "accept_alert" | "text_click";
   // UI
   selector?: string;
   formId?: string;              // JDE form ID e.g. W4210A
@@ -198,7 +199,7 @@ JDE HTML Web Client has specific patterns you must follow.
 
 Return ONLY a JSON array of commands:
 [{
-  "action": "navigate|click|type|select|verify|wait|grid_select|grid_find|toolbar_click|qbe_enter|ais_open_form|ais_query|ais_orchestrator|press_key|switch_frame|accept_alert",
+  "action": "navigate|click|type|select|verify|wait|grid_select|grid_find|toolbar_click|qbe_enter|ais_open_form|ais_query|ais_orchestrator|press_key|switch_frame|accept_alert|text_click",
   "selector": "CSS/XPath selector",
   "formId": "W4210A",
   "fieldId": "AN8",
@@ -232,6 +233,19 @@ JDE-SPECIFIC RULES:
 11. Dropdown/UDC: select[id*="FIELDNAME"] or custom JDE dropdown
 12. Navigation: use JDE menu path or direct URL with form parameters
 13. For data validation, prefer ais_query over UI scraping
+
+LOCATOR RESILIENCE (the JDE DOM is nested tables/spans with DYNAMIC ids):
+14. NEVER use DYNAMIC/generated ids in a selector: reject f1dnode*, node*, menuItem*,
+    ids ending in digits, or GUID/pure-numeric ids — they change on every render.
+15. Locator priority (best→worst): visible TEXT → aria-label → title → stable class → relative XPath.
+16. NEVER emit ABSOLUTE XPath (/html/body/...). Anchor XPath on visible text instead.
+17. MENU / TREE / LABEL items: the click handler is on an ANCESTOR (row/anchor), NOT the <span>.
+    For these, DO NOT emit a click on the raw span. Emit action "text_click" with "value" set to the
+    VISIBLE TEXT (e.g. "Sales Order Entry"); the runtime resolves the nearest clickable ancestor and
+    falls back native→ancestor-row→JS→Enter automatically.
+18. TREE menus: expand the hierarchy top-down first (Navigator → parent → child → leaf); emit one
+    "text_click" per level in order. Verify the child is visible before selecting the next level.
+19. If several elements match, target the FIRST VISIBLE one only.
 
 WAIT PATTERNS:
 - After toolbar click: wait for processingDiv to hide
@@ -510,10 +524,14 @@ export class JDEExecutor {
         }
 
         logs.push(`  ✓ Step ${i + 1} passed`);
+        // Learning & Analytics feed (best-effort). Populates the dashboard for
+        // classic Selenium-driven JDE runs, which otherwise recorded nothing.
+        observeAppSteps("JDE", [{ step: processedStep, passed: true }], { form: testCase.title });
       } catch (error: any) {
         logs.push(`  ✗ Step ${i + 1} failed: ${error.message}`);
         passed = false;
         errorMessage = `Step ${i + 1}: ${error.message}`;
+        observeAppSteps("JDE", [{ step: processedStep, passed: false }], { form: testCase.title });
 
         try {
           screenshot = await this.driver!.takeScreenshot();
@@ -630,6 +648,72 @@ export class JDEExecutor {
         await this.driver.executeScript("arguments[0].scrollIntoView(true);", el);
         await el.click();
         logs.push(`    Clicked: ${selector}`);
+        break;
+      }
+
+      case "text_click": {
+        // Resilient JDE menu/tree/label click by VISIBLE TEXT. The text node
+        // (<span>/<td>) usually has NO click handler — it lives on an ancestor row/
+        // anchor. Resolve the FIRST VISIBLE match, then try, in order:
+        //   1) native click  2) nearest clickable ancestor  3) JS .click()  4) Enter.
+        // Never relies on dynamic ids.
+        const text = (cmd.value || cmd.description || "").trim();
+        if (!text) { logs.push(`    [text_click] No text provided — skipping`); break; }
+
+        // In-page resolver returns the first VISIBLE element whose trimmed text matches.
+        const RESOLVE = `
+          var want = arguments[0];
+          var wl = (want || '').trim().toLowerCase();
+          function vis(e){ try { var r=e.getBoundingClientRect(); var s=getComputedStyle(e);
+            return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; } catch(_){ return false; } }
+          function own(e){ var t=''; for (var i=0;i<e.childNodes.length;i++){ var n=e.childNodes[i];
+            if (n.nodeType===3) t+=n.nodeValue; } return t.trim(); }
+          var all = document.querySelectorAll('span,td,a,div,li,button,label');
+          var exact=null, partial=null;
+          for (var i=0;i<all.length;i++){ var e=all[i]; if(!vis(e)) continue;
+            var ot=own(e).toLowerCase(); var ft=(e.innerText||e.textContent||'').trim().toLowerCase();
+            if (ot===wl){ exact=e; break; }
+            if (!partial && (ft===wl || ft.indexOf(wl)>=0)) partial=e;
+          }
+          return exact || partial;
+        `;
+        const node = (await this.driver.executeScript(RESOLVE, text)) as any;
+        if (!node) { throw new Error(`text_click: no visible element with text "${text}"`); }
+        await this.driver.executeScript("arguments[0].scrollIntoView({block:'center'});", node);
+
+        // 1) native click on the text node
+        let done = false;
+        try { await node.click(); done = true; logs.push(`    text_click: native click "${text}"`); } catch {}
+        // 2) nearest clickable ancestor (anchor / [onclick] / role=button / cursor:pointer / row)
+        if (!done) {
+          try {
+            const anc = await node.findElement(By.xpath(
+              "ancestor::*[self::a or self::button or @onclick or @role='button' or contains(@style,'cursor') or self::tr][1]"
+            ));
+            await anc.click(); done = true; logs.push(`    text_click: ancestor click "${text}"`);
+          } catch {}
+        }
+        // 3) JavaScript click on nearest clickable container (or the node itself)
+        if (!done) {
+          try {
+            await this.driver.executeScript(
+              "var el=arguments[0]; (el.closest('a,button,[onclick],[role=\"button\"],tr,td')||el).click();",
+              node
+            );
+            done = true; logs.push(`    text_click: JS click "${text}"`);
+          } catch {}
+        }
+        // 4) keyboard Enter after focusing the node
+        if (!done) {
+          try {
+            await this.driver.executeScript("arguments[0].focus && arguments[0].focus();", node);
+            const active = await this.driver.switchTo().activeElement();
+            await active.sendKeys(Key.ENTER);
+            done = true; logs.push(`    text_click: keyboard Enter "${text}"`);
+          } catch {}
+        }
+        if (!done) throw new Error(`text_click: all strategies failed for "${text}"`);
+        await this.waitForJDEReady(logs);
         break;
       }
 

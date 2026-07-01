@@ -9,6 +9,7 @@ import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 import { sendExecutionNotifications } from "./notifications";
+import { observeAppSteps } from "./learning/observe";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -286,6 +287,10 @@ export class SalesforceExecutor {
           screenshot: result.screenshot || null,
           logs: result.logs,
         });
+
+        // Learning feed (best-effort, app-agnostic) — records per-step outcomes
+        // so the Learning dashboard reflects Salesforce reliability too.
+        observeAppSteps("SALESFORCE", result.steps as any, { sessionId: executionId });
 
         if (result.passed) passedTests++;
         else failedTests++;
@@ -565,7 +570,8 @@ export class SalesforceExecutor {
           const el = await this.page.evaluateHandle(SHADOW_PIERCE_SCRIPT, selector);
           if (el) {
             await this.page.evaluate(
-              ([element, val]: [any, string]) => {
+              (args: any[]) => {
+                const [element, val] = args;
                 element.value = val;
                 element.dispatchEvent(new Event("input", { bubbles: true }));
                 element.dispatchEvent(new Event("change", { bubbles: true }));

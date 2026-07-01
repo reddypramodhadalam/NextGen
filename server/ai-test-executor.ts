@@ -4,12 +4,26 @@ import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam, TestResult } from "@shared/schema";
 import { storeTestResult } from "./reportAnalytics";
+import { normalizeAppType } from "./app-profiles";
+import { JDE_SCAN_SCRIPT, mapScanToObjects, type RawScreenScan, type DiscoveryResult } from "./jde-discovery";
+import { jdeObjectStore } from "./jde-object-store";
+import { bestSelectorForObject, candidateToSelector } from "./jde-object-repository";
+import { learningAgent } from "./learning/learning-agent";
+import { observeAppSteps } from "./learning/observe";
 import * as path from "path";
 import * as os from "os";
 import * as fs from "fs";
 
 // Extend the imported types to ensure logs is compatible
 type ExtendedTestResult = Omit<TestResult, 'logs'> & { logs: string[] | null };
+
+/**
+ * Feature flag — evidence-aware adaptive locator selection (Learning Agent).
+ * OFF by default so behaviour is unchanged until explicitly enabled with
+ * LEARNING_ADAPTIVE_LOCATORS=true. The static ranker is always the fallback.
+ */
+const ADAPTIVE_LOCATORS_ENABLED =
+  String(process.env.LEARNING_ADAPTIVE_LOCATORS || "").toLowerCase() === "true";
 
 // ============================================================================
 // TYPES
@@ -35,6 +49,7 @@ interface ElementInfo {
   text?: string;
   placeholder?: string;
   ariaLabel?: string;
+  title?: string;          // title attribute (JDE toolbar buttons expose label here)
   value?: string;
   href?: string;
   isVisible: boolean;
@@ -133,6 +148,17 @@ export class AITestExecutor {
   private executionId: string = "";
   private isRunning: boolean = false;
   private shouldStop: boolean = false;
+  // Application type for the current run (e.g. "jde"). Drives app-aware behaviour
+  // such as JDE Object Repository reuse during execution + self-healing.
+  private appType: string = "";
+  // Current JDE application (Pxxxxx) / form (Wxxxxx) as last discovered by a live
+  // scan. Scopes Object Repository lookups + outcome learning to the active screen.
+  private currentJdeApp: string = "";
+  private currentJdeForm: string = "";
+  // Human-readable text of the step currently executing (e.g. "CLICK: Add").
+  // Used by the JDE toolbar safety net so it can resolve an action button by its
+  // INTENT even when the AI emits a wrong/mangled locator for it.
+  private currentStepIntent: string = "";
   // AI plan cache: skip duplicate LLM calls for the same step text within one execution
   private readonly aiPlanCache = new Map<string, AIExecutionPlan>();
   // ── iframe context tracking ─────────────────────────────────────────────────
@@ -168,17 +194,52 @@ export class AITestExecutor {
     testData?: TestDataParam[],
     selfHealing: boolean = true,
     maxRetries: number = 3,
-    agentCapabilities?: string[]
+    agentCapabilities?: string[],
+    appType?: string
   ): Promise<void> {
+    // ── CONCURRENCY GUARD ────────────────────────────────────────────────────
+    // This executor is a SHARED SINGLETON: it owns ONE browser (this.driver /
+    // this.playwrightPage), ONE persistent Chrome profile, and ONE executionId.
+    // If a second execution starts while the first is still running, both runs
+    // fight over the same browser/profile — Chrome fails to launch with a locked
+    // profile ("session not created: Chrome instance exited"), steps interleave,
+    // the page gets stuck on the SSO login, and results are written for the
+    // wrong execution. Refuse to start a concurrent run and mark it failed so
+    // the user gets a clear message instead of a corrupted, hung session.
+    if (this.isRunning) {
+      const msg =
+        `Another execution (${this.executionId}) is already running. ` +
+        `AITAS runs one browser session at a time — please wait for it to finish, then retry.`;
+      console.warn(`[AIExecutor] ⛔ Concurrent execution rejected for ${executionId}: ${msg}`);
+      try {
+        await storage.updateExecution(executionId, {
+          status: "failed",
+          completedAt: new Date(),
+        });
+      } catch (e: any) {
+        console.warn(`[AIExecutor] Could not mark concurrent execution as failed: ${e.message}`);
+      }
+      return;
+    }
+
     this.executionId = executionId;
     this.isRunning = true;
     this.shouldStop = false;
+
+    // Resolve app type for this run (param wins; else infer from the first test
+    // case). Drives JDE Object Repository reuse + auto-discovery below.
+    this.appType =
+      normalizeAppType(appType) ||
+      normalizeAppType((testCases[0] as any)?.appType) ||
+      normalizeAppType((testCases[0] as any)?.applicationType) ||
+      "";
 
         this.aiPlanCache.clear(); // fresh cache per execution
     const startTime = Date.now();
     console.log(`[AIExecutor] ▶ STARTING EXECUTION: ${executionId}`);
     console.log(`[AIExecutor] Framework: ${framework} (Selenium primary, Playwright backup)`);
     console.log(`[AIExecutor] Self-healing: ${selfHealing}, Max retries: ${maxRetries}`);
+    if (this.appType) console.log(`[AIExecutor] App type: ${this.appType.toUpperCase()} (app-aware execution)`);
 
     // Update execution status
     await storage.updateExecution(executionId, {
@@ -397,9 +458,243 @@ export class AITestExecutor {
     }
   }
 
+  // ============================================================================
+  // JDE LIVE DISCOVERY (Phases 1-4, 9-11)
+  // ============================================================================
+
+  /**
+   * Run the JDE screen-scan script against the CURRENT live page (Selenium or
+   * Playwright), map it to Object Repository records, and persist them. Used by
+   * the "Scan Screen" action and (optionally) automatically during JDE runs.
+   *
+   * Returns the discovery result (objects + grid headers + warnings), or null
+   * when no browser is active.
+   */
+  async scanCurrentScreen(opts?: { persist?: boolean; fallbackApp?: string }): Promise<DiscoveryResult | null> {
+    const persist = opts?.persist !== false;
+    let raw: RawScreenScan | null = null;
+
+    try {
+      if (this.driver) {
+        // Make sure we are inside the JDE app iframe if present (best-effort).
+        try {
+          await this.driver.switchTo().defaultContent();
+          const frames = await this.driver.findElements(By.css('iframe#e1menuAppIframe, iframe[name="e1menuAppIframe"]'));
+          if (frames.length) {
+            await this.driver.switchTo().frame(frames[0]);
+          }
+        } catch { /* not framed */ }
+        raw = (await this.driver.executeScript(`return ${JDE_SCAN_SCRIPT};`)) as RawScreenScan;
+        try { await this.driver.switchTo().defaultContent(); } catch {}
+      } else if (this.playwrightPage) {
+        const frame = await this.getJdePlaywrightFrame();
+        raw = (await (frame || this.playwrightPage).evaluate(JDE_SCAN_SCRIPT)) as RawScreenScan;
+      } else {
+        console.warn("[AIExecutor] scanCurrentScreen: no active browser");
+        return null;
+      }
+    } catch (e: any) {
+      console.error(`[AIExecutor] scanCurrentScreen failed: ${e.message}`);
+      return null;
+    }
+
+    if (!raw) return null;
+    const result = mapScanToObjects(raw, opts?.fallbackApp);
+    // Remember the active screen so repository lookups + learning stay scoped.
+    if (result.application) this.currentJdeApp = result.application;
+    if (result.form) this.currentJdeForm = result.form;
+    console.log(
+      `[AIExecutor] 🔍 JDE scan: app=${result.application} form=${result.form} ` +
+      `objects=${result.objects.length} headers=${result.gridHeaders.length}` +
+      (result.warnings.length ? ` warnings=${result.warnings.length}` : "")
+    );
+
+    if (persist && result.objects.length) {
+      try {
+        const counts = jdeObjectStore.upsertMany(result.objects as any);
+        console.log(`[AIExecutor] 💾 Object repository: +${counts.created} new, ${counts.updated} updated (${counts.total} total)`);
+      } catch (e: any) {
+        console.warn(`[AIExecutor] Object repository persist failed (non-fatal): ${e.message}`);
+      }
+    }
+    return result;
+  }
+
+  /** Return the JDE app iframe (Playwright) or null when not framed. */
+  private async getJdePlaywrightFrame(): Promise<any> {
+    try {
+      const handle = await this.playwrightPage.$('iframe#e1menuAppIframe, iframe[name="e1menuAppIframe"]');
+      if (handle) {
+        const frame = await handle.contentFrame();
+        if (frame) return frame;
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * Best-effort JDE auto-discovery during a live run. Seeds/refreshes the Object
+   * Repository so self-healing and the AI planner can prefer DD-item locators and
+   * header-based grids. ON for JDE runs by default; opt out with JDE_AUTO_SCAN=false.
+   */
+  private async maybeAutoScanJde(reason: string, logs?: string[]): Promise<void> {
+    if (this.appType !== "jde") return;
+    if (process.env.JDE_AUTO_SCAN === "false") return;
+    try {
+      const result = await this.scanCurrentScreen({ persist: true });
+      if (result && logs) {
+        logs.push(
+          `[JDE Repo] ${reason}: discovered ${result.objects.length} object(s) on ${result.application}/${result.form}` +
+          (result.gridHeaders.length ? `, ${result.gridHeaders.length} grid header(s)` : "")
+        );
+      }
+    } catch (e: any) {
+      // Discovery is best-effort and must never break a run.
+      console.warn(`[AIExecutor] JDE auto-scan (${reason}) failed (non-fatal): ${e.message}`);
+    }
+  }
+
+  /** Heuristic: does this step navigate to a new JDE application/form? */
+  private looksLikeJdeNavigation(stepAction: string): boolean {
+    if (!stepAction) return false;
+    return /fast\s*path|navigate|launch|open\s+(the\s+)?(application|form|app|program)|go\s+to|\bP\d{3,5}\b|\bW\d{3,5}[A-Z]?\b/i.test(
+      stepAction
+    );
+  }
+
+  /**
+   * Record a Phase 14 learning signal for a JDE step. Conservative: only updates
+   * counters when EXACTLY ONE stored object on the current screen matches the
+   * field the step targeted (so ambiguous steps can never corrupt the repo).
+   */
+  private async recordJdeStepOutcome(stepAction: string, passed: boolean, healed: boolean): Promise<void> {
+    if (this.appType !== "jde") return;
+    try {
+      const token = this.extractJdeFieldToken(stepAction);
+      if (!token) return;
+      // Restrict to the current application/form when we know it.
+      const all = jdeObjectStore.list(
+        this.currentJdeApp ? { application: this.currentJdeApp, form: this.currentJdeForm } : undefined
+      );
+      const norm = (s?: string) => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const t = norm(token);
+      const matches = all.filter((o) => {
+        const label = norm(o.business_label);
+        const name = norm(o.object_name);
+        const byLabel = !!label && (label.includes(t) || t.includes(label));
+        const byName = !!name && (name.includes(t) || t.includes(name));
+        return byLabel || byName;
+      });
+      if (matches.length !== 1) return; // only act on an unambiguous match
+      if (passed) {
+        jdeObjectStore.recordOutcome(matches[0].object_id, {
+          // A successful step that needed a retry/heal is recorded as a heal win;
+          // otherwise it's a clean primary-locator success.
+          primarySuccess: !healed,
+          healSuccess: healed,
+        });
+      } else {
+        jdeObjectStore.recordOutcome(matches[0].object_id, { failure: true });
+      }
+    } catch (e: any) {
+      console.warn(`[AIExecutor] recordJdeStepOutcome failed (non-fatal): ${e.message}`);
+    }
+  }
+
+  /** Pull the most likely field label/name a step targeted (quoted value aside). */
+  private extractJdeFieldToken(stepAction: string): string | undefined {
+    if (!stepAction) return undefined;
+    // "Enter X in the FIELD field" / "type X into FIELD" / "click the BUTTON button"
+    const patterns = [
+      /\b(?:in|into|on)\s+the\s+([A-Za-z][A-Za-z0-9 _\-/]+?)\s+(?:field|box|input|grid|column|button|link|tab)\b/i,
+      /\bclick\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 _\-/]+?)\s+(?:button|link|tab|icon)\b/i,
+      /\bselect\s+(?:the\s+)?([A-Za-z][A-Za-z0-9 _\-/]+?)\s+(?:tab|option|menu)\b/i,
+    ];
+    for (const re of patterns) {
+      const m = stepAction.match(re);
+      if (m && m[1]) return m[1].trim();
+    }
+    return undefined;
+  }
+
+  /**
+   * Evidence-aware selector for a stored object (Learning Agent #1 wiring).
+   *
+   * SAFETY: gated behind LEARNING_ADAPTIVE_LOCATORS=true. When the flag is OFF
+   * (default), behaviour is byte-for-byte identical to the static path. When ON,
+   * it re-ranks the object's locator candidates by OBSERVED reliability from the
+   * Execution Knowledge Store, but ALWAYS falls back to the static
+   * `bestSelectorForObject` if the agent yields nothing — so a run can never be
+   * broken by the learning layer.
+   */
+  private adaptiveSelectorForObject(o: any): string | undefined {
+    const staticSel = bestSelectorForObject(o);
+    if (!ADAPTIVE_LOCATORS_ENABLED) return staticSel;
+    try {
+      const objectId = o.object_id;
+      const candidates = o.locator_candidates || [];
+      if (!objectId || candidates.length === 0) return staticSel;
+      const ranked = learningAgent.bestLocators(objectId, candidates);
+      const top = ranked[0];
+      const adaptiveSel = top ? candidateToSelector(top) : undefined;
+      if (adaptiveSel && adaptiveSel !== staticSel) {
+        console.log(`[AIExecutor] 🧠 Adaptive locator for "${o.business_label || o.object_name}": ${adaptiveSel} (was ${staticSel})`);
+      }
+      return adaptiveSel || staticSel;
+    } catch (e: any) {
+      console.warn(`[AIExecutor] adaptiveSelectorForObject failed (non-fatal), using static: ${e.message}`);
+      return staticSel;
+    }
+  }
+
+  /**
+   * Build a compact "KNOWN JDE OBJECTS" block for the AI prompt from the Object
+   * Repository (current application/form). Gives the planner verified, learned
+   * locators (DD-item first) so it stops guessing C0_x ids. Returns "" when not
+   * JDE or nothing is known yet. Capped to keep the prompt small.
+   */
+  private buildJdeRepositoryHint(): string {
+    if (this.appType !== "jde") return "";
+    try {
+      const objs = jdeObjectStore.list(
+        this.currentJdeApp ? { application: this.currentJdeApp, form: this.currentJdeForm } : undefined
+      );
+      if (!objs.length) return "";
+      // Prefer the most reliable, self-healing-eligible objects first.
+      const ranked = objs
+        .slice()
+        .sort((a, b) => (b.reliability?.success_count || 0) - (a.reliability?.success_count || 0))
+        .slice(0, 40);
+      const lines: string[] = [];
+      for (const o of ranked) {
+        const sel = this.adaptiveSelectorForObject(o as any);
+        if (!sel) continue;
+        const label = o.business_label || o.object_name;
+        const dd = o.jde_metadata?.dd_item ? ` dd=${o.jde_metadata.dd_item}` : "";
+        const sc = o.reliability?.success_count || 0;
+        const fc = o.reliability?.failure_count || 0;
+        const rel = sc + fc > 0 ? ` (${sc}✓/${fc}✗)` : "";
+        lines.push(`- "${label}"${dd} → ${sel}${rel}`);
+      }
+      if (!lines.length) return "";
+      return (
+        `\nKNOWN JDE OBJECTS (verified from this screen's Object Repository — PREFER these exact ` +
+        `locators when the step's field/label matches; they are DD-item/label-grounded, not guesses):\n` +
+        lines.join("\n") +
+        `\n`
+      );
+    } catch {
+      return "";
+    }
+  }
+
   private async cleanup(): Promise<void> {
     try {
-      if (!this.driver && !this.playwrightBrowser) return;
+      // NOTE: must also check playwrightContext — the SSO-aware backup uses a
+      // PERSISTENT context (launchPersistentContext) where playwrightBrowser is
+      // null. Skipping cleanup then would leak the context and keep the Chrome
+      // profile LOCKED, breaking the next run. So guard on all three handles.
+      if (!this.driver && !this.playwrightBrowser && !this.playwrightContext) return;
       
       // Selenium cleanup
       if (this.driver) {
@@ -439,6 +734,55 @@ export class AITestExecutor {
     }
   }
 
+  /**
+   * Resolve a SAFE Chrome user-data dir for SSO profile reuse.
+   *
+   * Chrome allows only ONE running process per --user-data-dir. If CHROME_PROFILE_DIR
+   * points at the user's LIVE everyday Chrome profile (e.g.
+   * %LOCALAPPDATA%\Google\Chrome\User Data) and that browser is open, every launch
+   * fails with "Chrome instance exited" (Selenium) or "profile is already in use by
+   * another instance of Chromium" (Playwright). To make that foot-gun impossible we
+   * detect the OS's real Chrome dir and transparently fall back to a DEDICATED profile
+   * that nothing else locks.
+   */
+  private resolveSafeProfileDir(): string {
+    const safeDefault = path.join(os.homedir(), ".aitas", "chrome-profile");
+    const configured = (process.env.CHROME_PROFILE_DIR || "").trim();
+    if (!configured) return safeDefault;
+
+    const norm = path.normalize(configured).replace(/[\\/]+$/, "").toLowerCase();
+    const realChromeDirs = [
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "User Data") : null,
+      path.join(os.homedir(), "AppData", "Local", "Google", "Chrome", "User Data"),
+      path.join(os.homedir(), "Library", "Application Support", "Google", "Chrome"),
+      path.join(os.homedir(), ".config", "google-chrome"),
+    ]
+      .filter((d): d is string => Boolean(d))
+      .map((d) => path.normalize(d).replace(/[\\/]+$/, "").toLowerCase());
+
+    const clashesWithLiveChrome = realChromeDirs.some((d) => norm === d || norm.startsWith(d + path.sep));
+    if (clashesWithLiveChrome) {
+      console.warn(
+        `[AIExecutor] ⚠️  CHROME_PROFILE_DIR points at your LIVE Chrome profile:\n` +
+        `             ${configured}\n` +
+        `             Chrome locks that folder while your everyday browser is open, which is why you\n` +
+        `             saw "Chrome instance exited" / "profile already in use". Using a DEDICATED\n` +
+        `             profile instead: ${safeDefault}\n` +
+        `             → Sign in to JDE/SSO ONCE in the Chrome window AITAS opens; the session is\n` +
+        `               then reused automatically on every later run.`
+      );
+      return safeDefault;
+    }
+    return configured;
+  }
+
+  /** Remove stale Chrome singleton lock files left by a crashed run (best-effort). */
+  private clearStaleProfileLocks(profileDir: string): void {
+    for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+      try { fs.rmSync(path.join(profileDir, name), { force: true }); } catch {}
+    }
+  }
+
   // ============================================================================
   // BROWSER INITIALIZATION
   // ============================================================================
@@ -470,10 +814,9 @@ export class AITestExecutor {
       // authenticate ONCE (interactively); the SSO cookie is then reused on every run —
       // exactly like the user's normal browser. ON by default; opt out with REUSE_BROWSER_PROFILE=false.
       if (process.env.REUSE_BROWSER_PROFILE !== "false") {
-        const profileDir =
-          process.env.CHROME_PROFILE_DIR ||
-          path.join(os.homedir(), ".aitas", "chrome-profile");
+        const profileDir = this.resolveSafeProfileDir();
         try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+        this.clearStaleProfileLocks(profileDir);
         options.addArguments(
           `--user-data-dir=${profileDir}`,
           "--profile-directory=Default",
@@ -505,9 +848,35 @@ export class AITestExecutor {
         try {
           console.log("[AIExecutor] Trying Playwright as backup...");
           const { chromium } = await import("playwright");
-          this.playwrightBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
-          this.playwrightContext = await this.playwrightBrowser.newContext({ ignoreHTTPSErrors: true });
-          this.playwrightPage = await this.playwrightContext.newPage();
+
+          // ── SSO-aware backup ──────────────────────────────────────────────
+          // The previous backup launched a HEADLESS, EPHEMERAL context with NO
+          // profile — so for SSO apps (JDE/SAP/Salesforce) it had zero session
+          // cookies and ALWAYS landed on the Microsoft login page, never the app.
+          // When profile reuse is ON, launch a PERSISTENT, HEADED context that
+          // shares the same signed-in Chrome profile as the Selenium path, so the
+          // SSO cookie is reused exactly like the user's real browser.
+          const reuseProfile = process.env.REUSE_BROWSER_PROFILE !== "false";
+          if (reuseProfile) {
+            const profileDir = this.resolveSafeProfileDir();
+            try { fs.mkdirSync(profileDir, { recursive: true }); } catch {}
+            this.clearStaleProfileLocks(profileDir);
+            console.log(`[AIExecutor] [Playwright] SSO profile reuse ON → ${profileDir} (headed)`);
+            // launchPersistentContext returns a context directly (no separate browser).
+            this.playwrightContext = await chromium.launchPersistentContext(profileDir, {
+              headless: false,
+              ignoreHTTPSErrors: true,
+              viewport: null,
+              args: ['--disable-blink-features=AutomationControlled', '--start-maximized'],
+            });
+            this.playwrightBrowser = null; // owned by the persistent context
+            const pages = this.playwrightContext.pages();
+            this.playwrightPage = pages.length ? pages[0] : await this.playwrightContext.newPage();
+          } else {
+            this.playwrightBrowser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'] });
+            this.playwrightContext = await this.playwrightBrowser.newContext({ ignoreHTTPSErrors: true });
+            this.playwrightPage = await this.playwrightContext.newPage();
+          }
           await this.playwrightPage.setDefaultTimeout(30000);
           await this.playwrightPage.setDefaultNavigationTimeout(30000);
           console.log("[AIExecutor] Playwright initialized as backup");
@@ -573,8 +942,41 @@ export class AITestExecutor {
         const isBlank = !curUrl || curUrl === "about:blank" || curUrl.startsWith("data:");
         if (isBlank) {
           console.log(`[AIExecutor] [Playwright] First run → navigating to ${targetUrl}`);
-          await this.playwrightPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-          logs.push(`Initial navigation to: ${targetUrl}`);
+          // SSO apps frequently abort the FIRST load with net::ERR_ABORTED because
+          // the IdP fires an immediate redirect while the initial document is still
+          // committing. Retry a couple of times and treat "we left about:blank" as
+          // success, so the run reaches the app instead of dying on step 1.
+          let navigated = false;
+          let lastErr: any = null;
+          for (let attempt = 1; attempt <= 3 && !navigated; attempt++) {
+            try {
+              await this.playwrightPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              navigated = true;
+            } catch (e: any) {
+              lastErr = e;
+              const landed = this.playwrightPage.url();
+              const movedOff = landed && landed !== "about:blank" && !landed.startsWith("data:");
+              if (/ERR_ABORTED/i.test(e.message) && movedOff) {
+                // The redirect aborted our goto but the browser DID move on (e.g. to
+                // the SSO login) — that's acceptable; SSO settle handles the rest.
+                console.log(`[AIExecutor] [Playwright] goto aborted by redirect; browser moved to ${landed} (attempt ${attempt}) — continuing`);
+                navigated = true;
+              } else {
+                console.warn(`[AIExecutor] [Playwright] navigation attempt ${attempt} failed: ${e.message}`);
+                await new Promise((r) => setTimeout(r, 1000));
+              }
+            }
+          }
+          if (!navigated) {
+            logs.push(`Initial navigation failed after retries: ${lastErr?.message}`);
+          } else {
+            // If reusing a signed-in profile, let the SSO redirect chain land on the
+            // app before running steps (avoids typing into the IdP login page).
+            if (process.env.REUSE_BROWSER_PROFILE !== "false") {
+              await this.waitForSsoSettle(targetUrl).catch(() => {});
+            }
+            logs.push(`Initial navigation to: ${targetUrl}`);
+          }
         } else {
           logs.push(`Browser context active at: ${curUrl}`);
         }
@@ -582,6 +984,11 @@ export class AITestExecutor {
     } catch (navErr: any) {
       logs.push(`Navigation init (non-fatal): ${navErr.message}`);
     }
+
+    // JDE: seed the Object Repository from the landing screen so the AI planner
+    // and self-healing can prefer DD-item locators + header-based grids from the
+    // very first step. Best-effort; never blocks the run.
+    await this.maybeAutoScanJde("landing screen", logs);
 
     // Get steps from test case
     const steps = (testCase.steps as { step: string; expected: string }[]) || [];
@@ -652,6 +1059,31 @@ export class AITestExecutor {
         });
       } catch (screenshotError: any) {
         console.log(`[AIExecutor] Screenshot capture failed: ${screenshotError.message}`);
+      }
+
+      // JDE Object Repository learning (Phase 14) + adaptive re-scan. A step that
+      // only passed after a retry is treated as a "heal" win. Best-effort.
+      if (this.appType === "jde") {
+        await this.recordJdeStepOutcome(stepAction, stepPassed, attempts > 1);
+        // Also feed the app-level Execution Knowledge Store so the Learning &
+        // Analytics dashboard populates for JDE runs. recordJdeStepOutcome only
+        // updates jde_objects (and only on an unambiguous object match), so
+        // without this the dashboard stays empty even after real JDE executions.
+        observeAppSteps("JDE", [
+          { step: stepAction, passed: stepPassed, healed: attempts > 1 },
+        ], { sessionId: this.executionId, form: this.currentJdeForm });
+        // If the step navigated to a new application/form, refresh the repository
+        // so subsequent steps see the new screen's objects + grid headers.
+        if (stepPassed && this.looksLikeJdeNavigation(stepAction)) {
+          await this.maybeAutoScanJde(`after navigation step ${stepNum}`, logs);
+        }
+      } else {
+        // Cross-app learning feed (#3): generic Web / non-JDE runs feed the same
+        // Execution Knowledge Store so the Learning dashboard covers them too.
+        // App-level (no stable object identity here). Best-effort, never throws.
+        observeAppSteps((this.appType || "WEB").toUpperCase(), [
+          { step: stepAction, passed: stepPassed, healed: attempts > 1 },
+        ]);
       }
 
       if (stepPassed) {
@@ -754,6 +1186,9 @@ export class AITestExecutor {
       // Reset per-step iframe search flags (prevents repeated nested searches within one step)
       this.stepDidNestedSearch = false;
       this.stepDidDynamicWait = false;
+      // Remember the human-readable intent of THIS step so the JDE toolbar safety
+      // net can resolve an action button by intent even if the AI's locator is wrong.
+      this.currentStepIntent = stepAction || "";
       
             // 1. Get page snapshot
       const snapshot = await this.getPageSnapshot();
@@ -804,124 +1239,172 @@ export class AITestExecutor {
         return { passed: true };
       }
 
-      // 2. Ask AI to create execution plan
-            const plan = await this.getAIExecutionPlan(resolvedStepAction, expected, snapshot, testDataMap, targetUrl);
+      // 2. Plan → act → verify, with automatic RE-PLANNING after a FRAME switch.
+      //    JDE/ERP apps render their forms inside e1menuAppIframe, so the AI
+      //    correctly returns `switchToIframe` FIRST when the target (e.g. the Add
+      //    button) isn't yet in the element list. That switch is only SETUP — the
+      //    real action (the click/type) must STILL run. Previously the executor
+      //    returned passed=true right after the switch, so the action never
+      //    happened (false positive: "passed" but nothing clicked). We now loop:
+      //    after a frame switch we re-snapshot the new frame and re-plan the SAME
+      //    step so the actual action executes, and fail honestly if it can't.
+      const MAX_CONTEXT_SWITCHES = 4;
+      let contextSwitches = 0;
+      let currentSnapshot = snapshot;
 
-      // 2a. Append the heal selector hint (if any) as the LOWEST-priority
-      // fallback locator — only tried after the AI's live-DOM locators all fail.
-      // This guarantees a bogus heal can never block a step, while a genuinely
-      // useful selector still gets a chance.
-      if (fallbackLocator) {
-        plan.action.locators = [...(plan.action.locators ?? []), fallbackLocator];
-        logs.push(`[Heal] Appended fallback locator '${fallbackLocator}' to plan (priority: last)`);
-      }
+      while (true) {
+        // 2a. Ask AI to create an execution plan for the CURRENT frame context
+        const plan = await this.getAIExecutionPlan(resolvedStepAction, expected, currentSnapshot, testDataMap, targetUrl);
 
-      logs.push(`AI Plan: ${plan.action.description} (confidence: ${plan.confidence}%)`);
-      logs.push(`AI Reasoning: ${plan.reasoning}`);
-
-      // 3. Execute the action
-      const actionResult = await this.executeAction(plan.action, logs);
-      if (!actionResult.success) {
-        // Invalidate cache for this step so retries get fresh AI plans
-        const cacheKey = `${resolvedStepAction}||${snapshot.url}`;
-        if (this.aiPlanCache.has(cacheKey) && actionResult.error?.includes('locators failed')) {
-          this.aiPlanCache.delete(cacheKey);
-          logs.push(`[Cache] Invalidated stale plan for retry`);
+        // Append the heal selector hint (if any) as the LOWEST-priority fallback
+        // locator — only tried after the AI's live-DOM locators all fail. This
+        // guarantees a bogus heal can never block a step, while a genuinely useful
+        // selector still gets a chance.
+        if (fallbackLocator) {
+          plan.action.locators = [...(plan.action.locators ?? []), fallbackLocator];
+          logs.push(`[Heal] Appended fallback locator '${fallbackLocator}' to plan (priority: last)`);
         }
-        return { passed: false, error: actionResult.error };
-      }
 
-      // Track if a navigation occurred (new window, iframe switch, URL change)
-      const isNavigationAction = plan.action.type === "click" || 
-                                  plan.action.type === "navigate" || 
-                                  plan.action.type === "switchToWindow" ||
-                                  plan.action.type === "switchToIframe";
-      
-      // Check if we successfully navigated (URL changed, new content)
-      let navigationSucceeded = false;
-      if (isNavigationAction) {
-        try {
-          const newSnapshot = await this.getPageSnapshot();
-          // Navigation succeeded if URL changed or significant new content appeared
-          navigationSucceeded = newSnapshot.url !== snapshot.url || 
-                               (newSnapshot.bodyText || "").length > 100;
-          if (navigationSucceeded) {
-            logs.push(`✓ Navigation succeeded - new page content detected`);
+        logs.push(`AI Plan: ${plan.action.description} (confidence: ${plan.confidence}%)`);
+        logs.push(`AI Reasoning: ${plan.reasoning}`);
+
+        const isFrameSwitch =
+          plan.action.type === "switchToIframe" ||
+          plan.action.type === "switchToParentFrame" ||
+          plan.action.type === "switchToDefaultContent";
+
+        // 2b. Execute the action
+        const actionResult = await this.executeAction(plan.action, logs);
+        if (!actionResult.success) {
+          // Invalidate EVERY cached plan for this step text so retries re-plan from
+          // the live DOM instead of replaying the same failing locator. JDE keeps
+          // one URL across iframes, so a URL-scoped delete isn't enough — clear all
+          // cache entries whose key starts with this step's text.
+          let cleared = 0;
+          for (const key of Array.from(this.aiPlanCache.keys())) {
+            if (key.startsWith(`${resolvedStepAction}||`)) {
+              this.aiPlanCache.delete(key);
+              cleared++;
+            }
           }
-        } catch { }
-      }
+          if (cleared) logs.push(`[Cache] Invalidated ${cleared} stale plan(s) for retry`);
+          return { passed: false, error: actionResult.error };
+        }
 
-      // 4. Execute verification if present, else add a default verification
-      let verification = plan.verification;
-      if (!verification) {
-        // Add sensible default verification based on action type
-        if (plan.action.type === "select" && plan.action.value) {
-          verification = {
-            type: "valueEquals",
-            elementXPath: plan.action.elementXPath,
-            expectedValue: plan.action.value,
-            description: `Verify selected value is ${plan.action.value}`
-          };
-        } else if (plan.action.type === "type" && plan.action.value) {
-          verification = {
-            type: "valueEquals",
-            elementXPath: plan.action.elementXPath,
-            expectedValue: plan.action.value,
-            description: `Verify input value is ${plan.action.value}`
-          };
-        } else if (plan.action.type === "click" && plan.action.elementXPath) {
-          // For click actions that navigated successfully, just verify page loaded
-          if (navigationSucceeded) {
-            verification = {
-              type: "elementExists",
-              elementXPath: "//body",
-              description: `Verify page loaded after navigation`
+        // 2c. After a FRAME switch the real action is still pending. Re-snapshot
+        //     the new frame and re-plan the SAME step so the actual click/type runs.
+        //     (An iframe switch does NOT change the top-level URL, so the plan cache
+        //     would hand back the same switch plan — drop it before re-planning.)
+        if (isFrameSwitch) {
+          if (contextSwitches >= MAX_CONTEXT_SWITCHES) {
+            logs.push(`✗ Performed ${contextSwitches} frame switch(es) but never reached the target element for: "${resolvedStepAction}"`);
+            return {
+              passed: false,
+              error: `Could not locate the target element for "${resolvedStepAction}" after ${contextSwitches} frame switch(es)`,
             };
-          } else {
+          }
+          contextSwitches++;
+          this.aiPlanCache.delete(`${resolvedStepAction}||${currentSnapshot.url}`);
+          currentSnapshot = await this.getPageSnapshot();
+          this.aiPlanCache.delete(`${resolvedStepAction}||${currentSnapshot.url}`);
+          logs.push(
+            `↪ Frame context switched (${contextSwitches}/${MAX_CONTEXT_SWITCHES}); re-planning the same step ` +
+            `inside the new frame — depth ${this.framePath.length}, ${(currentSnapshot.elements ?? []).length} elements now visible`
+          );
+          continue; // re-plan the SAME step in the new frame
+        }
+
+        // 3. Track if a navigation occurred (click → page change, navigate, new window)
+        const isNavigationAction =
+          plan.action.type === "click" ||
+          plan.action.type === "navigate" ||
+          plan.action.type === "switchToWindow";
+
+        // Check if we successfully navigated (URL changed, new content)
+        let navigationSucceeded = false;
+        if (isNavigationAction) {
+          try {
+            const newSnapshot = await this.getPageSnapshot();
+            // Navigation succeeded if URL changed or significant new content appeared
+            navigationSucceeded = newSnapshot.url !== currentSnapshot.url ||
+                                 (newSnapshot.bodyText || "").length > 100;
+            if (navigationSucceeded) {
+              logs.push(`✓ Navigation succeeded - new page content detected`);
+            }
+          } catch { }
+        }
+
+        // 4. Execute verification if present, else add a default verification
+        let verification = plan.verification;
+        if (!verification) {
+          // Add sensible default verification based on action type
+          if (plan.action.type === "select" && plan.action.value) {
             verification = {
-              type: "elementVisible",
+              type: "valueEquals",
               elementXPath: plan.action.elementXPath,
-              description: `Verify element is visible after click`
+              expectedValue: plan.action.value,
+              description: `Verify selected value is ${plan.action.value}`
             };
+          } else if (plan.action.type === "type" && plan.action.value) {
+            verification = {
+              type: "valueEquals",
+              elementXPath: plan.action.elementXPath,
+              expectedValue: plan.action.value,
+              description: `Verify input value is ${plan.action.value}`
+            };
+          } else if (plan.action.type === "click" && plan.action.elementXPath) {
+            // For click actions that navigated successfully, just verify page loaded
+            if (navigationSucceeded) {
+              verification = {
+                type: "elementExists",
+                elementXPath: "//body",
+                description: `Verify page loaded after navigation`
+              };
+            } else {
+              verification = {
+                type: "elementVisible",
+                elementXPath: plan.action.elementXPath,
+                description: `Verify element is visible after click`
+              };
+            }
           }
         }
-      }
-      
-      if (verification) {
-        logs.push(`Verifying: ${verification.description}`);
-        const verifyResult = await this.executeVerification(verification, logs);
-        
-        if (!verifyResult.success) {
-          // Context-switch actions (frame/window) are setup steps, not content assertions.
-          // The AI sometimes attaches the NEXT step's expected text to them; never fail on that.
-          if (plan.action.type === "switchToIframe" || plan.action.type === "switchToWindow" ||
-              plan.action.type === "switchToParentFrame" || plan.action.type === "switchToDefaultContent") {
-            logs.push(`✓ Context switch done (verify mismatch ignored: ${verifyResult.error})`);
-            this.aiPlanCache.clear();
-            return { passed: true };
-          }
-          // For navigation actions that succeeded, verification failure is a WARNING not an error
-          if (navigationSucceeded) {
-            logs.push(`⚠ Verification failed but navigation succeeded: ${verifyResult.error}`);
-            logs.push(`✓ Step passed (navigation successful, verification mismatch is warning)`);
-            // Try fallback verification - check if any form/content exists
-            try {
-              const pageHasContent = await this.driver!.executeScript(`
-                return document.querySelectorAll('input, select, button, form, table').length > 0;
-              `) as boolean;
-              if (pageHasContent) {
-                logs.push(`✓ Fallback verification passed: page has interactive content`);
-                return { passed: true };
-              }
-            } catch { }
-            // Still pass if navigation succeeded
-            return { passed: true };
-          }
-          return { passed: false, error: verifyResult.error };
-        }
-      }
 
-      return { passed: true };
+        if (verification) {
+          logs.push(`Verifying: ${verification.description}`);
+          const verifyResult = await this.executeVerification(verification, logs);
+
+          if (!verifyResult.success) {
+            // A window switch is a setup step, not a content assertion. The AI
+            // sometimes attaches the NEXT step's expected text to it; never fail on that.
+            if (plan.action.type === "switchToWindow") {
+              logs.push(`✓ Context switch done (verify mismatch ignored: ${verifyResult.error})`);
+              this.aiPlanCache.clear();
+              return { passed: true };
+            }
+            // For navigation actions that succeeded, verification failure is a WARNING not an error
+            if (navigationSucceeded) {
+              logs.push(`⚠ Verification failed but navigation succeeded: ${verifyResult.error}`);
+              logs.push(`✓ Step passed (navigation successful, verification mismatch is warning)`);
+              // Try fallback verification - check if any form/content exists
+              try {
+                const pageHasContent = await this.driver!.executeScript(`
+                  return document.querySelectorAll('input, select, button, form, table').length > 0;
+                `) as boolean;
+                if (pageHasContent) {
+                  logs.push(`✓ Fallback verification passed: page has interactive content`);
+                  return { passed: true };
+                }
+              } catch { }
+              // Still pass if navigation succeeded
+              return { passed: true };
+            }
+            return { passed: false, error: verifyResult.error };
+          }
+        }
+
+        return { passed: true };
+      }
     } catch (error: any) {
       return { passed: false, error: error.message };
     }
@@ -973,7 +1456,8 @@ export class AITestExecutor {
           'input', 'button', 'a', 'select', 'textarea',
           '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
           '[role="menuitem"]', '[role="tab"]', '[role="option"]', '[role="combobox"]',
-          '[onclick]', '[ng-click]', '[data-action]', 'label'
+          '[onclick]', '[ng-click]', '[data-action]', 'label',
+          '[id^="hc_"]', 'a[title]', 'div[title]', 'span[title]', '[data-jde]'
         ];
 
         function getXPath(el) {
@@ -1052,6 +1536,7 @@ export class AITestExecutor {
               text:             (el.innerText || el.textContent || '').trim().substring(0, 100),
               placeholder:      el.placeholder     || null,
               ariaLabel:        el.getAttribute('aria-label')         || null,
+              title:            el.getAttribute('title')              || null,
               dataTest:         el.getAttribute('data-test')          || null,
               dataTestId:       el.getAttribute('data-testid') || el.getAttribute('data-test-id') || null,
               dataCy:           el.getAttribute('data-cy')            || null,
@@ -1178,7 +1663,8 @@ export class AITestExecutor {
           'input', 'button', 'a', 'select', 'textarea',
           '[role="button"]', '[role="link"]', '[role="checkbox"]', '[role="radio"]',
           '[role="menuitem"]', '[role="tab"]', '[role="option"]', '[role="combobox"]',
-          '[onclick]', '[ng-click]', '[data-action]', 'label'
+          '[onclick]', '[ng-click]', '[data-action]', 'label',
+          '[id^="hc_"]', 'a[title]', 'div[title]', 'span[title]', '[data-jde]'
         ];
         function getXPath(el) {
           if (el.id) return '//*[@id="' + el.id + '"]';
@@ -1238,6 +1724,7 @@ export class AITestExecutor {
               name: el.name || null, className: (el.className || null),
               text: (el.innerText || el.textContent || '').trim().substring(0, 100),
               placeholder: el.placeholder || null, ariaLabel: el.getAttribute('aria-label') || null,
+              title: el.getAttribute('title') || null,
               dataTest: el.getAttribute('data-test') || null,
               dataTestId: el.getAttribute('data-testid') || el.getAttribute('data-test-id') || null,
               dataCy: el.getAttribute('data-cy') || null,
@@ -1283,6 +1770,110 @@ export class AITestExecutor {
   // AI EXECUTION PLAN GENERATION
   // ============================================================================
 
+  /**
+   * JDE menu/tree words that indicate a NAVIGATION click (not a form-field click).
+   * These are the JDE E1 menu regions the user drills through, e.g.
+   *   Navigator → Baxter GM View → Sales → Sales Order Entry.
+   */
+  private static readonly JDE_FASTPATH_CODE = /\b[PR]\d{3,6}\b/i; // P4210, R4210, etc.
+
+  /**
+   * Normalize a spoken menu step into the ACTUAL on-screen label. QA specs often
+   * append a METHOD HINT or UI-chrome noun that is NOT part of the clickable label:
+   *   "Navigator by fastpath"        → "Navigator"
+   *   "Sales Order Entry via menu"   → "Sales Order Entry"
+   *   "Add button" (handled elsewhere) / "Baxter GM View icon" → "Baxter GM View"
+   * We ONLY strip clear method hints ("by/via/using/through/with fast path",
+   * "by/from/in the menu|navigator|tree") and a trailing UI-chrome noun
+   * (button|icon|link|hyperlink|image). We deliberately KEEP meaningful words like
+   * "Entry", "Item", "Option", "SO" that can be real parts of a JDE menu label.
+   */
+  private cleanJdeMenuLabel(label: string): string {
+    let s = (label || "").trim().replace(/^["'`]+/g, "").replace(/["'`.]+$/g, "").trim();
+    // Method hints — remove the hint AND everything after it.
+    s = s.replace(/\s+(?:by|via|using|through|with)\s+fast\s*path\b.*$/i, "");
+    s = s.replace(/\s+(?:by|via|using|through|with|from|in|on)\s+(?:the\s+)?(?:menu(?:\s*item)?|navigator|nav\s*bar|left\s*menu|side\s*menu|tree|fast\s*path)\b.*$/i, "");
+    // Trailing UI-chrome noun only (safe words that are never a real leaf label).
+    s = s.replace(/\s+(?:button|icon|hyperlink|link|image|img)\s*$/i, "");
+    return s.replace(/\s{2,}/g, " ").trim();
+  }
+
+  /**
+   * Deterministic guard: if this is a JDE app and the step is an explicit
+   * "CLICK/SELECT/OPEN: <menu item>" (a NAVIGATION menu label, not a toolbar
+   * action and not a form field), return a hard-coded click plan that resolves
+   * the item by VISIBLE TEXT + nearest clickable ancestor — bypassing the AI so
+   * it can NEVER substitute a Fast Path shortcut. Returns null when the step is
+   * not a JDE menu click (caller then uses the normal AI planner).
+   */
+  private tryJdeMenuClickPlan(stepAction: string): AIExecutionPlan | null {
+    if (this.appType !== "jde") return null;
+    const raw = (stepAction || "").trim();
+    if (!raw) return null;
+
+    // Only act on explicit click/select/open/navigate intents.
+    const m = raw.match(/^(?:click|select|open|choose|navigate to|go to|expand|pick)\s*[:\-]?\s*(.+)$/i);
+    if (!m) return null;
+    let label = m[1].replace(/["'`.]+$/g, "").replace(/^["'`]+/g, "").trim();
+    if (!label || label.length < 2 || label.length > 80) return null;
+
+    // NEVER treat a URL / navigation target as a menu click (JDE tests open with
+    // "Navigate to https://…jde…"). Let the normal navigate path handle those.
+    if (/^https?:\/\//i.test(label) || /:\/\//.test(label) || /\.(com|net|org|io|gov|edu)\b/i.test(label)) return null;
+
+    // Skip pure field-entry phrasing ("... = value", "field to value", key=value).
+    if (/[=]/.test(label) || /\bfield\b/i.test(label)) return null;
+
+    // Skip JDE TOOLBAR actions — those are handled by the hc_/action-word resolver.
+    const TOOLBAR = /^(add|select|ok|cancel|find|delete|copy|close|save|submit|next|previous|back|continue|row|form)\b/i;
+    if (TOOLBAR.test(label)) return null;
+
+    // If the step already names a Fast Path code (e.g. "P4210"), let the AI/Fast
+    // Path path handle it — the user explicitly asked for a code, not a menu walk.
+    if (AITestExecutor.JDE_FASTPATH_CODE.test(label)) return null;
+
+    // Strip a trailing app-code hint the spec sometimes appends, e.g.
+    // "Standard Order SO" stays as-is, but "Sales Order Entry (P4210)" → "Sales Order Entry".
+    label = label.replace(/\s*\((?:[PR]\d{3,6})\)\s*$/i, "").trim();
+
+    // Normalize spoken method hints / UI-chrome nouns to the real on-screen label
+    // ("Navigator by fastpath" → "Navigator"). This is the label we actually click.
+    const cleaned = this.cleanJdeMenuLabel(label);
+    const target = cleaned && cleaned.length >= 2 ? cleaned : label;
+
+    // Build a JDE text-click plan. The "jdetext>>" locator is resolved at runtime
+    // by findJdeClickableByText (frame-aware, first-visible, nearest clickable
+    // ancestor, matches text OR title/aria-label, with native→ancestor→JS→Enter).
+    const esc = target.replace(/'/g, "\\'");
+    const locators = [
+      `jdetext>>${target}`,
+      `xpath=//*[normalize-space(.)='${esc}'][not(self::script)]`,
+      `xpath=//*[@title=${this.xpathLiteral(target)} or @aria-label=${this.xpathLiteral(target)} or @alt=${this.xpathLiteral(target)}]`,
+      `xpath=//*[contains(normalize-space(.),'${esc}')][not(self::script)]`,
+    ];
+    return {
+      action: {
+        type: "click",
+        locators,
+        elementXPath: `//*[normalize-space(.)='${esc}'][not(self::script)]`,
+        value: target,
+        description: `JDE menu navigation click on "${target}" (deterministic, no Fast Path)`,
+        confidence: 0.99,
+      },
+      confidence: 99,
+      reasoning:
+        "JDE menu-click guard: explicit CLICK on a menu/tree label must click the " +
+        "item and walk the navigator hierarchy, never substitute a Fast Path code.",
+    };
+  }
+
+  /** Build a safe XPath string literal (handles embedded quotes via concat()). */
+  private xpathLiteral(value: string): string {
+    if (!value.includes("'")) return `'${value}'`;
+    if (!value.includes('"')) return `"${value}"`;
+    return "concat('" + value.replace(/'/g, "',\"'\",'") + "')";
+  }
+
       private async getAIExecutionPlan(
     stepAction: string,
     expected: string,
@@ -1296,6 +1887,19 @@ export class AITestExecutor {
     if (cached) {
       console.log(`[AIExecutor] ⚡ Cache hit for: ${stepAction.substring(0, 60)}`);
       return cached;
+    }
+
+    // ── DETERMINISTIC JDE MENU-CLICK GUARD ────────────────────────────────────
+    // In JDE, an explicit "CLICK: <menu item>" step MUST actually click the menu/
+    // tree item (Navigator → Baxter GM View → Sales → Sales Order Entry). The
+    // general AI planner tends to "shortcut" this via Fast Path (type P4210), which
+    // SKIPS the requested navigation. Intercept such steps here and honor the click
+    // by resolving the item by VISIBLE TEXT + nearest clickable ancestor (jdetext>>).
+    const jdeMenuPlan = this.tryJdeMenuClickPlan(stepAction);
+    if (jdeMenuPlan) {
+      console.log(`[AIExecutor] 🧭 JDE menu-click guard: "${stepAction}" → click by text (NOT Fast Path)`);
+      this.aiPlanCache.set(cacheKey, jdeMenuPlan);
+      return jdeMenuPlan;
     }
 
     const aiClient = await getAiClient();
@@ -1314,6 +1918,7 @@ export class AITestExecutor {
         if (el.type)          attrs.push(`type="${el.type}"`);
         if (el.placeholder)   attrs.push(`placeholder="${el.placeholder}"`);
         if (el.ariaLabel)     attrs.push(`aria-label="${el.ariaLabel}"`);
+        if ((el as any).title) attrs.push(`title="${(el as any).title}"`);
         if (el.role)          attrs.push(`role="${el.role}"`);
         if (el.forAttr)       attrs.push(`for="${el.forAttr}"`);
         if ((el as any).isShadowHost) attrs.push(`shadow-host="true"`);
@@ -1421,6 +2026,40 @@ The engine waits for real rows before matching. Use single-char column values on
 
 JDE NAV: Fast Path field id=TE_FAST_PATH_BOX, submit id=fastPathButton; the app renders in the
 NESTED e1menuAppIframe \u2014 if Add/Save/grid isn't in ELEMENT DATA, return switchToIframe first.
+JDE MENU CLICKS (CRITICAL): When the STEP says "Click/Select/Open <menu item>" (e.g. "CLICK: Sales
+Order Entry", "Baxter GM View", "Sales"), you MUST actually CLICK that menu/tree item \u2014 return
+type="click" targeting it BY VISIBLE TEXT. NEVER substitute a Fast Path shortcut (do NOT type P4210
+into TE_FAST_PATH_BOX) for an explicit menu-click step: doing so SKIPS the requested navigation
+(Navigator \u2192 Baxter GM View \u2192 Sales \u2192 Sales Order Entry) and is WRONG. Only use Fast Path when the
+step LITERALLY says "Fast Path" or provides a program code to type. JDE menu/tree items are <span>/
+<td> whose click handler is on an ANCESTOR row/anchor and whose ids are DYNAMIC (f1dnode123\u2026) \u2014 do
+NOT emit those dynamic ids; emit a text locator like "xpath=//*[normalize-space(.)='Sales Order
+Entry']" (the engine resolves the nearest clickable ancestor and self-heals native\u2192ancestor\u2192JS\u2192Enter).
+
+JDE TOOLBAR BUTTONS (Add/Select/OK/Cancel/Find/Delete/Copy/Close): these are JDE toolbar/hyper-
+control links, NOT plain <button>s and NEVER <input>. After you are INSIDE e1menuAppIframe, match
+them by id prefix hc_ (e.g. id="hc_Add", id="hc_Select", id="hc_OK", id="hc_Cancel", id="hc_Find")
+OR by the element in ELEMENT DATA whose title/aria-label/text CONTAINS the label (e.g. title="Add").
+IMPORTANT: JDE titles usually include a keyboard-shortcut suffix, e.g. title="Add (Ctrl+Alt+A)" or
+"Find (Ctrl+Alt+F)". An EXACT match like //*[@title='Add'] will then FAIL. So you MUST:
+  1. ALWAYS put the hc_ id FIRST when present: "id=hc_Add".
+  2. Use a CONTAINS locator, never exact, for title/text: "xpath=//*[contains(@title,'Add')]".
+  3. You may also add "css=[title^='Add']" (prefix match) as a backup.
+Emit a chain like ["id=hc_Add","xpath=//*[contains(@title,'Add')]","css=[title^='Add']"].
+NEVER fabricate input[title='Add'] or button[title='Add'] \u2014 JDE's Add is an <a>/<div>, so an <input>
+selector will ALWAYS fail. NEVER emit an exact //*[@title='Add'] when ELEMENT DATA shows a suffix like
+"Add (Ctrl+Alt+A)" \u2014 use contains() instead. The Add button opens the next form (e.g. Sales Order
+Detail Revisions). This IS a click action \u2014 NEVER downgrade a "Click Add" step to a verify just
+because the button wasn't visible on the first snapshot; the frame switch makes it appear, so emit
+type="click" on the hc_/contains(title) match.
+
+JDE QBE FIELDS (CRITICAL \u2014 stop guessing C0_x ids): JDE grid/QBE inputs have generic ids like
+C0_7, C0_9 that DO NOT indicate which business field they are. NEVER pick an id from memory or
+from "in JDE this field is typically...". You MUST match the target field by its LABEL/header text
+in ELEMENT DATA: find the input whose adjacent label/aria-label/header equals the step's field name
+(e.g. "Sold To", "Ship To", "Branch/Plant"). If two steps target different fields, they MUST resolve
+to DIFFERENT ids \u2014 never reuse the same id (C0_7) for both. If you cannot find a label match, return
+type with the best DOM-grounded locator, never a remembered id. Masked read-back ("*") = success.
 
 OUTPUT FORMAT (return ONLY valid JSON, no markdown fences):
 {
@@ -1445,14 +2084,18 @@ OUTPUT FORMAT (return ONLY valid JSON, no markdown fences):
 
     // ── User prompt with live DOM data ─────────────────────────────────────────
     const pageTextPreview = snapshot.bodyText ? `\nPAGE CONTENT (visible text):\n"${snapshot.bodyText.substring(0, 300)}..."` : '';
-    
+
+    // JDE: surface verified Object Repository locators (DD-item/label-grounded)
+    // so the planner reuses them instead of guessing generic grid ids.
+    const jdeRepoHint = this.buildJdeRepositoryHint();
+
     const userPrompt = `PAGE STATE:
 URL: ${snapshot.url}
 Title: ${snapshot.title}
 Has Alert: ${snapshot.alerts}
 Windows: ${(snapshot.windowHandles ?? []).length}
 IFrames: ${(snapshot.iframes ?? []).map(f => f.name || f.id || `index:${f.index}`).join(', ') || 'none'}${targetUrlCtx}
-${testDataContext}${pageTextPreview}
+${testDataContext}${pageTextPreview}${jdeRepoHint}
 
 ELEMENT DATA (RUNTIME):
 ${runtimeElements}
@@ -3568,6 +4211,12 @@ logs.push(`✓ Switched to iframe[0] automatically`);
           if (verification.elementXPath && verification.expectedValue) {
             const element = await this.findElement(verification.elementXPath);
             const value = await element.getAttribute("value");
+            // JDE QBE / password fields mask their content as "*", "***", bullets, or clear it.
+            // Typing already succeeded (sendKeys); a masked read-back is NOT a failure.
+            if (this.isMaskedValue(value)) {
+              logs.push(`✓ Value accepted (field masks input: "${value}")`);
+              break;
+            }
             if (value === verification.expectedValue) {
               logs.push(`✓ Value equals: ${verification.expectedValue}`);
             } else {
@@ -3633,6 +4282,11 @@ logs.push(`✓ Switched to iframe[0] automatically`);
           if (verification.elementXPath && verification.expectedValue) {
             const element = await this.findElement(verification.elementXPath);
             let value: string | null = await element.getAttribute("value");
+            // Masked JDE QBE / password field — typing succeeded, mask is not a failure.
+            if (this.isMaskedValue(value)) {
+              logs.push(`✓ Value accepted (field masks input: "${value}")`);
+              return { success: true };
+            }
             const tagName = await element.getTagName();
             let text = "";
             if (tagName.toLowerCase() === 'select') {
@@ -4056,6 +4710,16 @@ logs.push(`✓ Switched to iframe[0] automatically`);
     logs.push('[iframe] content wait timed out — continuing');
   }
 
+  /**
+   * Detects a value the field deliberately hides/normalizes so a read-back can't confirm it:
+   * JDE QBE masks as "*", password fields show bullets/asterisks, some clear to empty after Enter.
+   */
+  private isMaskedValue(v: string | null | undefined): boolean {
+    if (v == null) return false;
+    const t = v.trim();
+    return t === "" || /^[*\u2022\u25CF\u00B7]+$/.test(t); // *, bullets
+  }
+
   /** Best-effort: wait until a JDE/ERP grid has >1 data row (cells>2) before verifying. */
   private async waitForGridRows(timeout = 4000): Promise<void> {
     if (!this.driver) return;
@@ -4258,6 +4922,17 @@ logs.push(`✓ Switched to iframe[0] automatically`);
       try {
         logs.push(`[Runtime DOM] Trying locator[${attempt}]: ${loc}`);
 
+        // JDE menu/tree text click: "jdetext>>Sales Order Entry" — resolve by
+        // VISIBLE TEXT to the nearest CLICKABLE ANCESTOR (row/anchor), frame-aware.
+        // This is how JDE navigator items must be clicked (their ids are dynamic).
+        if (loc.startsWith("jdetext>>")) {
+          const wanted = loc.slice("jdetext>>".length).trim();
+          const el = await this.findJdeClickableByText(wanted, logs);
+          if (el) { logs.push(`[Runtime DOM] ✓ JDE text hit: ${loc}`); return el; }
+          logs.push(`[Runtime DOM] ✗ JDE text miss: ${loc}`);
+          continue;
+        }
+
         // Shadow DOM: "shadow>>HOST_SEL>>INNER_SEL" — pierce via JS
         if (loc.startsWith("shadow>>")) {
           const parts  = loc.replace("shadow>>", "").split(">>");
@@ -4285,7 +4960,401 @@ logs.push(`✓ Switched to iframe[0] automatically`);
       }
     }
 
+    // ── GENERIC LOCATOR LOOSENING ─────────────────────────────────────────────
+    // Many failures are near-misses: an EXACT match locator (e.g. @title='Add' or
+    // text()='Add') misses because the live value has extra text ('Add (Ctrl+Alt+A)').
+    // Before giving up, auto-generate tolerant variants (contains / normalize-space)
+    // from the AI's own locators and try them. This is app-agnostic and helps any UI.
+    try {
+      const loosened = this.loosenLocators(locatorChain);
+      for (const loc of loosened) {
+        try {
+          logs.push(`[Runtime DOM] Trying loosened locator: ${loc}`);
+          const el = await this.findElement(loc, Math.min(timeout, 2000));
+          logs.push(`[Runtime DOM] ✓ Hit loosened locator: ${loc}`);
+          return el;
+        } catch (e: any) {
+          logs.push(`[Runtime DOM] ✗ Loosened failed: ${e.message?.substring(0, 60)}`);
+        }
+      }
+    } catch (e: any) {
+      logs.push(`[Runtime DOM] Loosening error (non-fatal): ${e.message?.substring(0, 60)}`);
+    }
+
+    // ── JDE TOOLBAR SAFETY NET ────────────────────────────────────────────────
+    // The AI sometimes emits a wrong locator for a JDE toolbar action (e.g.
+    // input[title='Add'] — but JDE's Add is an <a>/<div> with id="hc_Add"). If the
+    // chain looks like it targets a known JDE action word, resolve it robustly by
+    // hc_* id / title / aria-label / visible text across ALL tags before failing.
+    try {
+      const jdeAction = this.detectJdeActionWord(locatorChain);
+      if (jdeAction) {
+        logs.push(`[JDE] Locator chain failed; trying JDE toolbar resolver for action "${jdeAction}"`);
+        const el = await this.findJdeActionButton(jdeAction, logs);
+        if (el) {
+          logs.push(`[JDE] ✓ Resolved "${jdeAction}" via toolbar safety net`);
+          return el;
+        }
+      }
+    } catch (e: any) {
+      logs.push(`[JDE] Toolbar resolver error (non-fatal): ${e.message?.substring(0, 80)}`);
+    }
+
+    // ── JDE MENU / TREE / LABEL SAFETY NET ────────────────────────────────────
+    // JDE menu/tree items render as <span>/<td> with the click handler on an
+    // ANCESTOR row/anchor, and their ids are DYNAMIC (f1dnode123…), so the AI's
+    // id/xpath locators go stale. Recover the intended VISIBLE TEXT from the chain
+    // (or the step intent) and resolve the nearest clickable ancestor by text.
+    try {
+      const clickText = this.extractJdeClickText(locatorChain);
+      if (clickText) {
+        logs.push(`[JDE] Locator chain failed; trying JDE menu-text resolver for "${clickText}"`);
+        const el = await this.findJdeClickableByText(clickText, logs);
+        if (el) {
+          logs.push(`[JDE] ✓ Resolved "${clickText}" via menu-text safety net (nearest clickable ancestor)`);
+          return el;
+        }
+      }
+    } catch (e: any) {
+      logs.push(`[JDE] Menu-text resolver error (non-fatal): ${e.message?.substring(0, 80)}`);
+    }
+
     throw new Error(`All ${locatorChain.length} locators failed. Last: ${lastError?.message ?? "unknown"}`);
+  }
+
+  /**
+   * Generate tolerant ("loosened") variants of the given locators so a near-miss
+   * EXACT match can still resolve. App-agnostic. Examples:
+   *   //*[@title='Add']                → //*[contains(@title,'Add')]
+   *   //*[@title='Add (Ctrl+Alt+A)']   → //*[contains(@title,'Add')]   (suffix stripped)
+   *   //*[text()='Add']                → //*[contains(normalize-space(.),'Add')]
+   *   css=[title='Add']                → xpath=//*[contains(@title,'Add')]
+   * Returns a de-duplicated list of xpath= locators (never throws).
+   */
+  private loosenLocators(locatorChain: string[]): string[] {
+    const out = new Set<string>();
+    const stripSuffix = (v: string) =>
+      // Drop a trailing " (…)" shortcut hint and collapse whitespace: "Add (Ctrl+Alt+A)" → "Add"
+      v.replace(/\s*\(.*?\)\s*$/, "").trim();
+
+    for (const raw of locatorChain || []) {
+      if (!raw) continue;
+      const loc = raw.replace(/^xpath=/, "").replace(/^css=/, "");
+
+      // @attr='value'  (title, aria-label, value, alt, name, placeholder)
+      const attrRe = /@?([a-zA-Z-]+)\s*=\s*['"]([^'"]+)['"]/g;
+      let m: RegExpExecArray | null;
+      while ((m = attrRe.exec(loc)) !== null) {
+        const attr = m[1].toLowerCase();
+        if (["title", "aria-label", "value", "alt", "name", "placeholder", "data-jde"].includes(attr)) {
+          const full = m[2];
+          const base = stripSuffix(full);
+          if (full) out.add(`xpath=//*[contains(@${attr},'${full.replace(/'/g, "")}')]`);
+          if (base && base !== full) out.add(`xpath=//*[contains(@${attr},'${base.replace(/'/g, "")}')]`);
+        }
+      }
+
+      // text()='value'  or  .='value'
+      const textRe = /(?:text\(\)|\.)\s*=\s*['"]([^'"]+)['"]/g;
+      while ((m = textRe.exec(loc)) !== null) {
+        const full = m[1];
+        const base = stripSuffix(full);
+        if (full) out.add(`xpath=//*[contains(normalize-space(.),'${full.replace(/'/g, "")}')]`);
+        if (base && base !== full) out.add(`xpath=//*[contains(normalize-space(.),'${base.replace(/'/g, "")}')]`);
+      }
+    }
+    return Array.from(out);
+  }
+
+  /** Known JDE toolbar/hyper-control action words we can resolve by label. */
+  private static readonly JDE_ACTION_WORDS = [
+    "Add", "Select", "OK", "Cancel", "Find", "Delete", "Copy", "Close",
+    "Save", "Submit", "Next", "Previous", "Back", "Continue",
+  ];
+
+  /**
+   * Extract a JDE action word (Add/Select/OK…) from the failed locator chain OR
+   * from the current step's human-readable intent. We check the INTENT first
+   * because the AI may emit a wrong locator (e.g. //*[@title='Add (Ctrl+Alt+A)'])
+   * while the step text ("CLICK: Add") states the real intent unambiguously.
+   * Matching is word-boundary based so titles with shortcut suffixes
+   * ("Add (Ctrl+Alt+A)") and ids ("hc_Add") are all detected.
+   */
+  private detectJdeActionWord(locatorChain: string[]): string | null {
+    const intent = (this.currentStepIntent || "").toLowerCase();
+    const chainBlob = (locatorChain || []).join(" ").toLowerCase();
+
+    // 1) Prefer an action word that appears as a whole word in the STEP INTENT.
+    for (const word of AITestExecutor.JDE_ACTION_WORDS) {
+      const w = word.toLowerCase();
+      if (new RegExp(`\\b${w}\\b`, "i").test(intent)) return word;
+    }
+
+    // 2) Otherwise look in the locator chain. Accept the word when it appears as a
+    //    quoted value (possibly with a suffix like " (Ctrl+Alt+A)"), an =value,
+    //    an _word (hc_Add), inside >text<, or simply as a standalone word.
+    for (const word of AITestExecutor.JDE_ACTION_WORDS) {
+      const w = word.toLowerCase();
+      if (
+        new RegExp(`['"]${w}\\b`, "i").test(chainBlob) ||  // 'Add… / "Add…  (suffix ok)
+        chainBlob.includes(`=${w}`) || chainBlob.includes(`_${w}`) ||
+        chainBlob.includes(`>${w}<`) || chainBlob.includes(`hc_${w}`) ||
+        new RegExp(`\\b${w}\\b`, "i").test(chainBlob)
+      ) {
+        return word;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Robustly locate a JDE toolbar action button by its LABEL, independent of tag.
+   * Tries, in order: id=hc_<Word>, [id^="hc_"] whose title/text match, then any
+   * element whose title / aria-label / trimmed text equals the word. Clicks the
+   * FIRST visible match. Returns null if none found (caller then fails honestly).
+   *
+   * FRAME-AWARE: JDE forms+toolbars live inside nested e1menuAppIframe, so this
+   * searches the current context, then the main document, then every iframe and
+   * one level of nested iframes — restoring the driver context to wherever the
+   * button was found so the subsequent click runs in the right frame.
+   */
+  private async findJdeActionButton(word: string, logs: string[]): Promise<WebElement | null> {
+    if (!this.driver) return null;
+
+    // In-page resolver: returns the first VISIBLE element matching the action word.
+    const SCRIPT = `
+      var word = arguments[0];
+      var wl = word.toLowerCase();
+      function vis(e){ try { var r=e.getBoundingClientRect(); var s=getComputedStyle(e);
+        return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; } catch(_) { return false; } }
+      // Normalize a label and decide whether it refers to the action word.
+      // Accepts exact ("Add"), prefix with a shortcut/suffix ("Add (Ctrl+Alt+A)"),
+      // or the word as a standalone token ("Add Row"). Avoids false hits like "Address".
+      function matches(label){
+        if(!label) return false;
+        var t = label.trim().toLowerCase();
+        if(t === wl) return true;
+        if(t.indexOf(wl) === 0 && /[^a-z]/.test(t.charAt(wl.length))) return true; // "add (ctrl…" / "add…"
+        return new RegExp('\\\\b'+wl+'\\\\b').test(t);
+      }
+      function labelOf(e){
+        return (e.getAttribute('title')||'') + '\\u0001' + (e.getAttribute('aria-label')||'') + '\\u0001'
+             + (e.getAttribute('value')||'') + '\\u0001' + (e.getAttribute('alt')||'') + '\\u0001'
+             + (e.getAttribute('name')||'') + '\\u0001' + (e.innerText||e.textContent||'');
+      }
+      function anyLabelMatches(e){
+        var parts = labelOf(e).split('\\u0001');
+        for (var p=0;p<parts.length;p++){ if (matches(parts[p])) return true; }
+        return false;
+      }
+      // 1) Exact JDE hyper-control id: hc_Add, hc_Select, …
+      var byId = document.getElementById('hc_' + word);
+      if (byId && vis(byId)) return byId;
+      // 2) Any hc_* control whose title/aria-label/text refers to the word
+      var hc = Array.prototype.slice.call(document.querySelectorAll('[id^="hc_"]'));
+      for (var i=0;i<hc.length;i++){ if (vis(hc[i]) && anyLabelMatches(hc[i])) return hc[i]; }
+      // 3) Any element whose title/aria-label/value/alt refers to the word
+      var titled = Array.prototype.slice.call(document.querySelectorAll('[title],[aria-label],[value],[alt]'));
+      for (var j=0;j<titled.length;j++){ if (vis(titled[j]) && anyLabelMatches(titled[j])) return titled[j]; }
+      // 4) Any clickable element whose trimmed visible text refers to the word
+      var clickable = Array.prototype.slice.call(document.querySelectorAll('a,button,div,span,td,img,input[type="button"],input[type="submit"],[role="button"],[onclick]'));
+      for (var k=0;k<clickable.length;k++){ var el3=clickable[k];
+        var tx=(el3.innerText||el3.textContent||'');
+        if (vis(el3) && (matches(tx) || anyLabelMatches(el3))) return el3;
+      }
+      return null;
+    `;
+
+    const tryHere = async (): Promise<WebElement | null> => {
+      try {
+        const el = (await this.driver!.executeScript(SCRIPT, word)) as WebElement | null;
+        if (el) { try { await this.scrollIntoView(el); } catch {} return el; }
+      } catch {}
+      return null;
+    };
+
+    // 1) Current context (driver may already be inside the form iframe).
+    let found = await tryHere();
+    if (found) { logs.push(`[JDE] toolbar "${word}" found in current frame`); return found; }
+
+    // 2) Main document.
+    try { await this.driver.switchTo().defaultContent(); this.currentIframeIndex = -1; this.framePath = []; } catch {}
+    found = await tryHere();
+    if (found) { logs.push(`[JDE] toolbar "${word}" found in main document`); return found; }
+
+    // 3) Each top-level iframe, then one level of nesting (JDE's e1menuAppIframe).
+    let topFrames: WebElement[] = [];
+    try { topFrames = await this.driver.findElements(By.tagName("iframe")); } catch {}
+    for (let i = 0; i < topFrames.length; i++) {
+      try {
+        await this.driver.switchTo().defaultContent();
+        await this.driver.switchTo().frame(i);
+        found = await tryHere();
+        if (found) {
+          this.currentIframeIndex = i; this.framePath = [i];
+          logs.push(`[JDE] toolbar "${word}" found in iframe[${i}]`);
+          return found;
+        }
+        // nested level
+        let nested: WebElement[] = [];
+        try { nested = await this.driver.findElements(By.tagName("iframe")); } catch {}
+        for (let n = 0; n < nested.length; n++) {
+          try {
+            await this.driver.switchTo().frame(n);
+            found = await tryHere();
+            if (found) {
+              this.currentIframeIndex = i; this.framePath = [i, n];
+              logs.push(`[JDE] toolbar "${word}" found in iframe[${i}][${n}]`);
+              return found;
+            }
+            await this.driver.switchTo().defaultContent();
+            await this.driver.switchTo().frame(i);
+          } catch { try { await this.driver.switchTo().defaultContent(); await this.driver.switchTo().frame(i); } catch {} }
+        }
+      } catch { try { await this.driver.switchTo().defaultContent(); } catch {} }
+    }
+
+    // Not found anywhere — restore to main document so the caller fails cleanly.
+    try { await this.driver.switchTo().defaultContent(); this.currentIframeIndex = -1; this.framePath = []; } catch {}
+    return null;
+  }
+
+  /**
+   * Extract the human-readable TEXT a locator/step is trying to click, so the JDE
+   * menu resolver can re-find it by visible text when the AI's selector (often a
+   * DYNAMIC id like f1dnode123) has gone stale. Looks in the locator chain first
+   * (text()='X', normalize-space()='X', contains(.,'X'), @title/@aria-label='X'),
+   * then falls back to the step intent ("CLICK: Sales Order Entry" → "Sales Order Entry").
+   */
+  private extractJdeClickText(locatorChain: string[]): string | null {
+    const fromLoc = (s: string): string | null => {
+      if (!s) return null;
+      const pats = [
+        /(?:text\(\)|normalize-space\(\.?\)|\.)\s*=\s*['"]([^'"]+)['"]/,
+        /contains\s*\(\s*(?:normalize-space\(\.?\)|text\(\)|\.)\s*,\s*['"]([^'"]+)['"]\s*\)/,
+        /@(?:title|aria-label|value|alt)\s*=\s*['"]([^'"]+)['"]/,
+        /contains\s*\(\s*@(?:title|aria-label|value|alt)\s*,\s*['"]([^'"]+)['"]\s*\)/,
+      ];
+      for (const p of pats) { const m = s.match(p); if (m && m[1] && m[1].trim().length > 1) return m[1].trim(); }
+      return null;
+    };
+    for (const loc of locatorChain || []) { const t = fromLoc(loc); if (t) return t; }
+
+    // Fall back to the step intent: strip a leading verb ("CLICK:", "Select", "Open"…).
+    const intent = (this.currentStepIntent || "").trim();
+    if (intent) {
+      const m = intent.match(/^(?:click|select|open|choose|navigate to|go to|expand|press|tap)\s*[:\-]?\s*(.+)$/i);
+      const cand = (m ? m[1] : intent).replace(/["'`]/g, "").trim();
+      // Normalize spoken method hints ("Navigator by fastpath" → "Navigator") so
+      // the by-text resolver matches the real on-screen label, not the sentence.
+      const cleaned = this.cleanJdeMenuLabel(cand);
+      const finalCand = cleaned && cleaned.length >= 2 ? cleaned : cand;
+      if (finalCand.length > 1 && finalCand.length <= 60) return finalCand;
+    }
+    return null;
+  }
+
+  /**
+   * Resolve a JDE MENU / TREE / LABEL item by its VISIBLE TEXT and return the
+   * nearest CLICKABLE element — because in JDE the text node (<span>/<td>) usually
+   * has NO click handler; it lives on an ancestor row/anchor. Frame-aware: searches
+   * the current context, the main document, then every iframe and one nested level
+   * (JDE's e1menuAppIframe), restoring the driver to wherever the element was found.
+   * Picks the FIRST VISIBLE match. Ignores dynamic ids entirely (matches on text).
+   * Returns null if nothing matches (caller then fails honestly).
+   */
+  private async findJdeClickableByText(text: string, logs: string[]): Promise<WebElement | null> {
+    if (!this.driver || !text) return null;
+
+    const SCRIPT = `
+      var want = (arguments[0] || '').trim().toLowerCase();
+      function vis(e){ try { var r=e.getBoundingClientRect(); var s=getComputedStyle(e);
+        return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; } catch(_){ return false; } }
+      // Direct (own) text of an element, excluding descendants.
+      function own(e){ var t=''; for (var i=0;i<e.childNodes.length;i++){ var n=e.childNodes[i];
+        if (n.nodeType===3) t+=n.nodeValue; } return t.trim(); }
+      // Accessible name candidates: text + common label attributes (icons have NO text).
+      function labels(e){
+        return [ own(e), (e.innerText||e.textContent||''),
+          e.getAttribute&&e.getAttribute('title')||'', e.getAttribute&&e.getAttribute('aria-label')||'',
+          e.getAttribute&&e.getAttribute('alt')||'', e.getAttribute&&e.getAttribute('value')||'',
+          e.getAttribute&&e.getAttribute('data-title')||'' ]
+          .map(function(x){ return (x||'').trim().toLowerCase(); });
+      }
+      function wordHit(hay){ // whole-word match so "Navigator" hits "E1 Navigator" but not "navigatorbar"
+        if (!hay) return false;
+        try { return new RegExp('(^|[^a-z0-9])'+want.replace(/[.*+?^\${}()|[\\]\\\\]/g,'\\\\$&')+'([^a-z0-9]|\$)').test(hay); }
+        catch(_) { return hay.indexOf(want)>=0; }
+      }
+      function clickable(e){
+        // Walk up to the nearest element that actually handles clicks.
+        var cur=e;
+        for (var d=0; d<6 && cur; d++){
+          var tag=(cur.tagName||'').toLowerCase();
+          var st=(cur.getAttribute && cur.getAttribute('style')||'');
+          if (tag==='a'||tag==='button'||tag==='tr'|| (cur.getAttribute && (cur.getAttribute('onclick')||cur.getAttribute('role')==='button'))
+              || /cursor\\s*:\\s*pointer/i.test(st)) return cur;
+          cur=cur.parentElement;
+        }
+        return e;
+      }
+      // Search widely: include icon/image tags whose name lives in attributes.
+      var all = document.querySelectorAll('a,button,span,td,div,li,label,img,input,[role="button"],[role="treeitem"],[role="menuitem"],[title],[aria-label]');
+      var exactText=null, exactAttr=null, partial=null, token=null;
+      for (var i=0;i<all.length;i++){ var e=all[i]; if(!vis(e)) continue;
+        var L=labels(e);
+        var ot=L[0], ft=L[1];
+        if (ot===want){ exactText=e; break; }                       // best: own text equals
+        if (!exactAttr){ for (var a=2;a<L.length;a++){ if (L[a]===want){ exactAttr=e; break; } } }
+        if (!partial && (ft===want || ft.indexOf(want)>=0)) partial=e;
+        if (!token){ for (var b=0;b<L.length;b++){ if (wordHit(L[b])){ token=e; break; } } }
+      }
+      var hit = exactText || exactAttr || partial || token;
+      return hit ? clickable(hit) : null;
+    `;
+
+    const tryHere = async (): Promise<WebElement | null> => {
+      try {
+        const el = (await this.driver!.executeScript(SCRIPT, text)) as WebElement | null;
+        if (el) { try { await this.scrollIntoView(el); } catch {} return el; }
+      } catch {}
+      return null;
+    };
+
+    // 1) Current context.
+    let found = await tryHere();
+    if (found) { logs.push(`[JDE] menu text "${text}" resolved in current frame`); return found; }
+
+    // 2) Main document.
+    try { await this.driver.switchTo().defaultContent(); this.currentIframeIndex = -1; this.framePath = []; } catch {}
+    found = await tryHere();
+    if (found) { logs.push(`[JDE] menu text "${text}" resolved in main document`); return found; }
+
+    // 3) Each top-level iframe, then one nested level.
+    let topFrames: WebElement[] = [];
+    try { topFrames = await this.driver.findElements(By.tagName("iframe")); } catch {}
+    for (let i = 0; i < topFrames.length; i++) {
+      try {
+        await this.driver.switchTo().defaultContent();
+        await this.driver.switchTo().frame(i);
+        found = await tryHere();
+        if (found) { this.currentIframeIndex = i; this.framePath = [i]; logs.push(`[JDE] menu text "${text}" resolved in iframe[${i}]`); return found; }
+        let nested: WebElement[] = [];
+        try { nested = await this.driver.findElements(By.tagName("iframe")); } catch {}
+        for (let n = 0; n < nested.length; n++) {
+          try {
+            await this.driver.switchTo().frame(n);
+            found = await tryHere();
+            if (found) { this.currentIframeIndex = i; this.framePath = [i, n]; logs.push(`[JDE] menu text "${text}" resolved in iframe[${i}][${n}]`); return found; }
+            await this.driver.switchTo().defaultContent();
+            await this.driver.switchTo().frame(i);
+          } catch { try { await this.driver.switchTo().defaultContent(); await this.driver.switchTo().frame(i); } catch {} }
+        }
+      } catch { try { await this.driver.switchTo().defaultContent(); } catch {} }
+    }
+
+    try { await this.driver.switchTo().defaultContent(); this.currentIframeIndex = -1; this.framePath = []; } catch {}
+    return null;
   }
 }
 

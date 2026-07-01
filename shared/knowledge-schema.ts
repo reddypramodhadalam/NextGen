@@ -42,6 +42,9 @@ export const ModuleTags = {
   JDE_INVENTORY: "JDE_INVENTORY",
   JDE_FIXED_ASSETS: "JDE_FIXED_ASSETS",
   JDE_MANUFACTURING: "JDE_MANUFACTURING",
+  // JDE — all-modules / cross-module buckets (for whole functional-spec sets)
+  JDE_FUNCTIONAL_SPEC: "JDE_FUNCTIONAL_SPEC",
+  JDE_CUSTOMIZATION: "JDE_CUSTOMIZATION",
   // SAP Modules
   SAP_MM: "SAP_MM",
   SAP_SD: "SAP_SD",
@@ -102,6 +105,11 @@ export const knowledgeSourceSchema = z.object({
   lastIngested: z.date().optional(),
   documentCount: z.number().default(0),
   errorMessage: z.string().optional(),
+  // Idempotent-ingestion bookkeeping: SHA-256 of the source content + its byte
+  // size. Used to detect "same file uploaded again" (skip) vs "content changed"
+  // (re-ingest/enhance) and to make SharePoint crawls resumable.
+  checksum: z.string().optional(),
+  contentSize: z.number().optional(),
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });

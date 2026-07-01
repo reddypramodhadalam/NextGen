@@ -46,3 +46,21 @@ scripts/_tmp_*.cjs
 test-*.docx
 AITAS_*.pptx
 AITAS_*.docx
+
+# Throwaway inspection / doc-generation scratch (not app source)
+inspect-*.cjs
+extract-*.cjs
+verify-*.cjs
+generate-aitas-*.mjs
+gen-deck-*.mjs
+sample-analysis.txt
+sample-*.xml
+sample-*.rels
+sample-word_*.png
+temp_*.txt
+temp_health.txt
+
+# Local binary / document scratch artifacts
+*.xlsx
+Test Strategy Document.docx
+baxter-logo.png

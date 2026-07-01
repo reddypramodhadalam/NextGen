@@ -3,6 +3,8 @@
  * Defines per-app-type executor config, locator strategy, wait strategy, and AI prompt hints.
  */
 
+import { buildJdeAiGuidance } from "./jde-locator-intelligence";
+
 export type AppType =
   | "web"
   | "salesforce"
@@ -346,3 +348,81 @@ export function getProfileByType(type: AppType): AppProfile {
 export function getProfilesByCategory(category: AppProfile["category"]): AppProfile[] {
   return Object.values(APP_PROFILES).filter((p) => p.category === category);
 }
+
+// ============================================================================
+// SCRIPT-GENERATION ORCHESTRATION
+// Wires app profiles into the script generators so "select JDE → JDE-aware
+// code", "select Salesforce → shadow-DOM code", etc.
+// ============================================================================
+
+/**
+ * Normalise a free-form app-type string (from UI / API / DB) into a canonical
+ * AppType. Accepts many aliases so callers don't have to be exact.
+ * Returns `undefined` when there is no confident match (caller treats as web).
+ */
+export function normalizeAppType(input?: string | null): AppType | undefined {
+  if (!input) return undefined;
+  const s = input.trim().toLowerCase().replace(/[\s\-]+/g, "_");
+  if (!s) return undefined;
+
+  const aliases: Record<string, AppType> = {
+    web: "web", website: "web", browser: "web", html: "web",
+    jde: "jde", jd_edwards: "jde", jdedwards: "jde", enterpriseone: "jde",
+    e1: "jde", oracle_jde: "jde", jde_e1: "jde",
+    salesforce: "salesforce", sfdc: "salesforce", sf: "salesforce", lightning: "salesforce",
+    sap_fiori: "sap_fiori", fiori: "sap_fiori", sapui5: "sap_fiori", ui5: "sap_fiori",
+    sap_gui: "sap_gui", sapgui: "sap_gui", sap_desktop: "sap_gui",
+    dotnet_desktop: "dotnet_desktop", dotnet: "dotnet_desktop", winforms: "dotnet_desktop",
+    wpf: "dotnet_desktop", net_desktop: "dotnet_desktop",
+    java_desktop: "java_desktop", swing: "java_desktop", javafx: "java_desktop", awt: "java_desktop",
+    mobile_ios: "mobile_ios", ios: "mobile_ios", iphone: "mobile_ios",
+    mobile_android: "mobile_android", android: "mobile_android",
+    api_rest: "api_rest", rest: "api_rest", api: "api_rest",
+    api_soap: "api_soap", soap: "api_soap", wsdl: "api_soap",
+    api_graphql: "api_graphql", graphql: "api_graphql", gql: "api_graphql",
+  };
+
+  if (aliases[s]) return aliases[s];
+  // Direct match against canonical keys.
+  if ((APP_PROFILES as Record<string, AppProfile>)[s]) return s as AppType;
+  // Loose contains check (e.g. "sap fiori launchpad").
+  if (s.includes("jde") || s.includes("edwards")) return "jde";
+  if (s.includes("salesforce")) return "salesforce";
+  if (s.includes("fiori") || s.includes("ui5")) return "sap_fiori";
+  if (s.includes("sap")) return "sap_gui";
+  return undefined;
+}
+
+/**
+ * Build a compact, app-specific guidance block to inject into the AI
+ * script-generation system prompt. Returns "" for plain web (no special hints
+ * needed). For JDE it delegates to the richer JDE intelligence module.
+ */
+export function buildScriptGenGuidance(
+  appType: AppType | undefined,
+  framework: string,
+  language: string
+): string {
+  if (!appType || appType === "web") return "";
+  const profile = getProfileByType(appType);
+
+  // JDE gets the dedicated, dense ruleset.
+  if (appType === "jde") {
+    return [
+      `APPLICATION TYPE: ${profile.label}.`,
+      buildJdeAiGuidance(),
+      `LOCATOR STRATEGY: ${profile.locatorStrategy}`,
+      `WAIT STRATEGY: ${profile.waitStrategy}`,
+    ].join("\n");
+  }
+
+  // Generic per-profile guidance from the profile metadata.
+  return [
+    `APPLICATION TYPE: ${profile.label}.`,
+    profile.aiPromptHints,
+    `LOCATOR STRATEGY: ${profile.locatorStrategy}`,
+    `WAIT STRATEGY: ${profile.waitStrategy}`,
+    `Generate ${appType}-correct ${framework} code in ${language}; avoid naive generic selectors.`,
+  ].join("\n");
+}
+

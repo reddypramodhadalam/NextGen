@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { AppReadinessHint } from "@/components/app-readiness-hint";
 import { cn } from "@/lib/utils";
 import {
   Upload, FileText, FileJson, Table2, CheckCircle2, XCircle,
@@ -137,6 +138,23 @@ const LANGUAGES = [
   { value: "python",     label: "Python"     },
   { value: "java",       label: "Java"       },
   { value: "csharp",     label: "C#"         },
+];
+
+// Application type drives app-aware script generation. Selecting JDE makes the
+// generator emit JDE-correct locators/waits (iframe switch, #processingDiv
+// waits, DD-item fields, hc_* toolbar ids, header-based grid cells); other
+// ERP/CRM types steer the AI toward their idioms too.
+const APP_TYPES = [
+  { value: "web",            label: "Web Application" },
+  { value: "jde",            label: "JD Edwards (Oracle)" },
+  { value: "salesforce",     label: "Salesforce" },
+  { value: "sap_fiori",      label: "SAP Fiori / Web GUI" },
+  { value: "sap_gui",        label: "SAP GUI (Desktop)" },
+  { value: "dotnet_desktop", label: ".NET Desktop" },
+  { value: "java_desktop",   label: "Java Desktop" },
+  { value: "mobile_android", label: "Android Mobile" },
+  { value: "mobile_ios",     label: "iOS Mobile" },
+  { value: "api_rest",       label: "REST API" },
 ];
 
 const FILE_EXT_ICON: Record<string, React.ReactNode> = {
@@ -305,6 +323,7 @@ export default function UploadTestCases() {
   // Script generation state
   const [framework, setFramework]           = useState("playwright");
   const [language, setLanguage]             = useState("typescript");
+  const [appType, setAppType]               = useState("web");
   const [generatedScripts, setGeneratedScripts] = useState<GeneratedScript[]>([]);
   const [isGenerating, setIsGenerating]     = useState(false);
   const [genProgress, setGenProgress]       = useState(0);
@@ -630,6 +649,7 @@ export default function UploadTestCases() {
         testCaseIds: cases.map((tc: any) => tc.id),
         framework,
         language,
+        appType,
       });
       setGenProgress(80);
       const data = await res.json();
@@ -1507,6 +1527,24 @@ export default function UploadTestCases() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
+                  <Label>Application Type</Label>
+                  <Select value={appType} onValueChange={setAppType}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {APP_TYPES.map(a => (
+                        <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Drives app-aware code. <span className="font-medium">JD Edwards</span> emits
+                    iframe switching, processing-spinner waits, DD-item fields, <code>hc_*</code> toolbar
+                    ids and header-based grid cells.
+                  </p>
+                  <AppReadinessHint appType={appType} />
+                </div>
+
+                <div className="space-y-2">
                   <Label>Framework</Label>
                   <Select value={framework} onValueChange={setFramework}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1534,6 +1572,12 @@ export default function UploadTestCases() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Test cases</span>
                     <span className="font-semibold">{importedCases.length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Application</span>
+                    <span className="font-semibold">
+                      {APP_TYPES.find(a => a.value === appType)?.label}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Framework</span>

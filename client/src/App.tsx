@@ -38,6 +38,7 @@ import UploadTestCases from "@/pages/upload";
 import MultiAgentPage from "@/pages/multi-agent";
 import LocalAgentSetup from "@/pages/local-agent-setup";
 import KnowledgeBasePage from "@/pages/knowledge-base";
+import LearningPage from "@/pages/learning";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedRouter() {
@@ -68,6 +69,7 @@ function AuthenticatedRouter() {
       <Route path="/upload" component={UploadTestCases} />
       <Route path="/multi-agent" component={MultiAgentPage} />
       <Route path="/knowledge" component={KnowledgeBasePage} />
+      <Route path="/learning" component={LearningPage} />
       <Route path="/settings" component={Settings} />
       <Route path="/docs" component={Documentation} />
       <Route component={NotFound} />

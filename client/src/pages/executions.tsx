@@ -48,6 +48,7 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
+  ScanLine,
 } from "lucide-react";
 import type { TestSuite, TestAgent, TestExecution, TestDataParam, TestCase } from "@shared/schema";
 
@@ -236,6 +237,31 @@ export default function Executions() {
     },
   });
 
+  // Live JDE "Scan Screen" — captures Application/Form/Object metadata from the
+  // active browser and seeds the Object Repository (Phases 1â€“4, 9â€“11).
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/executions/scan-screen", {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Screen Scanned",
+        description: `${data.application || "Unknown app"}/${data.form || "?"} — discovered ${data.objectsDiscovered} object(s)` +
+          (data.gridHeaders?.length ? `, ${data.gridHeaders.length} grid header(s)` : "") + ".",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/jde-objects"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/jde-objects/stats"] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Scan Unavailable",
+        description: error.message || "No active browser. Start an execution first, then scan.",
+        variant: "destructive",
+      });
+    },
+  });
+
   useEffect(() => {
     const interval = setInterval(() => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions"] });
@@ -364,13 +390,28 @@ export default function Executions() {
             <p className="text-sm text-muted-foreground">Run and monitor your automated tests in real browsers</p>
           </div>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-run-execution">
-              <Play className="h-4 w-4 mr-2" />
-              Run Tests
-            </Button>
-          </DialogTrigger>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => scanMutation.mutate()}
+            disabled={scanMutation.isPending}
+            data-testid="button-scan-screen"
+            title="Capture JDE Application/Form/Object metadata from the live browser and seed the Object Repository. Start an execution first."
+          >
+            {scanMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <ScanLine className="h-4 w-4 mr-2" />
+            )}
+            Scan Screen
+          </Button>
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-run-execution">
+                <Play className="h-4 w-4 mr-2" />
+                Run Tests
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-h-[85vh] overflow-hidden flex flex-col">
             <DialogHeader>
               <DialogTitle>Start Test Execution</DialogTitle>
@@ -609,6 +650,7 @@ export default function Executions() {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {runningExecutions.length > 0 && (

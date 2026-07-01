@@ -902,10 +902,32 @@ export class SQLiteStorage implements IStorage {
 
   async createResult(result: InsertTestResult): Promise<TestResult> {
     const id = randomUUID();
+    // ── FK-SAFETY ────────────────────────────────────────────────────────────
+    // test_results has FKs to BOTH test_executions(id) and test_cases(id). If the
+    // referenced test case was deleted/regenerated (orphaned id) the INSERT throws
+    // "FOREIGN KEY constraint failed", which previously aborted the ENTIRE run.
+    // Guard by nulling a test_case_id that no longer exists so a stray row can
+    // never kill the execution. The execution_id must exist (it was just created).
+    let safeTestCaseId: string | null = result.testCaseId ?? null;
+    if (safeTestCaseId) {
+      const tcExists = sqliteConnection
+        .prepare("SELECT 1 FROM test_cases WHERE id = ?")
+        .get(safeTestCaseId);
+      if (!tcExists) {
+        console.warn(`[SQLiteStorage] createResult: test_case_id ${safeTestCaseId} not found — storing result with NULL test_case_id to preserve the execution.`);
+        safeTestCaseId = null;
+      }
+    }
+    const execExists = sqliteConnection
+      .prepare("SELECT 1 FROM test_executions WHERE id = ?")
+      .get(result.executionId);
+    if (!execExists) {
+      throw new Error(`createResult: execution_id ${result.executionId} does not exist`);
+    }
     sqliteConnection.prepare(`
       INSERT INTO test_results (id, execution_id, test_case_id, status, duration, error_message, screenshot, step_screenshots, video, network_logs, performance_metrics, logs, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, result.executionId, result.testCaseId, result.status || 'pending', result.duration || null,
+    `).run(id, result.executionId, safeTestCaseId, result.status || 'pending', result.duration || null,
       result.errorMessage || null, result.screenshot || null,
       result.stepScreenshots ? JSON.stringify(result.stepScreenshots) : null,
       result.video || null, result.networkLogs ? JSON.stringify(result.networkLogs) : null,

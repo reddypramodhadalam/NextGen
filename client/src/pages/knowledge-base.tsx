@@ -130,7 +130,10 @@ const ACCEPTED_FILE_EXTENSIONS =
   ".pptx,.ppt,.pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.bmp,.webp,.txt,.md,.csv";
 
 const MODULE_TAGS = [
-  // JDE
+  // JDE — whole functional-spec / customization sets (all modules)
+  { value: "JDE_CUSTOMIZATION", label: "JDE - Customization Spec (All Modules)", app: "JDE" },
+  { value: "JDE_FUNCTIONAL_SPEC", label: "JDE - Functional Spec (All Modules)", app: "JDE" },
+  // JDE — specific modules
   { value: "JDE_PROCUREMENT", label: "JDE - Procurement", app: "JDE" },
   { value: "JDE_ORDER_MANAGEMENT", label: "JDE - Order Management", app: "JDE" },
   { value: "JDE_ACCOUNTS_PAYABLE", label: "JDE - Accounts Payable", app: "JDE" },
@@ -307,6 +310,30 @@ export default function KnowledgeBasePage() {
     },
   });
 
+  // SharePoint SSO browser-crawl mutation (no token)
+  const sharepointSsoMutation = useMutation({
+    mutationFn: async (data: any) => {
+      return apiRequest("POST", "/api/knowledge/sources/sharepoint-sso", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/knowledge/sources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/knowledge/stats"] });
+      setIsAddSourceOpen(false);
+      toast({
+        title: "SharePoint SSO Crawl Started",
+        description:
+          "A Chrome window will open — sign in once if prompted. Discovered files appear in the Sources tab.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "SharePoint SSO Error",
+        description: error.message || "SharePoint SSO crawl failed",
+        variant: "destructive",
+      });
+    },
+  });
+
   // Delete source mutation
   const deleteSourceMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -384,7 +411,8 @@ export default function KnowledgeBasePage() {
             onSubmit={(data) => createSourceMutation.mutate(data)}
             onUpload={(formData) => uploadSourceMutation.mutate(formData)}
             onSharepoint={(data) => sharepointMutation.mutate(data)}
-            isLoading={createSourceMutation.isPending || uploadSourceMutation.isPending || sharepointMutation.isPending}
+            onSharepointSso={(data) => sharepointSsoMutation.mutate(data)}
+            isLoading={createSourceMutation.isPending || uploadSourceMutation.isPending || sharepointMutation.isPending || sharepointSsoMutation.isPending}
           />
         </Dialog>
       </div>
@@ -831,11 +859,13 @@ function AddSourceDialog({
   onSubmit,
   onUpload,
   onSharepoint,
+  onSharepointSso,
   isLoading,
 }: {
   onSubmit: (data: Partial<KnowledgeSource>) => void;
   onUpload: (formData: FormData) => void;
   onSharepoint: (data: any) => void;
+  onSharepointSso: (data: any) => void;
   isLoading: boolean;
 }) {
   const [tab, setTab] = useState<"url" | "file" | "sharepoint">("url");
@@ -854,6 +884,10 @@ function AddSourceDialog({
   const [file, setFile] = useState<File | null>(null);
   const [uploadName, setUploadName] = useState("");
   const [uploadModuleTag, setUploadModuleTag] = useState("");
+  // Free-text application identity (e.g. "Model N"). For non-ERP specs this lets
+  // the knowledge be stored under its OWN application name instead of a generic
+  // "CUSTOM", so it can later be retrieved/scoped precisely during generation.
+  const [uploadAppName, setUploadAppName] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // SharePoint form state
@@ -866,6 +900,11 @@ function AddSourceDialog({
     application: "" as "JDE" | "SAP" | "SALESFORCE" | "CUSTOM" | "",
     applicationScope: [] as string[],
     maxFiles: 50,
+    // SSO browser-crawl mode (no token). "sso" = persistent Chrome profile,
+    // "graph" = Microsoft Graph + OAuth token (SharePoint Online only).
+    mode: "sso" as "sso" | "graph",
+    libraryUrl: "",
+    recursive: true,
   });
 
   // Preview state
@@ -923,7 +962,13 @@ function AddSourceDialog({
       fd.append("name", uploadName || file.name);
       if (uploadModuleTag) fd.append("moduleTag", uploadModuleTag);
       const mt = MODULE_TAGS.find((m) => m.value === uploadModuleTag);
-      if (mt?.app) fd.append("application", mt.app);
+      // Same application-identity resolution as the real upload so the preview
+      // reflects exactly what will be stored (typed name wins, nice casing).
+      const previewApp =
+        uploadAppName.trim() ||
+        mt?.app ||
+        undefined;
+      if (previewApp) fd.append("application", previewApp);
 
       const res = await fetch("/api/knowledge/preview", {
         method: "POST",
@@ -958,7 +1003,18 @@ function AddSourceDialog({
     fd.append("name", uploadName || file.name);
     fd.append("moduleTag", uploadModuleTag);
     const mt = MODULE_TAGS.find((m) => m.value === uploadModuleTag);
-    fd.append("application", mt?.app || "CUSTOM");
+    // Resolve the application identity:
+    //  1) a user-typed app name (e.g. "Model N") wins — stored with its nice
+    //     casing; the vector-index application filter is case-insensitive so it
+    //     still matches on retrieval
+    //  2) else the module's mapped ERP app (JDE/SAP/SALESFORCE)
+    //  3) else CUSTOM
+    const resolvedApp =
+      uploadAppName.trim() ||
+      mt?.app ||
+      "CUSTOM";
+    fd.append("application", resolvedApp);
+    if (uploadAppName.trim()) fd.append("appDisplayName", uploadAppName.trim());
     fd.append("sourceType", "FILE_UPLOAD");
     onUpload(fd);
   };
@@ -1149,6 +1205,26 @@ function AddSourceDialog({
               value={uploadName}
               onChange={(e) => setUploadName(e.target.value)}
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="uploadAppName" className="flex items-center gap-1.5">
+              Application Name
+              <span className="text-[11px] font-normal text-muted-foreground">
+                — the system this document describes
+              </span>
+            </Label>
+            <Input
+              id="uploadAppName"
+              placeholder="e.g., Model N, Workday, Coupa (leave blank for ERP modules)"
+              value={uploadAppName}
+              onChange={(e) => setUploadAppName(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              For non-ERP specs, name the app (e.g. <span className="font-medium">Model N</span>) so its
+              knowledge is stored under its own identity and can be precisely grounded during test
+              generation — instead of a generic "CUSTOM".
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -1417,6 +1493,163 @@ function AddSourceDialog({
 
         {/* SHAREPOINT TAB */}
         <TabsContent value="sharepoint" className="space-y-4 mt-4">
+          {/* Mode toggle: SSO browser (no token) vs Graph API (token) */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setSp({ ...sp, mode: "sso" })}
+              className={cn(
+                "rounded border p-3 text-left text-xs transition",
+                sp.mode === "sso"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary"
+                  : "border-border hover:bg-muted/50"
+              )}
+            >
+              <div className="flex items-center gap-2 font-medium text-sm">
+                <Database className="h-4 w-4" /> SSO Browser
+                <Badge variant="secondary" className="ml-auto">No token</Badge>
+              </div>
+              <p className="mt-1 text-muted-foreground">
+                Best for on-prem / SSO sites (e.g. worksites.baxter.com). Opens Chrome, you sign in once, then it crawls.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSp({ ...sp, mode: "graph" })}
+              className={cn(
+                "rounded border p-3 text-left text-xs transition",
+                sp.mode === "graph"
+                  ? "border-primary bg-primary/10 ring-1 ring-primary"
+                  : "border-border hover:bg-muted/50"
+              )}
+            >
+              <div className="flex items-center gap-2 font-medium text-sm">
+                <ExternalLink className="h-4 w-4" /> Graph API
+                <Badge variant="secondary" className="ml-auto">Token</Badge>
+              </div>
+              <p className="mt-1 text-muted-foreground">
+                For SharePoint Online. Needs an OAuth token with Sites.Read.All + Files.Read.All.
+              </p>
+            </button>
+          </div>
+
+          {sp.mode === "sso" ? (
+            /* ─────────────── SSO BROWSER CRAWL (no token) ─────────────── */
+            <div className="space-y-4">
+              <div className="rounded border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+                <strong>SSO Browser Crawl:</strong> Paste the SharePoint document-library link from your browser
+                (the URL with <code>RootFolder=…</code>). AITAS opens Chrome using the same profile as your JDE tests —
+                sign in once if prompted — then recursively downloads every PDF/PPT/DOCX/Image and runs each through the
+                ingestion pipeline. <strong>No token needed.</strong>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ssoName">Display Name</Label>
+                <Input
+                  id="ssoName"
+                  placeholder="e.g., JDE Supply Chain SOPs"
+                  value={sp.name}
+                  onChange={(e) => setSp({ ...sp, name: e.target.value })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ssoLibraryUrl">SharePoint Library URL</Label>
+                <Input
+                  id="ssoLibraryUrl"
+                  placeholder="https://worksites.baxter.com/sites/.../Forms/AllItems.aspx?RootFolder=/sites/.../SOP"
+                  value={sp.libraryUrl}
+                  onChange={(e) => setSp({ ...sp, libraryUrl: e.target.value })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Copy this straight from your browser's address bar while viewing the folder. The
+                  <code> RootFolder </code> part tells AITAS which folder to crawl.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-2">
+                  <Label htmlFor="ssoApp">Application</Label>
+                  <Select value={sp.application} onValueChange={(v: any) => setSp({ ...sp, application: v })}>
+                    <SelectTrigger><SelectValue placeholder="Select application" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="JDE">JDE</SelectItem>
+                      <SelectItem value="SAP">SAP</SelectItem>
+                      <SelectItem value="SALESFORCE">Salesforce</SelectItem>
+                      <SelectItem value="CUSTOM">Custom</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ssoMaxFiles">Max Files</Label>
+                  <Input
+                    id="ssoMaxFiles"
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={sp.maxFiles}
+                    onChange={(e) => setSp({ ...sp, maxFiles: parseInt(e.target.value) || 50 })}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ssoModuleTag">Module Tag</Label>
+                <Select value={sp.moduleTag} onValueChange={(v) => setSp({ ...sp, moduleTag: v })}>
+                  <SelectTrigger><SelectValue placeholder="Select module" /></SelectTrigger>
+                  <SelectContent>
+                    {MODULE_TAGS.map((tag) => (
+                      <SelectItem key={tag.value} value={tag.value}>
+                        {tag.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={sp.recursive}
+                  onChange={(e) => setSp({ ...sp, recursive: e.target.checked })}
+                />
+                Crawl subfolders recursively (recommended — your SOP folder has nested subfolders)
+              </label>
+
+              <DialogFooter>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (!sp.libraryUrl || !sp.application || !sp.moduleTag) return;
+                    onSharepointSso({
+                      name: sp.name || `SharePoint (SSO): ${sp.libraryUrl}`,
+                      libraryUrl: sp.libraryUrl,
+                      application: sp.application,
+                      moduleTag: sp.moduleTag,
+                      recursive: sp.recursive,
+                      maxFiles: sp.maxFiles,
+                    });
+                  }}
+                  disabled={isLoading || !sp.libraryUrl || !sp.application || !sp.moduleTag}
+                >
+                  {isLoading ? (
+                    <>
+                      <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                      Starting…
+                    </>
+                  ) : (
+                    <>
+                      <Database className="mr-2 h-4 w-4" />
+                      Start SSO Crawl
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+          /* ─────────────── GRAPH API CRAWL (token) ─────────────── */
+          <div className="space-y-4">
           <div className="rounded border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
             <strong>SharePoint Crawler:</strong> Recursively scans a SharePoint site, downloads every supported file (PDF/PPT/DOCX/Image), filters by application, and runs each file through the same ingestion pipeline. Each discovered file becomes its own source so you can track status.
           </div>
@@ -1575,6 +1808,8 @@ function AddSourceDialog({
               )}
             </Button>
           </DialogFooter>
+          </div>
+          )}
         </TabsContent>
         </div>
       </Tabs>

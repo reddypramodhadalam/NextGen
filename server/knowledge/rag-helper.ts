@@ -25,8 +25,15 @@ export interface RagQueryOptions {
   /** Top-K results. Default 6 - tuned to fit in a single LLM prompt without
    *  pushing out the system prompt or user requirement. */
   topK?: number;
-  /** Maximum number of characters per snippet (default 600) */
+  /** Maximum number of characters per snippet (default 1500). Raised from 600
+   *  so dense mapping-table / rule content in a retrieved chunk survives instead
+   *  of being clipped mid-table — matching Copilot's fuller context window. */
   snippetLength?: number;
+  /** Applications to DROP from results (post-retrieval, case-insensitive).
+   *  Use this to stop pre-seeded enterprise knowledge (e.g. JDE samples) from
+   *  polluting a different application's generation. e.g. a Model N / generic
+   *  web spec must never inherit "Log in to JDE" steps from JDE KB entries. */
+  excludeApplications?: string[];
 }
 
 export interface RagContext {
@@ -64,7 +71,7 @@ export async function buildRAGContextBlock(
 
   try {
     const topK = opts.topK ?? 6;
-    const snippetLength = opts.snippetLength ?? 600;
+    const snippetLength = opts.snippetLength ?? 1500;
     const ragResults = await ingestionEngine.retrieve(trimmed.slice(0, 2000), {
       application: opts.application,
       module: opts.module,
@@ -76,13 +83,27 @@ export async function buildRAGContextBlock(
       return empty;
     }
 
+    // Drop cross-application knowledge (e.g. pre-seeded JDE samples) so a
+    // different application's spec never inherits the wrong system's steps.
+    const exclude = new Set((opts.excludeApplications || []).map((a) => a.toUpperCase()));
+    const filtered = exclude.size
+      ? ragResults.filter((r) => !exclude.has((r.entry.metadata.application || "").toUpperCase()))
+      : ragResults;
+
+    if (filtered.length === 0) {
+      warnings.push(
+        `All ${ragResults.length} KB matches were excluded by application filter (${Array.from(exclude).join(", ")})`
+      );
+      return { ...empty, warnings };
+    }
+
     const lines: string[] = [
-      `\n=== RELEVANT KNOWLEDGE BASE CONTEXT (top ${ragResults.length} matches) ===`,
+      `\n=== RELEVANT KNOWLEDGE BASE CONTEXT (top ${filtered.length} matches) ===`,
     ];
     const topObjects: string[] = [];
     const sources = new Set<string>();
 
-    for (const r of ragResults) {
+    for (const r of filtered) {
       const meta = r.entry.metadata;
       const snippet = r.entry.chunkText.slice(0, snippetLength);
       lines.push(
@@ -97,7 +118,7 @@ export async function buildRAGContextBlock(
 
     return {
       blockText: lines.join("\n"),
-      resultCount: ragResults.length,
+      resultCount: filtered.length,
       topObjects,
       sources,
       warnings,
@@ -143,6 +164,15 @@ export async function retrieveStructuredKnowledge(
     });
     if (ragResults.length === 0) return [];
 
+    // Drop cross-application knowledge (e.g. pre-seeded JDE samples) so the
+    // deterministic fallback never builds "Log in to JDE" tests for a Model N
+    // or generic web spec.
+    const exclude = new Set((opts.excludeApplications || []).map((a) => a.toUpperCase()));
+    const scoped = exclude.size
+      ? ragResults.filter((r) => !exclude.has((r.entry.metadata.application || "").toUpperCase()))
+      : ragResults;
+    if (scoped.length === 0) return [];
+
     const out: Array<{
       application: string;
       module: string;
@@ -152,7 +182,7 @@ export async function retrieveStructuredKnowledge(
       facts: any;
     }> = [];
 
-    for (const r of ragResults) {
+    for (const r of scoped) {
       let facts: any = {};
       try {
         if (r.entry.knowledgeId) {

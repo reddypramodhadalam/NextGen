@@ -145,8 +145,14 @@ export class VectorIndex {
     const results: RetrievalResult[] = [];
 
     for (const entry of Array.from(this.entries.values())) {
-      // Apply filters
-      if (options.filterApplication && entry.metadata.application !== options.filterApplication.toUpperCase()) continue;
+      // Apply filters (application match is case-insensitive on BOTH sides so a
+      // free-text app identity like "Model N" still matches regardless of how it
+      // was cased at ingestion vs. at query time).
+      if (
+        options.filterApplication &&
+        (entry.metadata.application || "").toUpperCase() !== options.filterApplication.toUpperCase()
+      )
+        continue;
       if (options.filterModule && entry.metadata.module !== options.filterModule) continue;
       if (options.filterObjectName && entry.metadata.objectName !== options.filterObjectName) continue;
 

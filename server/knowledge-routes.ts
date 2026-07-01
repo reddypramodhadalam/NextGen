@@ -20,6 +20,7 @@ import {
 } from "../shared/knowledge-schema";
 import { ingestionEngine } from "./knowledge/ingestion-engine";
 import { vectorIndex } from "./knowledge/vector-index";
+import { resolveIngestionTarget, sha256, recordSourceFingerprint } from "./knowledge/idempotent-ingest";
 
 const router = Router();
 
@@ -212,19 +213,56 @@ router.post("/sources/upload", knowledgeUpload.single("file"), async (req: Reque
 
     const filename = file.originalname || "uploaded";
     const ext = nodePath.extname(filename).toLowerCase();
+    const displayName = name || filename;
 
-    // 1) Create the source record so the UI can poll status
-    const source = await knowledgeStorage.createKnowledgeSource({
-      name: name || filename,
-      sourceType: sourceType || "FILE_UPLOAD",
-      // source_url is NOT NULL in the DB — use a synthetic uri for uploads
-      sourceUrl: `file:///uploaded/${encodeURIComponent(filename)}`,
-      moduleTag,
-      application,
-      authType: "NONE",
-      status: "PENDING",
-      documentCount: 0,
-    } as any);
+    // ── IDEMPOTENT INGESTION ──────────────────────────────────────────────────
+    // Detect "same file uploaded again" (skip) vs "content changed" (re-ingest in
+    // place) so we never store duplicate records for the same document.
+    const checksum = sha256(file.buffer);
+    const decision = await resolveIngestionTarget(
+      { application, moduleTag, name: displayName },
+      checksum,
+      file.size
+    );
+
+    if (decision.action === "skip") {
+      console.log(`[KnowledgeBase] ⏭️  Upload skipped — ${decision.reason}: ${displayName}`);
+      return res.status(200).json({
+        ...decision.source,
+        skipped: true,
+        alreadyAvailable: true,
+        message: `Already available — ${decision.reason}. Document was not re-ingested.`,
+        filename,
+        fileSize: file.size,
+      });
+    }
+
+    // create / update / resume → we (re)use one source record.
+    let source: any;
+    if (decision.action === "create") {
+      source = await knowledgeStorage.createKnowledgeSource({
+        name: displayName,
+        sourceType: sourceType || "FILE_UPLOAD",
+        // source_url is NOT NULL in the DB — use a synthetic uri for uploads
+        sourceUrl: `file:///uploaded/${encodeURIComponent(filename)}`,
+        moduleTag,
+        application,
+        authType: "NONE",
+        status: "PENDING",
+        documentCount: 0,
+        checksum,
+        contentSize: file.size,
+      } as any);
+    } else {
+      source = decision.source;
+      console.log(`[KnowledgeBase] ♻️  Upload ${decision.action} — ${decision.reason}: ${displayName}`);
+      await knowledgeStorage.updateKnowledgeSource(source.id, {
+        status: "PENDING",
+        errorMessage: undefined,
+        checksum,
+        contentSize: file.size,
+      } as any);
+    }
 
     if (!source?.id) {
       return res.status(500).json({ error: "Failed to create source record" });
@@ -247,7 +285,9 @@ router.post("/sources/upload", knowledgeUpload.single("file"), async (req: Reque
         module: moduleReadable,
         moduleTag,
       })
-      .then((result) => {
+      .then(async (result) => {
+        // Persist the fingerprint so a future identical upload is skipped.
+        if (result.success) await recordSourceFingerprint(source.id, checksum, file.size);
         console.log(
           `[KnowledgeBase] ✅ Upload ingestion COMPLETE for ${filename} — ` +
           `${result.storage?.itemsStored ?? 0} items, success=${result.success}`
@@ -260,7 +300,11 @@ router.post("/sources/upload", knowledgeUpload.single("file"), async (req: Reque
     // 3) Respond immediately with the source so the UI can poll for status
     res.status(201).json({
       ...source,
-      message: "Upload accepted. Ingestion started.",
+      action: decision.action,
+      message:
+        decision.action === "create"
+          ? "Upload accepted. Ingestion started."
+          : `Existing document ${decision.action === "update" ? "updated" : "resumed"}. Re-ingestion started.`,
       filename,
       fileSize: file.size,
     });
@@ -711,6 +755,98 @@ router.post("/sources/sharepoint", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("[KnowledgeBase] SharePoint error:", error);
     res.status(500).json({ error: error.message || "SharePoint crawl failed" });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHAREPOINT SSO BROWSER CRAWLER (no token)
+// Crawls an on-prem / SSO-protected SharePoint library using the SAME persistent
+// Chrome profile the test executor uses for JDE SSO. The user signs in ONCE in the
+// opened browser; the crawler then enumerates + downloads + ingests every supported
+// file. Use this for sites Microsoft Graph cannot reach (e.g. worksites.baxter.com).
+// Body:
+//   {
+//     name: "JDE Supply Chain SOPs",
+//     libraryUrl: "https://worksites.baxter.com/sites/.../AllItems.aspx?RootFolder=/sites/.../SOP",
+//     application: "JDE",
+//     moduleTag: "JDE_SUPPLYCHAIN",
+//     recursive: true,
+//     maxFiles: 200
+//   }
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post("/sources/sharepoint-sso", async (req: Request, res: Response) => {
+  try {
+    const {
+      name,
+      libraryUrl,
+      application,
+      moduleTag,
+      recursive,
+      maxFiles,
+      maxDepth,
+    } = req.body || {};
+
+    if (!libraryUrl || !moduleTag || !application) {
+      return res.status(400).json({
+        error: "libraryUrl, application, and moduleTag are required",
+      });
+    }
+
+    // Basic URL sanity check so we fail fast instead of launching a browser for junk.
+    try {
+      // eslint-disable-next-line no-new
+      new URL(libraryUrl);
+    } catch {
+      return res.status(400).json({ error: "libraryUrl is not a valid URL" });
+    }
+
+    // 1) Create the parent source so the UI shows it as one entry.
+    const parentSource = await knowledgeStorage.createKnowledgeSource({
+      name: name || `SharePoint (SSO): ${libraryUrl}`,
+      sourceType: "SHAREPOINT",
+      sourceUrl: libraryUrl,
+      moduleTag,
+      application,
+      authType: "NONE", // session-cookie based; nothing is stored
+      status: "PENDING",
+      documentCount: 0,
+    } as any);
+
+    if (!parentSource.id) {
+      return res.status(500).json({ error: "Failed to create source record" });
+    }
+
+    // 2) Kick off the SSO crawl asynchronously (opens a headed Chrome window).
+    const { sharePointSsoCrawler } = await import("./knowledge/sharepoint-sso-crawler");
+    sharePointSsoCrawler
+      .crawlAndIngest(parentSource.id, {
+        libraryUrl,
+        application,
+        moduleTag,
+        recursive: recursive !== false,
+        maxFiles: typeof maxFiles === "number" ? maxFiles : undefined,
+        maxDepth: typeof maxDepth === "number" ? maxDepth : undefined,
+      })
+      .then((result) => {
+        console.log(
+          `[KnowledgeBase] SharePoint SSO crawl complete: ` +
+          `${result.filesIngested}/${result.filesFound} ingested, ${result.errors.length} errors`
+        );
+      })
+      .catch((err) => {
+        console.error("[KnowledgeBase] SharePoint SSO crawl crashed:", err);
+      });
+
+    // 3) Respond immediately — the UI polls for status.
+    res.status(201).json({
+      ...parentSource,
+      message:
+        "SharePoint SSO crawl started. A Chrome window will open — sign in once if prompted. " +
+        "Each discovered file will appear as a separate source.",
+    });
+  } catch (error: any) {
+    console.error("[KnowledgeBase] SharePoint SSO error:", error);
+    res.status(500).json({ error: error.message || "SharePoint SSO crawl failed" });
   }
 });
 

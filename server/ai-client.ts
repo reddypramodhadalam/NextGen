@@ -38,7 +38,8 @@ async function getAiSettings(): Promise<AiSettings> {
 async function callCustomLlm(
   settings: AiSettings,
   messages: Array<{ role: string; content: string }>,
-  systemPrompt?: string
+  systemPrompt?: string,
+  opts?: { timeoutMs?: number; maxAttempts?: number; maxTokens?: number }
 ): Promise<string> {
   const modelId = settings.bedrockModelId || "gpt-4";
   const endpoint = settings.bedrockEndpointUrl;
@@ -72,12 +73,11 @@ async function callCustomLlm(
   const requestBody = JSON.stringify({
     model: modelId,
     messages: openaiMessages,
-    // 32K accommodates 25-35 detailed, knowledge-driven test cases without the
-    // response being truncated mid-JSON (which forces a fall back to generic
-    // rule-based steps). Most modern LLMs (GPT-4o, Claude 3.5, Llama 3.1 70B+)
-    // support 8K-128K output. If your provider caps lower, override with the
-    // LLM_MAX_TOKENS env var.
-    max_tokens: parseInt(process.env.LLM_MAX_TOKENS || "32768", 10),
+    // Output length is the #1 driver of latency (~50 tok/s on the Baxter test
+    // gateway), so a per-call `opts.maxTokens` (used by the fail-fast, per-section
+    // test generator) takes precedence over the large global default. 32K is only
+    // for non-interactive/global flows that must not truncate a big JSON dump.
+    max_tokens: opts?.maxTokens ?? parseInt(process.env.LLM_MAX_TOKENS || "32768", 10),
     temperature: 0.7,
   });
 
@@ -87,63 +87,105 @@ async function callCustomLlm(
   };
 
   // Configurable timeout. Generating 15-20 detailed test cases can take 90-180s
-  // on smaller models. Default 180s; override with LLM_TIMEOUT_MS.
-  const timeoutMs = parseInt(process.env.LLM_TIMEOUT_MS || "180000", 10);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  // on smaller models. Default 180s; override with LLM_TIMEOUT_MS. A per-call
+  // `opts.timeoutMs` (used by the fail-fast test generator) takes precedence so
+  // interactive generation drops a hung gateway call quickly instead of waiting
+  // the full 5-minute healing/global budget.
+  const timeoutMs = opts?.timeoutMs ?? parseInt(process.env.LLM_TIMEOUT_MS || "180000", 10);
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: requestBody,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
+  // Transient gateway failures (502/503/504), rate limits (429) and network
+  // timeouts are common on hosted LLM gateways and usually succeed on retry.
+  // Retrying with exponential backoff keeps map-reduce sections and single-shot
+  // calls from collapsing to the generic rule-based fallback on a momentary blip
+  // (observed: intermittent 504 Gateway Time-out even on tiny requests).
+  const maxAttempts = Math.max(1, opts?.maxAttempts ?? parseInt(process.env.LLM_MAX_RETRIES || "3", 10));
+  const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+  const backoffFor = (attempt: number) => Math.min(8000, 500 * 2 ** (attempt - 1));
 
-  if (!response.ok) {
-    let errorText = await response.text();
-    // Sanitize error: if the remote API returned a JSON error, extract the message
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
     try {
-      const errJson = JSON.parse(errorText);
-      // Prefer common fields, otherwise stringify object
-      if (errJson.message) {
-        errorText = errJson.message;
-      } else if (errJson.error) {
-        errorText = typeof errJson.error === 'string' ? errJson.error : JSON.stringify(errJson.error);
-      } else if (errJson.errors) {
-        if (Array.isArray(errJson.errors)) {
-          errorText = errJson.errors.map((e: any) => (e.message || JSON.stringify(e))).join('; ');
-        } else {
-          errorText = JSON.stringify(errJson.errors);
-        }
-      } else {
-        // Fallback: stringify entire JSON so it's readable
-        errorText = JSON.stringify(errJson);
+      response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: requestBody,
+        signal: controller.signal,
+      });
+    } catch (fetchErr: any) {
+      // Network error or timeout abort — retryable.
+      clearTimeout(timeout);
+      lastErr =
+        fetchErr?.name === "AbortError"
+          ? new Error(`LLM request timed out after ${timeoutMs}ms`)
+          : fetchErr;
+      if (attempt < maxAttempts) {
+        const backoff = backoffFor(attempt);
+        console.warn(`[AI] LLM call failed (attempt ${attempt}/${maxAttempts}): ${lastErr.message}. Retrying in ${backoff}ms...`);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
       }
-    } catch {
-      // errorText is plain text — use as-is but truncate if very long
-      if (errorText && errorText.length > 300) errorText = errorText.substring(0, 300) + "...";
+      throw lastErr;
+    } finally {
+      clearTimeout(timeout);
     }
-    throw new Error(`LLM API error: ${response.status} - ${errorText}`);
+
+    if (!response.ok) {
+      let errorText = await response.text();
+      // Sanitize error: if the remote API returned a JSON error, extract the message
+      try {
+        const errJson = JSON.parse(errorText);
+        // Prefer common fields, otherwise stringify object
+        if (errJson.message) {
+          errorText = errJson.message;
+        } else if (errJson.error) {
+          errorText = typeof errJson.error === 'string' ? errJson.error : JSON.stringify(errJson.error);
+        } else if (errJson.errors) {
+          if (Array.isArray(errJson.errors)) {
+            errorText = errJson.errors.map((e: any) => (e.message || JSON.stringify(e))).join('; ');
+          } else {
+            errorText = JSON.stringify(errJson.errors);
+          }
+        } else {
+          // Fallback: stringify entire JSON so it's readable
+          errorText = JSON.stringify(errJson);
+        }
+      } catch {
+        // errorText is plain text — use as-is but truncate if very long
+        if (errorText && errorText.length > 300) errorText = errorText.substring(0, 300) + "...";
+      }
+
+      // Retry transient gateway/rate-limit statuses; fail fast on 4xx auth/validation.
+      if (RETRYABLE_STATUS.has(response.status) && attempt < maxAttempts) {
+        const backoff = backoffFor(attempt);
+        console.warn(`[AI] LLM gateway ${response.status} (attempt ${attempt}/${maxAttempts}). Retrying in ${backoff}ms...`);
+        lastErr = new Error(`LLM API error: ${response.status} - ${errorText}`);
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
+      }
+      throw new Error(`LLM API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    // Handle OpenAI-compatible response format
+    if (data.choices && Array.isArray(data.choices) && data.choices.length > 0) {
+      return data.choices[0]?.message?.content || "";
+    }
+
+    // Fallback for Anthropic-style response
+    if (data.content && Array.isArray(data.content) && data.content.length > 0) {
+      return data.content[0].text || "";
+    }
+
+    return "";
   }
 
-  const data = await response.json();
-
-  // Handle OpenAI-compatible response format
-  if (data.choices && Array.isArray(data.choices) && data.choices.length > 0) {
-    return data.choices[0]?.message?.content || "";
-  }
-
-  // Fallback for Anthropic-style response
-  if (data.content && Array.isArray(data.content) && data.content.length > 0) {
-    return data.content[0].text || "";
-  }
-
-  return "";
+  // Exhausted all retry attempts.
+  throw lastErr || new Error("LLM API error: exhausted retries");
 }
 
 export type ChatMessage = {
@@ -151,8 +193,22 @@ export type ChatMessage = {
   content: string;
 };
 
+/** Per-call overrides so interactive flows (e.g. test generation) can fail fast
+ *  on a slow/flaky gateway instead of inheriting the long global healing budget. */
+export type ChatOptions = {
+  /** Abort a single attempt after this many ms. */
+  timeoutMs?: number;
+  /** Total attempts including the first (transient errors are retried). */
+  maxAttempts?: number;
+  /** Cap the model's output tokens for THIS call. Output length is the single
+   *  biggest driver of latency (~50 tok/s on the Baxter gateway), so interactive
+   *  generation caps this low (right-sized per section) to finish well under the
+   *  per-call timeout instead of trying to emit a 20K-token exhaustive dump. */
+  maxTokens?: number;
+};
+
 export interface AiClient {
-  chat(messages: ChatMessage[], systemPrompt?: string): Promise<string>;
+  chat(messages: ChatMessage[], systemPrompt?: string, opts?: ChatOptions): Promise<string>;
   isUsingCustomLlm(): boolean;
 }
 
@@ -174,7 +230,7 @@ class OpenAiClient implements AiClient {
     });
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
+  async chat(messages: ChatMessage[], systemPrompt?: string, opts?: ChatOptions): Promise<string> {
     // If no API key, reject immediately so fallback kicks in
     if (!this.hasApiKey) {
       throw new Error("Missing credentials: OPENAI_API_KEY not configured");
@@ -194,10 +250,10 @@ class OpenAiClient implements AiClient {
       model: "gpt-4o",
       messages: openaiMessages,
       temperature: 0.7,
-      // Match the custom LLM client - large enough for 25-35 detailed test cases
-      // so the JSON response isn't truncated mid-stream.
-      max_tokens: parseInt(process.env.LLM_MAX_TOKENS || "32768", 10),
-    });
+      // A per-call cap (interactive generation) takes precedence; otherwise the
+      // large global default avoids truncating a big JSON dump.
+      max_tokens: opts?.maxTokens ?? parseInt(process.env.LLM_MAX_TOKENS || "32768", 10),
+    }, opts?.timeoutMs ? { timeout: opts.timeoutMs } : undefined);
 
     return response.choices[0]?.message?.content || "";
   }
@@ -214,9 +270,9 @@ class CustomLlmClient implements AiClient {
     this.settings = settings;
   }
 
-  async chat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
+  async chat(messages: ChatMessage[], systemPrompt?: string, opts?: ChatOptions): Promise<string> {
     const filteredMessages = messages.filter((m) => m.role !== "system");
-    return callCustomLlm(this.settings, filteredMessages, systemPrompt);
+    return callCustomLlm(this.settings, filteredMessages, systemPrompt, opts);
   }
 
   isUsingCustomLlm(): boolean {

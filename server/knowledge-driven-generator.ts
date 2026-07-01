@@ -137,7 +137,7 @@ function buildFunctionalSteps(item: KnowledgeItem, lc: LabelCtx): NarrativeStep[
   const steps: NarrativeStep[] = [];
 
   steps.push({
-    step: `Log in to ${lc.app} and open the ${lc.module} module`,
+    step: `Open the ${lc.module} module`,
     expected: `The ${lc.module} module loads successfully and the user has access to ${obj}`,
   });
 
@@ -422,6 +422,20 @@ export function generateKnowledgeDrivenTests(
       const steps = builder(item, lc);
       if (!steps || steps.length === 0) continue;
 
+      // GUARANTEE a "Log in to <System>" first step on every test case (except
+      // pure API tests, which authenticate by token). This makes generated
+      // suites read "1. Log in to Model N", "2. ..." regardless of test type.
+      const stepsWithLogin: NarrativeStep[] =
+        type === "api"
+          ? steps
+          : [
+              {
+                step: `Log in to ${lc.app}`,
+                expected: `User logs in to ${lc.app} successfully and the landing page / home dashboard is displayed`,
+              },
+              ...steps,
+            ];
+
       caseNum++;
       const obj = humanize(item.objectName);
       const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
@@ -439,7 +453,7 @@ export function generateKnowledgeDrivenTests(
           item.facts.description ||
           `${typeLabel} test for ${obj} derived from ${item.application}/${item.module} knowledge`,
         preconditions: buildPreconditions(item.facts),
-        steps,
+        steps: stepsWithLogin,
         priority,
         testType: type === "e2e" ? "e2e" : type,
         reasoning: `Grounded in uploaded knowledge "${item.objectName}" (${item.application}/${item.module}); validates the documented ${type} behaviour with real business flow and expected results.`,

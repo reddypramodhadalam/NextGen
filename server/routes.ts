@@ -31,7 +31,8 @@ import {
   storeTestResult,
   deleteReportAnalytics,
 } from './reportAnalytics';
-import { APP_PROFILES, APP_PROFILE_CATEGORIES } from "./app-profiles";
+import { APP_PROFILES, APP_PROFILE_CATEGORIES, normalizeAppType, buildScriptGenGuidance } from "./app-profiles";
+import { jdeObjectStore } from "./jde-object-store";
 import { sendTestNotification } from "./notifications";
 import { salesforceExecutor, type SalesforceConfig } from "./salesforce-executor";
 import { jdeExecutor, JDEAisClient, type JDEConfig } from "./jde-executor";
@@ -59,6 +60,20 @@ import {
   generateRuleBasedScript,
   generateCombinedRuleBasedScript as generateRuleBasedCombinedScript,
 } from "./test-generation-rules";
+// STATIC imports for the test-generation hot path. These were previously loaded
+// with lazy `await import()` INSIDE the request handler — but under `tsx` the
+// esbuild service can die during a long (~180s) AI fetch, so the first runtime
+// transform of these modules threw "Error: The service is no longer running"
+// and crashed the fallback. Importing statically transpiles them at boot, so
+// the rule-based / knowledge-driven fallback can never fail this way again.
+import {
+  generateKnowledgeDrivenTests,
+  hasUsableKnowledge,
+} from "./knowledge-driven-generator";
+import {
+  buildRAGContextBlock,
+  retrieveStructuredKnowledge,
+} from "./knowledge/rag-helper";
 import {
   buildJDESystemPrompt,
   extractJDEObjectsFromText,
@@ -80,6 +95,7 @@ import {
 } from "./jde-rule-based-generator";
 import knowledgeBaseRoutes from "./knowledge-routes";
 import governanceRoutes from "./governance-routes";
+import learningRoutes from "./learning-routes";
 import { auditLog, getGovernanceMode } from "./governance/rules-engine";
 import {
   requireApprovedTestCases,
@@ -141,18 +157,32 @@ const generateTestsSchema = z.object({
   dataVariations: z.string().optional(),
   environment: z.string().optional(),
   targetUrl: z.string().optional(),
+  // Raw text of an uploaded spec document (DOCX/PDF). When present, this is the
+  // PRIMARY grounding source — generation must follow THIS document, not
+  // pre-seeded Knowledge Base samples from other systems.
+  specText: z.string().optional(),
+  // AI Knowledge Hub gate. When FALSE (default), NO Knowledge Base / RAG
+  // retrieval is performed — generation is grounded purely in the uploaded spec
+  // + requirement/context, so a fresh spec never inherits unrelated pre-seeded
+  // enterprise samples. When TRUE, RAG enrichment is enabled for the target app.
+  useKnowledgeHub: z.boolean().optional().default(false),
 });
 
 const generateScriptSchema = z.object({
   testCaseId: z.string().min(1, "Test case ID is required"),
   framework: z.enum(["playwright", "cypress", "selenium", "puppeteer"]),
   language: z.enum(["typescript", "javascript", "python", "java", "csharp"]),
+  // Application type so generation is app-aware (e.g. JDE → JDE-correct
+  // locators/waits, Salesforce → shadow DOM). Free-form; normalised server-side.
+  appType: z.string().optional(),
 });
 
 const generateCombinedScriptSchema = z.object({
   testCaseIds: z.array(z.string()).min(1, "At least one test case ID is required"),
   framework: z.enum(["playwright", "cypress", "selenium", "puppeteer"]).default("playwright"),
   language: z.enum(["typescript", "javascript", "python", "java", "csharp"]).default("typescript"),
+  // Application type so generation is app-aware (e.g. JDE → JDE-correct code).
+  appType: z.string().optional(),
 });
 
 const testDataParamSchema = z.object({
@@ -199,6 +229,372 @@ function validateBody<T>(schema: z.ZodSchema<T>, body: unknown): { success: true
   return { success: true, data: result.data };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SPEC COVERAGE ANALYSIS
+// ───────────────────────────────────────────────────────────────────────────
+// Copilot produces complete coverage because it reads the WHOLE document and
+// implicitly emits one test per requirement. AITAS was starved of context and
+// capped test counts arbitrarily. These helpers measure the ACTUAL requirement
+// density of a spec (enumerated IDs, field-mapping rows, numbered rules) so the
+// generator can (a) demand at-least-N coverage and (b) size the depth range to
+// the document instead of a fixed 15/25/40 heuristic.
+// ═══════════════════════════════════════════════════════════════════════════
+interface SpecCoverage {
+  requirementIds: number;   // distinct RR-001 / RC-014 / EX-007 / REQ-12 / BR-3 style IDs
+  mappingRows: number;      // rows in Source→Target / "maps to" mapping tables
+  numberedRules: number;    // "1. …", "2) …" enumerated rules / bullet requirements
+  total: number;            // best estimate of discrete requirements to cover
+}
+
+// Non-JDE-object requirement/rule IDs (RR-001, RC-14, EX-007, REQ-12, BR-3, …).
+// JDE object codes (P4310, F4311, R4210) use a single-letter prefix so they never
+// match [A-Z]{2,5}. We also drop common tech acronyms that look like IDs.
+function extractRequirementIds(text: string): string[] {
+  if (!text) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of text.match(/\b[A-Z]{2,5}[-_ ]?\d{1,4}\b/g) || []) {
+    const norm = m.replace(/[-_ ]/g, "").toUpperCase();
+    if (/^(SAP|EDI|XML|API|SQL|URL|UOM|PDF|CSV|ISO|UTC|GMT)\d+$/.test(norm)) continue;
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(m.trim());
+  }
+  return out;
+}
+
+function analyzeSpecCoverage(text: string): SpecCoverage {
+  if (!text) return { requirementIds: 0, mappingRows: 0, numberedRules: 0, total: 0 };
+
+  // 1) Enumerated requirement / rule IDs, e.g. RR-001, RC-14, EX-007, REQ-12.
+  const requirementIds = extractRequirementIds(text).length;
+
+  // 2) Field-mapping table rows. Markdown grid rows that contain an arrow/"maps to"
+  //    between two field-ish tokens: "| SZEDBT | → | ReceiptNo |" or "SZLITM -> Item".
+  const arrowRowMatches =
+    text.match(/(?:^|\n).*?(?:→|->|=>|\bmaps?\s+to\b|\bmapped\s+to\b).*/gi) || [];
+  // Also count Markdown table BODY rows (lines with >=2 pipes, excluding the
+  // ---|--- separator). When a mapping table uses plain columns (no arrow glyph)
+  // this is the only signal, so fall back to it when no arrow rows were found.
+  const pipeRows = (text.match(/^\s*\|.*\|.*\|\s*$/gm) || []).filter(
+    (r) => !/^\s*\|[\s:|-]+\|\s*$/.test(r), // skip separator rows ---|---
+  );
+  const mappingRows =
+    arrowRowMatches.length > 0 ? arrowRowMatches.length : pipeRows.length;
+
+  // 3) Numbered / bulleted rule lines: "1. ", "2) ", "- ", "• " at line start.
+  const numberedRules = (text.match(/^\s*(?:\d{1,3}[.)]\s+|[-•*]\s+)\S/gm) || []).length;
+
+  // Best estimate: prefer explicit IDs, then mapping rows, then numbered rules.
+  // Use the strongest single signal rather than summing (avoids double counting
+  // when the same requirement appears as both an ID and a numbered line).
+  const total = Math.max(requirementIds, mappingRows, Math.ceil(numberedRules * 0.6));
+
+  return {
+    requirementIds,
+    mappingRows,
+    numberedRules,
+    total: Number.isFinite(total) ? total : 0,
+  };
+}
+
+// Derive the "N-M test cases" range shown to the model. Honours the user's chosen
+// depth as a FLOOR, but never asks for fewer tests than the spec has discrete
+// requirements — so a 62-rule spec yields ~62+ tests, matching Copilot coverage.
+function resolveJdeDepthRange(
+  testDepth: string,
+  coverage: SpecCoverage,
+): string {
+  const base =
+    testDepth === "exhaustive" ? { min: 40, max: 60 }
+    : testDepth === "comprehensive" ? { min: 25, max: 35 }
+    : { min: 15, max: 20 };
+
+  const required = coverage.total;
+  if (required <= 0) return `${base.min}-${base.max}`;
+
+  // Floor at the number of discrete requirements; give the model headroom (+25%)
+  // so it can add validations/exceptions on top of the enumerated items.
+  const min = Math.max(base.min, required);
+  const max = Math.max(base.max, Math.ceil(required * 1.25));
+  return `${min}-${max}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAP-REDUCE SECTIONING
+// ───────────────────────────────────────────────────────────────────────────
+// A single 25-60 test-case request over a dense spec produces a very large LLM
+// response that frequently trips the provider gateway (observed: 504 Gateway
+// Time-out), which then falls back to 5 generic rule-based cases — the exact
+// "inferior to Copilot" symptom. Splitting the spec into coherent sections lets
+// us issue several SMALLER, FAST requests (each well under the gateway timeout),
+// then merge the detailed results. Each section keeps its enumerated IDs and
+// mapping rows together so per-section coverage stays complete.
+// ═══════════════════════════════════════════════════════════════════════════
+interface SpecSection {
+  title: string;
+  content: string;
+  coverage: SpecCoverage;
+}
+
+// How many discrete requirements one LLM call may cover. The provider gateway
+// times out (504) when asked to emit 25-60 fully-detailed test cases in a single
+// response, so we bound each map-reduce call to a small batch. Configurable via
+// env for providers with longer gateways.
+const MAX_REQ_PER_SECTION = parseInt(process.env.MAP_REDUCE_REQ_PER_SECTION || "10", 10);
+// Absolute ceiling on the number of map-reduce calls, so a huge spec can never
+// explode into dozens of sequential requests (root cause of a 40-min hang).
+// When exceeded, the per-section requirement budget is scaled up to fit.
+const MAX_MAP_REDUCE_SECTIONS = parseInt(process.env.MAP_REDUCE_MAX_SECTIONS || "12", 10);
+
+// Count the requirement "anchors" on a single line: requirement IDs (RR-001…),
+// a leading numbered rule ("3. …"), or a field-mapping row (arrow / pipe table).
+function anchorCountForLine(line: string): number {
+  const ids = extractRequirementIds(line).length;
+  if (ids > 0) return ids;
+  if (/^\s*\d{1,3}[.)]\s+\S/.test(line)) return 1;
+  if (/(?:→|->|=>|\bmaps?\s+to\b|\bmapped\s+to\b)/i.test(line)) return 1;
+  if (/^\s*\|.*\|.*\|\s*$/.test(line) && !/^\s*\|[\s:|-]+\|\s*$/.test(line)) return 1; // pipe table body row
+  return 0;
+}
+
+// Split a spec into sections that each cover at most maxReqPerSection
+// requirements, so every map-reduce LLM call produces a small, fast, gateway-safe
+// response — while PACKING small headings together so a 40-heading document does
+// not explode into 40+ calls. Sections are cut at heading boundaries first
+// (keeping RR / RC / EX groups coherent), consecutive small sections are then
+// packed up to the budget, oversized sections are split, and the total is capped
+// at MAX_MAP_REDUCE_SECTIONS (scaling the budget up if necessary).
+function splitSpecIntoSections(
+  text: string,
+  maxCharsPerSection = 12000,
+  maxReqPerSection = MAX_REQ_PER_SECTION,
+): SpecSection[] {
+  if (!text || !text.trim()) return [];
+
+  // If the whole document is small enough for one call, don't split at all.
+  const wholeCoverage = analyzeSpecCoverage(text);
+  if (wholeCoverage.total <= maxReqPerSection && text.trim().length <= maxCharsPerSection) {
+    return [{ title: "Full Specification", content: text.trim(), coverage: wholeCoverage }];
+  }
+
+  // Auto-scale the per-section budget so we never exceed the section cap.
+  const scaledReqPerSection = Math.max(
+    maxReqPerSection,
+    Math.ceil((wholeCoverage.total || 1) / MAX_MAP_REDUCE_SECTIONS),
+  );
+
+  const lines = text.split(/\r?\n/);
+
+  const isHeadingLine = (line: string): boolean => {
+    const l = line.trim();
+    if (!l) return false;
+    if (anchorCountForLine(l) > 0) return false;              // a requirement line is never a heading
+    if (/^#{1,3}\s+/.test(l)) return true;                    // markdown heading
+    if (/^\d{1,2}[.)]\s+[A-Z]/.test(l) && l.length < 90 && l.split(/\s+/).length <= 12) return true; // "2. Receipt Confirmation …"
+    if (/^[A-Z][A-Za-z0-9 /&()-]{4,70}$/.test(l) && !/[.,:;]$/.test(l) && l.split(/\s+/).length <= 10) {
+      return true;                                            // Title Case / ALLCAPS heading
+    }
+    return false;
+  };
+
+  // Pass 1: cut into raw heading sections.
+  type RawSection = { title: string; lines: string[] };
+  const raw: RawSection[] = [];
+  let current: RawSection = { title: "Overview", lines: [] };
+  for (const line of lines) {
+    const heading = isHeadingLine(line);
+    if (heading && current.lines.some((x) => x.trim())) {
+      raw.push(current);
+      current = { title: line.trim().replace(/^#{1,3}\s+/, ""), lines: [] };
+    } else if (heading && !current.lines.some((x) => x.trim())) {
+      current.title = line.trim().replace(/^#{1,3}\s+/, "");
+    } else {
+      current.lines.push(line);
+    }
+  }
+  if (current.lines.some((x) => x.trim())) raw.push(current);
+
+  // Normalise raw sections into {title, text, req, chars}.
+  const units = raw
+    .map((s) => {
+      const content = s.lines.join("\n").trim();
+      return { title: s.title, content, cov: analyzeSpecCoverage(content) };
+    })
+    .filter((u) => u.content.length > 0);
+
+  const packed: SpecSection[] = [];
+  const pushChunk = (title: string, content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    packed.push({ title, content: trimmed, coverage: analyzeSpecCoverage(trimmed) });
+  };
+
+  // Pass 2: PACK consecutive units into chunks bounded by the (scaled) req budget
+  // and the char budget. A single oversized unit is split on requirement-anchor
+  // boundaries. Zero-requirement prose is carried along as context but never
+  // forms a chunk on its own.
+  let bufTitle = "";
+  let buf = "";
+  let bufReq = 0;
+  const flushBuf = () => {
+    if (buf.trim()) pushChunk(bufTitle || "Section", buf);
+    buf = "";
+    bufReq = 0;
+    bufTitle = "";
+  };
+
+  const splitOversized = (u: { title: string; content: string }) => {
+    const uLines = u.content.split(/\r?\n/);
+    let sub: string[] = [];
+    let subReq = 0;
+    let part = 1;
+    const flushSub = () => {
+      const c = sub.join("\n").trim();
+      if (c) pushChunk(`${u.title} (part ${part++})`, c);
+      sub = [];
+      subReq = 0;
+    };
+    for (const line of uLines) {
+      const add = anchorCountForLine(line);
+      const prospectiveChars = sub.join("\n").length + line.length + 1;
+      if (sub.length > 0 && (subReq + add > scaledReqPerSection || prospectiveChars > maxCharsPerSection)) {
+        flushSub();
+      }
+      sub.push(line);
+      subReq += add;
+    }
+    flushSub();
+  };
+
+  for (const u of units) {
+    // Oversized single unit → flush buffer, split it alone.
+    if (u.cov.total > scaledReqPerSection || u.content.length > maxCharsPerSection) {
+      flushBuf();
+      splitOversized(u);
+      continue;
+    }
+    // Would adding this unit overflow the current buffer? Flush first.
+    const prospectiveChars = buf.length + u.content.length + 2;
+    if (buf && (bufReq + u.cov.total > scaledReqPerSection || prospectiveChars > maxCharsPerSection)) {
+      flushBuf();
+    }
+    buf = buf ? `${buf}\n\n${u.content}` : u.content;
+    bufReq += u.cov.total;
+    if (!bufTitle) bufTitle = u.title;
+  }
+  flushBuf();
+
+  // Pass 3: drop chunks that contain ZERO requirements (Table of Contents,
+  // Purpose, boilerplate) so we never spend an LLM call producing 0 tests —
+  // UNLESS every chunk is zero-req (a pure prose spec), in which case keep them.
+  const withReq = packed.filter((p) => p.coverage.total > 0);
+  const result = withReq.length > 0 ? withReq : packed;
+
+  // Final safety cap: if we still somehow exceed the ceiling, greedily merge
+  // trailing chunks so we never issue more than MAX_MAP_REDUCE_SECTIONS calls.
+  if (result.length <= MAX_MAP_REDUCE_SECTIONS) return result;
+  const capped: SpecSection[] = [];
+  const groupSize = Math.ceil(result.length / MAX_MAP_REDUCE_SECTIONS);
+  for (let i = 0; i < result.length; i += groupSize) {
+    const grp = result.slice(i, i + groupSize);
+    const content = grp.map((g) => g.content).join("\n\n");
+    capped.push({ title: grp[0].title, content, coverage: analyzeSpecCoverage(content) });
+  }
+  return capped;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FAIL-FAST GENERATION TUNING
+// ───────────────────────────────────────────────────────────────────────────
+// Interactive test generation must FEEL fast. On a slow/flaky gateway the only
+// levers are (a) short per-call timeouts so a hung request is dropped quickly,
+// (b) running the map-reduce sections in PARALLEL so wall-clock ≈ the slowest
+// call rather than the SUM of all calls, and (c) a fast PRE-FLIGHT probe + a
+// circuit breaker so a fully-dead gateway is reported in seconds instead of
+// grinding through every retry. All values are env-overridable.
+//   GEN_CALL_TIMEOUT_MS      – abort a single LLM attempt after N ms (default 150s)
+//   GEN_CALL_MAX_ATTEMPTS    – attempts per call incl. first (default 1; the
+//                              map-reduce deferred pass already provides a retry)
+//   GEN_CONCURRENCY          – how many section calls run at once (default 4)
+//   GEN_MAX_TOKENS           – output-token cap per generation call. Output length
+//                              is the #1 latency driver (~50 tok/s on the Baxter
+//                              gateway). Measured: 4096 → 2-3 detailed JDE tests in
+//                              ~55-70s; 6144 → ~5 tests in ~85s; 8192 → ~7-8 tests
+//                              but ~100-122s (too close to the cap). 6144 is the
+//                              sweet spot: good coverage with safe timeout headroom.
+//                              The old 32768 default made one call try to emit 20K+
+//                              tokens (>300s) and blow past the timeout every time.
+//   GEN_PREFLIGHT_TIMEOUT_MS – tiny "is the gateway alive?" probe timeout (20s)
+// ───────────────────────────────────────────────────────────────────────────
+const GEN_CALL_TIMEOUT_MS = parseInt(process.env.GEN_CALL_TIMEOUT_MS || "150000", 10);
+const GEN_CALL_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.GEN_CALL_MAX_ATTEMPTS || "1", 10));
+const GEN_CONCURRENCY = Math.max(1, parseInt(process.env.GEN_CONCURRENCY || "4", 10));
+const GEN_MAX_TOKENS = Math.max(512, parseInt(process.env.GEN_MAX_TOKENS || "6144", 10));
+const GEN_PREFLIGHT_TIMEOUT_MS = parseInt(process.env.GEN_PREFLIGHT_TIMEOUT_MS || "20000", 10);
+const GEN_CHAT_OPTS = { timeoutMs: GEN_CALL_TIMEOUT_MS, maxAttempts: GEN_CALL_MAX_ATTEMPTS, maxTokens: GEN_MAX_TOKENS };
+
+// Fast liveness probe: one tiny prompt with a short timeout. Returns true if the
+// gateway answered, false if it timed out / errored. Used to fail fast (and give
+// the user a clear "try again" message) instead of hanging on a dead gateway.
+async function probeAiGatewayFast(aiClient: { chat: Function }): Promise<boolean> {
+  const started = Date.now();
+  try {
+    await aiClient.chat(
+      [{ role: "user", content: "Reply with the single word: OK" }],
+      "You are a health probe. Reply with exactly: OK",
+      { timeoutMs: GEN_PREFLIGHT_TIMEOUT_MS, maxAttempts: 1 },
+    );
+    console.log(`[GEN-PREFLIGHT] Gateway alive (${Date.now() - started}ms)`);
+    return true;
+  } catch (err: any) {
+    console.warn(`[GEN-PREFLIGHT] Gateway NOT responding after ${Date.now() - started}ms: ${err?.message || err}`);
+    return false;
+  }
+}
+
+// Run async tasks with a bounded concurrency pool, preserving result order.
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const poolSize = Math.min(Math.max(1, limit), items.length || 1);
+  const runners: Promise<void>[] = [];
+  for (let p = 0; p < poolSize; p++) {
+    runners.push(
+      (async () => {
+        while (true) {
+          const i = next++;
+          if (i >= items.length) break;
+          results[i] = await worker(items[i], i);
+        }
+      })(),
+    );
+  }
+  await Promise.all(runners);
+  return results;
+}
+
+// De-dup key for merging map-reduce sections. The AI reliably supplies a UNIQUE
+// `testCaseId` (e.g. BAXTER_3PL_SO_RR001_NEG_001) but frequently omits `title`,
+// so the normalizer fills a POSITIONAL title ("Test Case 1") that repeats across
+// sections. De-duping on title therefore collapses distinct tests; we key on the
+// stable id first, then fall back to a content signature (objective + first step)
+// so genuinely-identical cases are still folded without nuking real ones.
+function dedupeTestCaseKey(tc: any): string {
+  const id = (tc?.testCaseId || tc?.id || "").toString().trim().toLowerCase();
+  if (id && !/^tc[_-]?\d{1,3}$/.test(id)) return `id:${id}`;
+  const objective = (tc?.objective || tc?.description || tc?.title || "").toString().trim().toLowerCase();
+  const firstStep = Array.isArray(tc?.steps) && tc.steps[0]
+    ? (typeof tc.steps[0] === "string" ? tc.steps[0] : tc.steps[0].step || "").toString().trim().toLowerCase()
+    : "";
+  const sig = `${objective}::${firstStep}`.slice(0, 200);
+  return sig.trim() === "::" ? `rand:${Math.random()}` : `sig:${sig}`;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -241,6 +637,14 @@ export async function registerRoutes(
   // ========================================
   app.use("/api/knowledge", knowledgeBaseRoutes);
   console.log("[Routes] Knowledge Base routes registered at /api/knowledge");
+
+  // ========================================
+  // LEARNING & ANALYTICS ROUTES (Agent 11)
+  // Execution Knowledge Store + repository versioning + anchor stats +
+  // evidence-aware adaptive locator re-ranking. Additive, advisory layer.
+  // ========================================
+  app.use("/api/learning", learningRoutes);
+  console.log("[Routes] Learning & Analytics routes registered at /api/learning");
 
   // ========================================
   // GOVERNANCE / HUMAN-IN-THE-LOOP ROUTES
@@ -3977,7 +4381,8 @@ export async function registerRoutes(
         title, description, appType, appHints, includeE2E, testDepth,
         appName, moduleName, businessUseCase, userRoles, appContext,
         functionalRequirements, nonFunctionalRequirements, apiDetails,
-        uiWorkflow, dataVariations, environment, targetUrl,
+        uiWorkflow, dataVariations, environment, targetUrl, specText,
+        useKnowledgeHub,
       } = validation.data;
 
       // SECOND CHECK: If appType is JDE, use JDE rule-based generator instead of generic
@@ -4066,14 +4471,48 @@ export async function registerRoutes(
       if (apiDetails)                ctx.push("\nAPI DETAILS:\n" + apiDetails);
       if (uiWorkflow)                ctx.push("\nUI WORKFLOW:\n" + uiWorkflow);
       if (dataVariations)            ctx.push("\nDATA VARIATIONS / CONSTRAINTS:\n" + dataVariations);
+      // The uploaded specification is the AUTHORITATIVE source. Put it last and
+      // label it strongly so the AI grounds every test in THIS document rather
+      // than in unrelated KB samples. Cap length generously so dense specs with
+      // large field-mapping tables (60+ rows) survive into the prompt intact —
+      // this is what lets AITAS match Copilot's row-by-row coverage.
+      const GENERIC_SPEC_CHAR_CAP = 60000;
+      if (specText && specText.trim()) {
+        const specForPrompt = specText.trim().slice(0, GENERIC_SPEC_CHAR_CAP);
+        const coverage = analyzeSpecCoverage(specText);
+        if (coverage.total > 0) {
+          ctx.push(
+            "\n=== MANDATORY COVERAGE RULES ===\n" +
+            "1. Read the FULL specification below end-to-end before writing any test.\n" +
+            "2. Generate AT LEAST ONE test case per enumerated requirement/rule ID (e.g. RR-001, RC-014, EX-007) and cite the ID in the title.\n" +
+            "3. For every field-mapping table row (Source→Target / 'maps to'), emit one verification test asserting the source value lands in the exact target field/tag.\n" +
+            "4. Cover happy-path, validations, boundaries and each documented exception as separate tests.\n" +
+            `5. This document contains ~${coverage.total} discrete requirement(s) (IDs:${coverage.requirementIds}, mapping rows:${coverage.mappingRows}, numbered rules:${coverage.numberedRules}) — do NOT under-cover.`
+          );
+        }
+        ctx.push(
+          "\n=== UPLOADED SPECIFICATION (AUTHORITATIVE — derive ALL tests from THIS document) ===\n" +
+          specForPrompt +
+          (specText.length > GENERIC_SPEC_CHAR_CAP ? "\n...[truncated — process everything above]" : "")
+        );
+      }
       const structuredContext = ctx.join("\n");
 
       // ───────────────────────────────────────────────────────────────────────
-      // RAG RETRIEVAL: pull the top-K most relevant knowledge items from the
-      // unified Knowledge Base (PPT/PDF/Image/URL ingested content).
+      // RAG RETRIEVAL — GATED BY THE "AI KNOWLEDGE HUB" TOGGLE.
+      //
+      // useKnowledgeHub === false (default): skip the Knowledge Base entirely.
+      //   Generation is grounded ONLY in the uploaded spec + requirement/context,
+      //   so a fresh functional spec (e.g. Model N) can never inherit unrelated
+      //   pre-seeded JDE/SAP/Salesforce samples. This is the safe default.
+      //
+      // useKnowledgeHub === true: pull the top-K most relevant knowledge items
+      //   from the unified Knowledge Base and enrich the prompt (RAG).
+      // (buildRAGContextBlock / retrieveStructuredKnowledge are statically
+      //  imported at the top of this file — never lazy-load them here.)
       // ───────────────────────────────────────────────────────────────────────
-      const { buildRAGContextBlock, retrieveStructuredKnowledge } = await import("./knowledge/rag-helper");
-      const ragQuery = [title, description, moduleName, appName, businessUseCase, functionalRequirements]
+      const knowledgeHubEnabled = useKnowledgeHub === true;
+      const ragQuery = [title, description, moduleName, appName, businessUseCase, functionalRequirements, specText]
         .filter(Boolean)
         .join(" ");
       const ragApplication =
@@ -4081,24 +4520,48 @@ export async function registerRoutes(
         : appType === "salesforce" ? "SALESFORCE"
         : appType?.startsWith("sap") ? "SAP"
         : undefined;
-      const ragContext = await buildRAGContextBlock(ragQuery, {
-        application: ragApplication,
-        module: moduleName,
-        topK: 6,
-      });
-      if (ragContext.resultCount > 0) {
-        console.log(`[GENERATE-TESTS] Injected ${ragContext.resultCount} RAG results (objects: ${ragContext.topObjects.join(", ")})`);
-      }
-      const structuredContextWithRAG = structuredContext + ragContext.blockText;
+      // When the target is NOT one of the pre-seeded enterprise systems, exclude
+      // their sample knowledge so a Model N / generic web spec never inherits
+      // "Log in to JDE" style steps from keyword-matched JDE/SAP/Salesforce KB
+      // entries. This is the root cause of wrong-system tests in the fallback.
+      const ENTERPRISE_KB_APPS = ["JDE", "SAP", "SALESFORCE"];
+      const ragExcludeApplications = ragApplication
+        ? undefined
+        : ENTERPRISE_KB_APPS;
 
-      // Also fetch the FULL structured facts so the deterministic fallback can
-      // build detailed functional test cases from the uploaded knowledge instead
-      // of generic boilerplate when the AI path is unavailable.
-      const structuredKnowledge = await retrieveStructuredKnowledge(ragQuery, {
-        application: ragApplication,
-        module: moduleName,
-        topK: 8,
-      });
+      // Empty defaults used when the Knowledge Hub is OFF.
+      let ragContext: { blockText: string; resultCount: number; topObjects: string[]; warnings?: string[] } =
+        { blockText: "", resultCount: 0, topObjects: [], warnings: [] };
+      let structuredKnowledge: any[] = [];
+
+      if (knowledgeHubEnabled) {
+        ragContext = await buildRAGContextBlock(ragQuery, {
+          application: ragApplication,
+          module: moduleName,
+          topK: 12,
+          excludeApplications: ragExcludeApplications,
+        });
+        if (ragContext.resultCount > 0) {
+          console.log(`[GENERATE-TESTS] Knowledge Hub ON — injected ${ragContext.resultCount} RAG results (objects: ${ragContext.topObjects.join(", ")})`);
+        }
+        if (ragContext.warnings && ragContext.warnings.length > 0) {
+          ragContext.warnings.forEach((w) => console.warn(`[GENERATE-TESTS] RAG: ${w}`));
+        }
+
+        // Also fetch the FULL structured facts so the deterministic fallback can
+        // build detailed functional test cases from the uploaded knowledge
+        // instead of generic boilerplate when the AI path is unavailable.
+        structuredKnowledge = await retrieveStructuredKnowledge(ragQuery, {
+          application: ragApplication,
+          module: moduleName,
+          topK: 12,
+          excludeApplications: ragExcludeApplications,
+        });
+      } else {
+        console.log("[GENERATE-TESTS] Knowledge Hub OFF — grounding generation in uploaded spec + requirement only (no RAG).");
+      }
+
+      const structuredContextWithRAG = structuredContext + ragContext.blockText;
 
       // Domain-specific instructions
       const domainMap: Record<string, string> = {
@@ -4112,6 +4575,12 @@ export async function registerRoutes(
       const domainBlock = domainMap[appType || "web"] || (appHints ? "PLATFORM: " + appHints : "");
 
       const e2eNote = includeE2E ? " -- REQUIRED (includeE2E=true)" : "";
+
+      // Human-readable target system name for prompt directives (e.g. "Model N").
+      // Prefer the explicit Architect "Application Name", then the app type label.
+      const systemDisplayName =
+        (appName && appName.trim()) ? appName.trim()
+        : (appType ? appType.toUpperCase() : "the application");
 
       // Use JDE-specific system prompt if appType is "jde"
       let systemPrompt: string;
@@ -4140,26 +4609,137 @@ export async function registerRoutes(
         "Include E2E Tests: " + (includeE2E ? "YES -- mandatory" : "YES -- at least 1"),
         appType ? ("Application Type: " + appType.toUpperCase()) : "",
         "",
+        "=== MANDATORY STEP & GROUNDING RULES ===",
+        "1. The target system is \"" + systemDisplayName + "\". Every test case's FIRST step MUST be an explicit login to this exact system, e.g. \"Log in to " + systemDisplayName + "\" (the only exception is pure API tests, which authenticate via token/header). NEVER write \"Log in to JDE\", \"Log in to Salesforce\", or any other system unless that IS the target system above.",
+        "2. Steps must be numbered and atomic: step 1 = login, then navigate, then the feature actions, then assertions. Use the real feature/field/module names from the requirement and the UPLOADED SPECIFICATION above.",
+        "3. Derive ALL functionality STRICTLY from the requirement and the uploaded specification. Do NOT invent objects, transaction codes, or flows from other enterprise systems that are not in this document.",
+        (knowledgeHubEnabled
+          ? "4. Knowledge Hub is ENABLED: you MAY enrich tests with the retrieved knowledge above, but the uploaded specification remains authoritative on conflicts."
+          : "4. Knowledge Hub is DISABLED: rely ONLY on the requirement and uploaded specification — no outside/seeded domain knowledge."),
+        "",
         "Apply your full domain expertise. Cover ALL 10 required categories. Output ONLY valid JSON.",
       ].filter(l => l !== null).join("\n");
 
       // Try AI first, fall back to rule-based if AI fails or is not configured
       let generatedResult: { testCases: any[]; generatedBy: string; coverageSummary?: any } | null = null;
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // MAP-REDUCE for dense specs (same rationale as the JDE endpoint): split a
+      // large spec into sections and generate each in a smaller, fast call so the
+      // provider gateway never times out on one giant response. Only kicks in
+      // when a spec was uploaded AND it is requirement-dense.
+      // ═══════════════════════════════════════════════════════════════════════
+      const genericCoverage = specText ? analyzeSpecCoverage(specText) : { requirementIds: 0, mappingRows: 0, numberedRules: 0, total: 0 };
+      const genericSections = specText ? splitSpecIntoSections(specText.trim().slice(0, GENERIC_SPEC_CHAR_CAP)) : [];
+      const genericUseMapReduce = genericCoverage.total >= 12 && genericSections.length >= 1;
+
+      const buildGenericSectionPrompt = (section: SpecSection, idx: number): string => [
+        "Generate a comprehensive enterprise-grade test suite for ONE SECTION of the following requirement.",
+        "",
+        "=== PRIMARY REQUIREMENT ===",
+        "Title: " + (title || "Untitled"),
+        "Description: " + description,
+        "",
+        "=== ARCHITECT CONTEXT ===",
+        structuredContext || "(No additional context provided)",
+        "",
+        `=== SPECIFICATION SECTION: ${section.title || `Section ${idx + 1}`} (AUTHORITATIVE — derive tests ONLY from THIS section) ===`,
+        section.content,
+        "",
+        "=== MANDATORY COVERAGE & GROUNDING RULES ===",
+        `1. The target system is "${systemDisplayName}". Every test case's FIRST step MUST be an explicit login to this exact system (except pure API tests).`,
+        "2. Generate AT LEAST ONE test case for every enumerated requirement/rule ID (e.g. RR-001, RC-014, EX-007) that appears in THIS section, and cite the ID in the title.",
+        "3. For every field-mapping table row (Source→Target / 'maps to') in THIS section, emit one verification test asserting the source value lands in the exact target field/tag.",
+        "4. Steps must be numbered, atomic, and each MUST have an explicit expected result.",
+        "5. Derive functionality STRICTLY from THIS section — do not invent requirements from other sections or other systems.",
+        "",
+        "Output ONLY valid JSON with a testCases array.",
+      ].join("\n");
+
       try {
         const aiClient = await getAiClient();
-        if (aiClient) {
+        // Pre-flight once: a dead gateway short-circuits to fallback in ~20s
+        // instead of grinding through map-reduce + retries for minutes.
+        const genGatewayAlive = aiClient ? await probeAiGatewayFast(aiClient) : false;
+        if (aiClient && !genGatewayAlive) {
+          console.warn("[GENERATE-TESTS] ⚡ Pre-flight failed — LLM gateway is not responding. Skipping AI generation this run.");
+        }
+        if (aiClient && genGatewayAlive && genericUseMapReduce) {
+          console.log(`[GENERATE-TESTS] Map-reduce ON — ${genericSections.length} section(s), density=${genericCoverage.total}, concurrency=${GEN_CONCURRENCY}, per-call timeout=${GEN_CALL_TIMEOUT_MS}ms`);
+          const merged: any[] = [];
+          const seenKeys = new Set<string>();
+          let sectionSuccesses = 0;
+
+          const runGenericSection = async (sec: SpecSection, i: number, pass: 1 | 2): Promise<any[] | null> => {
+            const tag = pass === 2 ? "retry " : "";
+            try {
+              console.log(`[GENERATE-TESTS]   → ${tag}Section ${i + 1}/${genericSections.length} "${sec.title}" (req=${sec.coverage.total}, chars=${sec.content.length})`);
+              const secContent = await aiClient.chat(
+                [{ role: "user", content: buildGenericSectionPrompt(sec, i) }],
+                systemPrompt,
+                GEN_CHAT_OPTS,
+              );
+              const secParsed = parseAiJson<any>(secContent);
+              if (secParsed && Array.isArray(secParsed.testCases) && secParsed.testCases.length > 0) {
+                const secNorm = normalizeTestCases(secParsed.testCases);
+                console.log(`[GENERATE-TESTS]     ✓ ${tag}Section ${i + 1}: ${secNorm.length} tests`);
+                return secNorm;
+              }
+              console.warn(`[GENERATE-TESTS]     ⚠ Section ${i + 1} returned no testCases`);
+              return null;
+            } catch (secErr: any) {
+              console.error(`[GENERATE-TESTS]     ✗ ${tag}Section ${i + 1} failed: ${secErr.message || secErr}`);
+              return null;
+            }
+          };
+
+          const mergeGeneric = (secNorm: any[] | null): boolean => {
+            if (!secNorm || secNorm.length === 0) return false;
+            let added = 0;
+            for (const tc of secNorm) {
+              const key = dedupeTestCaseKey(tc);
+              if (seenKeys.has(key)) continue;
+              seenKeys.add(key);
+              merged.push(tc);
+              added++;
+            }
+            sectionSuccesses++;
+            return added > 0;
+          };
+
+          // Pass 1: all sections in parallel (bounded pool).
+          const gp1 = await mapWithConcurrency(genericSections, GEN_CONCURRENCY, (sec, i) => runGenericSection(sec, i, 1));
+          const gFailed: Array<{ sec: SpecSection; i: number }> = [];
+          gp1.forEach((secNorm, i) => {
+            if (!mergeGeneric(secNorm)) gFailed.push({ sec: genericSections[i], i });
+          });
+
+          // Pass 2: retry failed sections in parallel, once.
+          if (gFailed.length > 0) {
+            console.log(`[GENERATE-TESTS] Deferred parallel retry for ${gFailed.length} failed section(s)...`);
+            const gp2 = await mapWithConcurrency(gFailed, GEN_CONCURRENCY, (f) => runGenericSection(f.sec, f.i, 2));
+            gp2.forEach((secNorm) => mergeGeneric(secNorm));
+          }
+
+          if (merged.length > 0) {
+            generatedResult = {
+              testCases: merged,
+              generatedBy: sectionSuccesses === genericSections.length ? "ai-mapreduce" : "ai-mapreduce-partial",
+            };
+            console.log(`[GENERATE-TESTS] Map-reduce complete: ${merged.length} tests from ${sectionSuccesses}/${genericSections.length} sections`);
+          } else {
+            console.warn("[GENERATE-TESTS] Map-reduce produced no tests — falling back to single-shot");
+          }
+        }
+
+        if (aiClient && genGatewayAlive && !generatedResult) {
           try {
-            console.log("[GENERATE-TESTS] Attempting AI-based generation...");
-            // Build messages with system prompt
-            const messages = [
-              { role: "system" as const, content: systemPrompt },
-              { role: "user" as const, content: userPrompt },
-            ];
-            
+            console.log("[GENERATE-TESTS] Attempting AI-based generation (fail-fast)...");
+
             const content = await aiClient.chat(
               [{ role: "user", content: userPrompt }],
-              systemPrompt
+              systemPrompt,
+              GEN_CHAT_OPTS
             );
 
             // Robust extraction - handles fences, prose, trailing commas, BOM
@@ -4179,7 +4759,7 @@ export async function registerRoutes(
             console.error("[GENERATE-TESTS] AI generation failed:", aiError.message || aiError);
             console.log("[GENERATE-TESTS] Falling back to rule-based generator");
           }
-        } else {
+        } else if (!aiClient) {
           console.log("[GENERATE-TESTS] No AI client configured, using rule-based generator");
         }
       } catch (clientError: any) {
@@ -4191,8 +4771,11 @@ export async function registerRoutes(
       // Knowledge Base; only drop to generic boilerplate when no usable
       // knowledge was retrieved.
       if (!generatedResult) {
-        const { generateKnowledgeDrivenTests, hasUsableKnowledge } = await import("./knowledge-driven-generator");
-
+        // generateKnowledgeDrivenTests / hasUsableKnowledge are statically
+        // imported at the top of this file. They MUST NOT be lazy-loaded here:
+        // this fallback runs right after a long AI fetch, exactly when the tsx
+        // esbuild service may have died ("Error: The service is no longer
+        // running"), which previously crashed the whole request.
         if (hasUsableKnowledge(structuredKnowledge as any)) {
           console.log(`[GENERATE-TESTS] Using knowledge-driven generator (${structuredKnowledge.length} KB items)`);
           generatedResult = generateKnowledgeDrivenTests(structuredKnowledge as any, {
@@ -4209,7 +4792,8 @@ export async function registerRoutes(
           generatedResult = generateRuleBasedTests(
             title || "Untitled",
             [description, structuredContext].filter(Boolean).join("\n\n"),
-            appType || "web"
+            appType || "web",
+            appName
           );
           console.log("[GENERATE-TESTS] Rule-based generation complete: " + generatedResult.testCases.length + " tests");
         }
@@ -4234,8 +4818,29 @@ export async function registerRoutes(
       console.log("[GENERATE-TESTS] Validation score: " + validationResult.score + "/100");
       res.json(enhancedOutput);
     } catch (error) {
-            console.error("Error generating tests:", error);
-            res.status(500).json({ error: "Failed to generate tests" });
+      console.error("Error generating tests:", error);
+      // LAST-RESORT SAFETY NET: never return a bare 500 for a transient/runtime
+      // failure (e.g. the tsx esbuild service dying mid-request). Try the pure
+      // in-memory rule-based generator, which has zero dynamic imports.
+      try {
+        const safeTitle = (req.body?.title as string) || "Untitled";
+        const safeBody = [req.body?.description, req.body?.businessUseCase, req.body?.functionalRequirements]
+          .filter(Boolean)
+          .join("\n\n");
+        const safeAppType = (req.body?.appType as string) || "web";
+        const safeAppName = (req.body?.appName as string) || "";
+        const fallback = generateRuleBasedTests(safeTitle, safeBody, safeAppType, safeAppName);
+        console.warn("[GENERATE-TESTS] Returned rule-based fallback after error: " + fallback.testCases.length + " tests");
+        return res.json({
+          ...fallback,
+          generatedBy: "rule-based-fallback",
+          degraded: true,
+          degradedReason: "AI/runtime error — served deterministic rule-based tests",
+        });
+      } catch (fallbackError) {
+        console.error("[GENERATE-TESTS] Rule-based fallback also failed:", fallbackError);
+        return res.status(500).json({ error: "Failed to generate tests" });
+      }
     }
   });
 
@@ -4327,8 +4932,9 @@ export async function registerRoutes(
       // ═══════════════════════════════════════════════════════════════════════
       // STEP 4.5: RAG ENRICHMENT - pull relevant content from the unified KB
       //   This includes any PPT/PDF/Image/SharePoint sources the user uploaded.
+      //   (buildRAGContextBlock is statically imported at the top of this file.)
       // ═══════════════════════════════════════════════════════════════════════
-      const { buildRAGContextBlock: buildJdeRagBlock } = await import("./knowledge/rag-helper");
+      const buildJdeRagBlock = buildRAGContextBlock;
       const jdeRagQuery = [
         classification.jde_module,
         ...detectedObjects,
@@ -4338,7 +4944,7 @@ export async function registerRoutes(
       const jdeRagContext = await buildJdeRagBlock(jdeRagQuery, {
         application: "JDE",
         module: classification.jde_module,
-        topK: 5,
+        topK: 12,
       });
       if (jdeRagContext.resultCount > 0) {
         console.log(`[GENERATE-JDE-TESTS] RAG enrichment: ${jdeRagContext.resultCount} items (${jdeRagContext.topObjects.join(", ")})`);
@@ -4367,10 +4973,71 @@ Generate FUNCTIONAL test cases using JDE application-level actions (Launch P4210
 
       const systemPrompt = buildJDESystemPrompt(detectedObjects, jdeObjectKnowledge + "\n" + governanceBlock + jdeRagContext.blockText);
 
-      // Build user prompt with structured document if available
-      const depthRange = testDepth === "exhaustive" ? "40-60" : testDepth === "comprehensive" ? "25-35" : "15-20";
-      const userPrompt = structuredDocument 
-        ? `Generate comprehensive FUNCTIONAL test cases for this JDE specification.
+      // Build user prompt with structured document if available.
+      //
+      // COVERAGE FIX: the FULL specification text is ALWAYS the authoritative
+      // source of truth. The AI-built `structuredDocument` is only a helpful
+      // *index* (and it was itself derived from a truncated slice at parse-spec),
+      // so it must NEVER replace the raw document. We therefore always inject the
+      // complete spec (up to JDE_SPEC_CHAR_CAP) so dense field-mapping tables
+      // (e.g. 60+ Source→Target rows) survive into the prompt exactly like they
+      // do for Copilot. Depth is derived from the actual requirement density so a
+      // spec that enumerates 60 rules yields ~60 test cases, not an arbitrary cap.
+      const JDE_SPEC_CHAR_CAP = 60000;
+      const specSlice = inputText.substring(0, JDE_SPEC_CHAR_CAP);
+      const specTruncated = inputText.length > JDE_SPEC_CHAR_CAP;
+      const requirementDensity = analyzeSpecCoverage(inputText);
+      const depthRange = resolveJdeDepthRange(testDepth, requirementDensity);
+      if (requirementDensity.total > 0) {
+        console.log(`[GENERATE-JDE-TESTS] Requirement density — IDs:${requirementDensity.requirementIds}, mapping rows:${requirementDensity.mappingRows}, numbered rules:${requirementDensity.numberedRules} → target ${depthRange} tests`);
+      }
+
+      const coverageDirective = `
+═══════════════════════════════════════════════════════════════════════════════
+MANDATORY COVERAGE RULES (produce COMPLETE, non-lossy coverage)
+═══════════════════════════════════════════════════════════════════════════════
+1. Treat the FULL SPECIFICATION TEXT below as the single source of truth. Read it
+   end-to-end BEFORE writing any test case. Do not stop early.
+2. If the spec enumerates requirement / rule IDs (e.g. RR-001, RC-014, EX-007,
+   REQ-12, BR-3), generate AT LEAST ONE dedicated test case per ID and cite that
+   ID in the test title. Do not skip, merge or summarise IDs.
+3. If the spec contains field-mapping tables (columns like Source Field → Target
+   Field, EDI element → XML tag, or "maps to"), generate ONE verification test
+   case per mapping ROW that asserts the source value is written to the exact
+   target field/tag. Enumerate EVERY row — do not collapse them.
+4. Cover positive/happy-path, validations, boundary values, and each documented
+   exception / error condition as separate test cases.
+5. Every test case MUST have detailed, ordered, executable steps (each with an
+   explicit expected result) — never a one-line summary.
+`.trim();
+
+      const structuredIndexBlock = structuredDocument
+        ? `
+═══════════════════════════════════════════════════════════════════════════════
+STRUCTURED SPECIFICATION INDEX (helper only — the FULL TEXT above always wins)
+═══════════════════════════════════════════════════════════════════════════════
+${JSON.stringify(structuredDocument, null, 2)}`.trim()
+        : "";
+
+      // Prompt builder reused for BOTH the single-shot call and each map-reduce
+      // section call. `specChunk` is either the whole spec or one section.
+      const buildJdeUserPrompt = (
+        specChunk: string,
+        chunkDepthRange: string,
+        sectionLabel?: string,
+        includeStructuredIndex = true,
+      ): string => {
+        const specBlock = `
+═══════════════════════════════════════════════════════════════════════════════
+${sectionLabel ? `SPECIFICATION SECTION: ${sectionLabel} ` : "FULL "}SPECIFICATION TEXT (${specChunk.length} characters — AUTHORITATIVE, read ALL of it)
+═══════════════════════════════════════════════════════════════════════════════
+${specChunk}`.trim();
+
+        const sectionFocus = sectionLabel
+          ? `\nSECTION FOCUS: Generate test cases ONLY for the requirements, IDs and mapping rows that appear in THIS section ("${sectionLabel}"). Do not invent requirements from other sections.\n`
+          : "";
+
+        return `Generate comprehensive FUNCTIONAL test cases for this JDE specification.
 
 ═══════════════════════════════════════════════════════════════════════════════
 DOCUMENT CLASSIFICATION
@@ -4378,104 +5045,187 @@ DOCUMENT CLASSIFICATION
 Document Type: ${classification.document_type}
 JDE Module: ${classification.jde_module}
 JDE Release: ${classification.jde_release}
+Confidence: ${classification.confidence_score}%
 Detected Programs: ${classification.detected_programs.join(', ') || 'None'}
 Detected Reports: ${classification.detected_reports.join(', ') || 'None'}
 Detected Tables: ${classification.detected_tables.join(', ') || 'None'}
 Has AAIs: ${classification.detected_aais ? 'Yes' : 'No'}
 Has Processing Options: ${classification.detected_processing_options ? 'Yes' : 'No'}
+${sectionFocus}
+${coverageDirective}
 
-═══════════════════════════════════════════════════════════════════════════════
-STRUCTURED SPECIFICATION
-═══════════════════════════════════════════════════════════════════════════════
-${JSON.stringify(structuredDocument, null, 2)}
+${specBlock}
+
+${includeStructuredIndex ? structuredIndexBlock : ""}
 
 ═══════════════════════════════════════════════════════════════════════════════
 GENERATION PARAMETERS
 ═══════════════════════════════════════════════════════════════════════════════
 Title: ${title || "JDE Test Suite"}
-Environment: ${environment || "Development"}
-Business Unit: ${businessUnit || "Not specified"}
-User Roles: ${userRoles || "Standard JDE User"}
-Test Depth: ${testDepth} (${depthRange} test cases)
-Include E2E Tests: ${includeE2E ? "YES" : "NO"}
-
-IMPORTANT: Generate ${depthRange} FUNCTIONAL test cases. Use JDE program names (P4310), field IDs (AN8), table names (F4311). Do NOT use UI automation (click, input, navigate URL).
-`
-        : `Generate comprehensive FUNCTIONAL test cases for this JDE requirement.
-
-═══════════════════════════════════════════════════════════════════════════════
-DOCUMENT CLASSIFICATION
-═══════════════════════════════════════════════════════════════════════════════
-Document Type: ${classification.document_type}
-JDE Module: ${classification.jde_module}
-Confidence: ${classification.confidence_score}%
-Reasoning: ${classification.classification_reasoning}
-
-═══════════════════════════════════════════════════════════════════════════════
-REQUIREMENT
-═══════════════════════════════════════════════════════════════════════════════
-Title: ${title || "JDE Test Suite"}
-Description: ${description || ""}
-
-═══════════════════════════════════════════════════════════════════════════════
-SPECIFICATION TEXT (${inputText.length} characters)
-═══════════════════════════════════════════════════════════════════════════════
-${inputText.substring(0, 15000)}
-${inputText.length > 15000 ? '\n... [truncated]' : ''}
-
-═══════════════════════════════════════════════════════════════════════════════
-GENERATION PARAMETERS
-═══════════════════════════════════════════════════════════════════════════════
 Environment: ${environment || "Development"}
 Business Unit: ${businessUnit || "Not specified"}
 User Roles: ${userRoles || "Standard JDE User"}
 Detected JDE Objects: ${detectedObjects.join(", ") || "None detected"}
-Test Depth: ${testDepth} (${depthRange} test cases)
+Test Depth: ${testDepth} (${chunkDepthRange} test cases)
 Include E2E Tests: ${includeE2E ? "YES" : "NO"}
 
-IMPORTANT: Generate ${depthRange} FUNCTIONAL test cases. Each test case must have:
-- Clear objective
+IMPORTANT: Generate ${chunkDepthRange} FUNCTIONAL test cases (produce as many as needed
+to satisfy the MANDATORY COVERAGE RULES — never fewer than the number of enumerated
+requirement IDs / mapping rows in the ${sectionLabel ? "section" : "spec"}). Each test case MUST have:
+- Clear objective (cite the requirement/rule ID or mapping row it covers)
 - Preconditions (data setup required)
-- Step-by-step JDE actions (Launch P4310, Enter supplier, Save PO)
-- Expected results
-- Table validations (F4311, F0911)
+- Detailed step-by-step JDE actions (Launch P4310, Enter supplier, Save PO)
+- An explicit expected result for EVERY step
+- Table validations (F4311, F0911) with the exact field/tag asserted
 
-Do NOT generate UI automation steps (click, input, navigate URL).
+Use JDE program names (P4310), field IDs (AN8), table names (F4311). Do NOT use UI
+automation (click button, input field, navigate URL).
 `;
+      };
+
+      const userPrompt = buildJdeUserPrompt(specSlice, depthRange);
 
       let generatedResult: { testCases: any[]; generatedBy: string; jdeObjects?: string[]; coverageSummary?: any } | null = null;
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // MAP-REDUCE DECISION
+      //   A dense spec (many enumerated IDs / mapping rows) produces a very large
+      //   single response that trips the provider gateway (504) and collapses to
+      //   generic rule-based output. When density is high we split the spec into
+      //   sections and generate each in a smaller, fast call, then merge — this
+      //   is what actually delivers Copilot-level row-by-row coverage reliably.
+      // ═══════════════════════════════════════════════════════════════════════
+      const MAP_REDUCE_MIN_REQUIREMENTS = 12; // below this, one call is fine & fastest
+      const specSections = splitSpecIntoSections(specSlice);
+      // Trigger on DENSITY (output size is the gateway risk, not section count).
+      // The splitter is requirement-bounded, so a dense spec always yields ≥2
+      // sections; guard with a length check so a pathological 1-section split
+      // still benefits when it is genuinely dense.
+      const useMapReduce =
+        requirementDensity.total >= MAP_REDUCE_MIN_REQUIREMENTS && specSections.length >= 1;
 
       try {
         const aiClient = await getAiClient();
         if (aiClient) {
-          try {
-            console.log("[GENERATE-JDE-TESTS] Attempting AI-based JDE generation...");
-            
-            const content = await aiClient.chat(
-              [{ role: "user", content: userPrompt }],
-              systemPrompt
-            );
+          // ─── PRE-FLIGHT: is the gateway even alive? ──────────────────────
+          // A tiny probe with a short timeout. If the gateway is fully down we
+          // learn it in ~20s and skip the (expensive) map-reduce + retries
+          // entirely, returning a clear message instead of grinding for minutes.
+          const gatewayAlive = await probeAiGatewayFast(aiClient);
+          if (!gatewayAlive) {
+            console.warn("[GENERATE-JDE-TESTS] ⚡ Pre-flight failed — LLM gateway is not responding. Skipping AI generation this run.");
+          } else if (useMapReduce) {
+            // ─── MAP: generate detailed cases per section, IN PARALLEL ───────
+            console.log(`[GENERATE-JDE-TESTS] Map-reduce ON — ${specSections.length} section(s), density=${requirementDensity.total}, concurrency=${GEN_CONCURRENCY}, per-call timeout=${GEN_CALL_TIMEOUT_MS}ms`);
+            const merged: any[] = [];
+            const seenKeys = new Set<string>();
+            let sectionSuccesses = 0;
 
-            // Robust extraction - handles fences, prose, trailing commas, BOM
-            const parsed = parseAiJson<any>(content);
-            if (parsed && Array.isArray(parsed.testCases) && parsed.testCases.length > 0) {
-              // Normalize so JDE-AI field variants (objective, testSteps, action,
-              // expectedResult, …) map onto the canonical shape the UI renders.
-              // Without this, valid AI content showed as "Test Case N / Execute undefined".
-              const normalized = normalizeTestCases(parsed.testCases);
-              generatedResult = {
-                ...parsed,
-                testCases: normalized,
-                generatedBy: "jde-ai",
-                jdeObjects: detectedObjects
-              };
-              console.log("[GENERATE-JDE-TESTS] JDE AI generation successful: " + normalized.length + " tests (normalized)");
-            } else {
-              console.warn("[GENERATE-JDE-TESTS] AI response missing testCases array, falling back to rule-based");
+            // Generate ONE section (fail-fast). Returns the parsed test cases, or
+            // null on failure so the caller can queue it for a single retry pass.
+            const runSection = async (
+              sec: SpecSection,
+              i: number,
+              pass: 1 | 2,
+            ): Promise<any[] | null> => {
+              const secReq = Math.max(sec.coverage.total, 1);
+              const secDepth = `${secReq}-${Math.ceil(secReq * 1.3)}`;
+              const secPrompt = buildJdeUserPrompt(sec.content, secDepth, sec.title || `Section ${i + 1}`, i === 0);
+              const tag = pass === 2 ? "retry " : "";
+              try {
+                console.log(`[GENERATE-JDE-TESTS]   → ${tag}Section ${i + 1}/${specSections.length} "${sec.title}" (req=${sec.coverage.total}, chars=${sec.content.length})`);
+                const secContent = await aiClient.chat([{ role: "user", content: secPrompt }], systemPrompt, GEN_CHAT_OPTS);
+                const secParsed = parseAiJson<any>(secContent);
+                if (secParsed && Array.isArray(secParsed.testCases) && secParsed.testCases.length > 0) {
+                  const secNorm = normalizeTestCases(secParsed.testCases);
+                  console.log(`[GENERATE-JDE-TESTS]     ✓ ${tag}Section ${i + 1}: ${secNorm.length} tests`);
+                  return secNorm;
+                }
+                console.warn(`[GENERATE-JDE-TESTS]     ⚠ Section ${i + 1} returned no testCases`);
+                return null;
+              } catch (secErr: any) {
+                console.error(`[GENERATE-JDE-TESTS]     ✗ ${tag}Section ${i + 1} failed: ${secErr.message || secErr}`);
+                return null; // partial coverage beats none
+              }
+            };
+
+            // Merge a section's cases into the running set, de-duping by a stable
+            // id/content key (NOT the positional title, which repeats per section).
+            const mergeSection = (secNorm: any[] | null): boolean => {
+              if (!secNorm || secNorm.length === 0) return false;
+              let added = 0;
+              for (const tc of secNorm) {
+                const key = dedupeTestCaseKey(tc);
+                if (seenKeys.has(key)) continue;
+                seenKeys.add(key);
+                merged.push(tc);
+                added++;
+              }
+              sectionSuccesses++;
+              return added > 0;
+            };
+
+            // Pass 1: all sections at once (bounded pool) — wall-clock ≈ slowest call.
+            const pass1 = await mapWithConcurrency(specSections, GEN_CONCURRENCY, (sec, i) => runSection(sec, i, 1));
+            const failed: Array<{ sec: SpecSection; i: number }> = [];
+            pass1.forEach((secNorm, i) => {
+              if (!mergeSection(secNorm)) failed.push({ sec: specSections[i], i });
+            });
+
+            // Pass 2 (deferred): retry ONLY the failed sections, in parallel, once,
+            // so a transient blip doesn't permanently drop their requirements.
+            if (failed.length > 0) {
+              console.log(`[GENERATE-JDE-TESTS] Deferred parallel retry for ${failed.length} failed section(s)...`);
+              const pass2 = await mapWithConcurrency(failed, GEN_CONCURRENCY, (f) => runSection(f.sec, f.i, 2));
+              pass2.forEach((secNorm) => mergeSection(secNorm));
             }
-          } catch (aiError: any) {
-            console.error("[GENERATE-JDE-TESTS] AI generation failed:", aiError.message || aiError);
-            console.log("[GENERATE-JDE-TESTS] Falling back to rule-based generator");
+
+            // ─── REDUCE: accept the merged set if any section produced output ──
+            if (merged.length > 0) {
+              generatedResult = {
+                testCases: merged,
+                generatedBy: sectionSuccesses === specSections.length ? "jde-ai-mapreduce" : "jde-ai-mapreduce-partial",
+                jdeObjects: detectedObjects,
+              };
+              console.log(`[GENERATE-JDE-TESTS] Map-reduce complete: ${merged.length} tests from ${sectionSuccesses}/${specSections.length} sections`);
+            } else {
+              console.warn("[GENERATE-JDE-TESTS] Map-reduce produced no tests — falling back to single-shot");
+            }
+          }
+
+          // Single-shot path (either density was low, or map-reduce yielded nothing).
+          // Skipped entirely when the pre-flight probe said the gateway is dead.
+          if (gatewayAlive && !generatedResult) {
+            try {
+              console.log("[GENERATE-JDE-TESTS] Attempting single-shot AI JDE generation (fail-fast)...");
+
+              const content = await aiClient.chat(
+                [{ role: "user", content: userPrompt }],
+                systemPrompt,
+                GEN_CHAT_OPTS
+              );
+
+              // Robust extraction - handles fences, prose, trailing commas, BOM
+              const parsed = parseAiJson<any>(content);
+              if (parsed && Array.isArray(parsed.testCases) && parsed.testCases.length > 0) {
+                // Normalize so JDE-AI field variants (objective, testSteps, action,
+                // expectedResult, …) map onto the canonical shape the UI renders.
+                // Without this, valid AI content showed as "Test Case N / Execute undefined".
+                const normalized = normalizeTestCases(parsed.testCases);
+                generatedResult = {
+                  ...parsed,
+                  testCases: normalized,
+                  generatedBy: "jde-ai",
+                  jdeObjects: detectedObjects
+                };
+                console.log("[GENERATE-JDE-TESTS] JDE AI generation successful: " + normalized.length + " tests (normalized)");
+              } else {
+                console.warn("[GENERATE-JDE-TESTS] AI response missing testCases array, falling back to rule-based");
+              }
+            } catch (aiError: any) {
+              console.error("[GENERATE-JDE-TESTS] AI generation failed:", aiError.message || aiError);
+              console.log("[GENERATE-JDE-TESTS] Falling back to rule-based generator");
+            }
           }
         } else {
           console.log("[GENERATE-JDE-TESTS] No AI client available, using rule-based generator");
@@ -4656,12 +5406,19 @@ Do NOT generate UI automation steps (click, input, navigate URL).
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const { testCaseId, framework, language } = validation.data;
+      const { testCaseId, framework, language, appType } = validation.data;
 
       const testCase = await storage.getTestCase(testCaseId);
       if (!testCase) {
         return res.status(404).json({ error: "Test case not found" });
       }
+
+      // Resolve app type (explicit param wins; else infer from the test case).
+      const resolvedAppType =
+        normalizeAppType(appType) ||
+        normalizeAppType((testCase as any).appType) ||
+        normalizeAppType((testCase as any).applicationType);
+      const appGuidance = buildScriptGenGuidance(resolvedAppType, framework, language);
 
       const frameworkGuides: Record<string, string> = {
         playwright: "Use Playwright test runner with async/await patterns. Include proper selectors and assertions.",
@@ -4681,7 +5438,7 @@ Do NOT generate UI automation steps (click, input, navigate URL).
       const systemPrompt = `You are an automation engineer expert. Generate production-ready test automation scripts.
 ${frameworkGuides[framework] || ""}
 ${languageGuides[language] || ""}
-Only output the code, no explanations. Include proper imports and setup.`;
+${appGuidance ? "\n" + appGuidance + "\n" : ""}Only output the code, no explanations. Include proper imports and setup.`;
 
       const userPrompt = `Generate a ${framework} test script in ${language} for the following test case:
 
@@ -4703,7 +5460,7 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
           aiError?.message?.includes("OPENAI_API_KEY") ||
           aiError?.message?.includes("API key");
         if (isMissingKey) {
-          code = generateRuleBasedScript(testCase, framework, language);
+          code = generateRuleBasedScript(testCase, framework, language, resolvedAppType);
           usedFallback = true;
         } else {
           throw aiError;
@@ -4736,7 +5493,7 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
       if (!validation.success) {
         return res.status(400).json({ error: validation.error });
       }
-      const { testCaseIds, framework, language } = validation.data;
+      const { testCaseIds, framework, language, appType } = validation.data;
 
       // Fetch all requested test cases
       const testCases: any[] = [];
@@ -4750,6 +5507,13 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
         return res.status(404).json({ error: "No test cases found for the given IDs" });
       }
 
+      // Resolve app type (explicit param wins; else infer from first test case).
+      const resolvedAppType =
+        normalizeAppType(appType) ||
+        normalizeAppType((testCases[0] as any).appType) ||
+        normalizeAppType((testCases[0] as any).applicationType);
+      const appGuidance = buildScriptGenGuidance(resolvedAppType, framework, language);
+
       let code: string;
       let usedFallback = true;
 
@@ -4760,16 +5524,18 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
           `Test ${i + 1}: ${tc.title}\nSteps:\n${(tc.steps as any[] || []).map((s: any, j: number) => `  ${j + 1}. ${s.step} => ${s.expected}`).join("\n")}`
         ).join("\n\n");
         const prompt = `Generate a single AITASExecutor class in ${language} using ${framework} that runs ALL of the following test cases. Use a single browser instance, one method per test case, a runWithResult() wrapper for per-step error isolation, and an executeAllTests() entry point. Output code only.\n\n${stepsBlob}`;
-        code = await aiClient.chat([{ role: "user", content: prompt }], `You are a senior test automation architect. Generate production-ready ${framework} automation code in ${language}. Single class, all tests combined.`);
+        const sys = `You are a senior test automation architect. Generate production-ready ${framework} automation code in ${language}. Single class, all tests combined.${appGuidance ? "\n" + appGuidance : ""}`;
+        code = await aiClient.chat([{ role: "user", content: prompt }], sys);
         usedFallback = false;
       } catch {
-        code = generateRuleBasedCombinedScript(testCases, framework, language);
+        code = generateRuleBasedCombinedScript(testCases, framework, language, resolvedAppType);
       }
 
       res.json({
         code,
         generatedBy: usedFallback ? "rule-based" : "ai",
         testCaseCount: testCases.length,
+        appType: resolvedAppType || "web",
         ...(missing.length > 0 ? { warnings: [`${missing.length} test case ID(s) not found: ${missing.join(", ")}`] } : {}),
       });
     } catch (error: any) {
@@ -5201,7 +5967,15 @@ ${(testCase.steps as any[] || []).map((s: any, i: number) => `${i + 1}. ${s.step
 
       // Start AI-powered execution
       const testCases = await storage.getTestCasesBySuite(webhook.suiteId);
-      aiTestExecutor.runExecution(execution.id, testCases, targetUrl, "selenium");
+      // Infer the application type from the suite's test cases so JDE (etc.) runs
+      // get app-aware execution + Object Repository reuse.
+      const inferredAppType = normalizeAppType(
+        (testCases[0] as any)?.appType || (testCases[0] as any)?.applicationType
+      );
+      aiTestExecutor.runExecution(
+        execution.id, testCases, targetUrl, "selenium",
+        undefined, true, 3, undefined, inferredAppType
+      );
 
       res.json({ executionId: execution.id, message: "Execution started" });
     } catch (error) {
@@ -5655,7 +6429,8 @@ aitas_tests:
       let structuredDocument: any = null;
       
       try {
-        const { getAiClient } = await import("./ai-client");
+        // getAiClient is a static import at the top of this file — do not lazy
+        // re-import it here (esbuild service may be dead mid-request under tsx).
         const ai = await getAiClient();
         
         if (isJDEDocument) {
@@ -5671,8 +6446,8 @@ aitas_tests:
           //    (PPT/PDF/SharePoint sources the user previously uploaded)
           let ragEnrichment = "";
           try {
-            const { buildRAGContextBlock: buildSpecRagBlock } = await import("./knowledge/rag-helper");
-            const ragCtx = await buildSpecRagBlock(jdeObjects.join(" ") + " " + textOut.slice(0, 1000), {
+            // buildRAGContextBlock is statically imported at the top of the file.
+            const ragCtx = await buildRAGContextBlock(jdeObjects.join(" ") + " " + textOut.slice(0, 1000), {
               application: "JDE",
               topK: 4,
             });
@@ -5689,7 +6464,7 @@ aitas_tests:
             .replace("{{JDE_KNOWLEDGE}}", (jdeObjectKnowledge || "Standard JDE knowledge") + ragEnrichment);
           
           const structuredResponse = await ai.chat([
-            { role: "user", content: `Structure this JDE functional specification document:\n\n${textOut.substring(0, 12000)}` }
+            { role: "user", content: `Structure this JDE functional specification document:\n\n${textOut.substring(0, 40000)}` }
           ], structuringPrompt);
           
           // Try to parse as JSON, otherwise use as summary
@@ -5768,6 +6543,154 @@ aitas_tests:
     const profile = APP_PROFILES[req.params.type as keyof typeof APP_PROFILES];
     if (!profile) return res.status(404).json({ error: "Profile not found" });
     res.json(profile);
+  });
+
+  // Per-app "config readiness" — surface setup reminders + env-var checks so the
+  // UI can nudge the user (JDE → AIS URL, Salesforce → Connected App, etc.).
+  app.get("/api/app-profiles/:type/readiness", (req: Request, res: Response) => {
+    const type = normalizeAppType(req.params.type) || (req.params.type as keyof typeof APP_PROFILES);
+    const profile = APP_PROFILES[type as keyof typeof APP_PROFILES];
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
+
+    // Map app types → environment variables we expect to be configured.
+    // `optional` checks are NOT required for standard UI/SSO workflow testing —
+    // they unlock extra capabilities (e.g. JDE AIS REST for data setup/teardown).
+    // Only NON-optional (required) checks affect the `ready` flag.
+    const ENV_REQUIREMENTS: Record<
+      string,
+      { key: string; label: string; hint: string; optional?: boolean }[]
+    > = {
+      jde: [
+        { key: "JDE_AIS_URL", label: "AIS Server URL", optional: true, hint: "OPTIONAL — only for AIS REST data setup/teardown. UI/SSO testing does not need it." },
+        { key: "JDE_ENVIRONMENT", label: "JDE Environment", optional: true, hint: "OPTIONAL — e.g. JPD920. Only used by the AIS REST API path." },
+      ],
+      salesforce: [
+        { key: "SF_LOGIN_URL", label: "Login URL", optional: true, hint: "OPTIONAL — only for API/Connected-App auth. UI/SSO testing does not need it." },
+        { key: "SF_CLIENT_ID", label: "Connected App Client ID", optional: true, hint: "OPTIONAL — Consumer Key from your Salesforce Connected App (API path only)." },
+        { key: "SF_CLIENT_SECRET", label: "Connected App Secret", optional: true, hint: "OPTIONAL — Consumer Secret from your Salesforce Connected App (API path only)." },
+      ],
+      sap_fiori: [
+        { key: "SAP_BASE_URL", label: "Fiori Launchpad URL", optional: true, hint: "OPTIONAL — base URL of the Fiori launchpad for API-level steps." },
+      ],
+    };
+
+    const required = ENV_REQUIREMENTS[type as string] || [];
+    const checks = required.map((r) => ({
+      key: r.key,
+      label: r.label,
+      hint: r.hint,
+      optional: r.optional === true,
+      configured: !!(process.env[r.key] && String(process.env[r.key]).trim().length > 0),
+    }));
+    // `ready` only depends on REQUIRED checks. Optional ones never block readiness,
+    // so apps that only need UI/SSO (like JDE here) report ready out of the box.
+    const ready = checks.filter((c) => !c.optional).every((c) => c.configured);
+
+    res.json({
+      type,
+      name: profile.name,
+      category: profile.category,
+      color: profile.color,
+      setupNotes: profile.setupNotes,
+      locatorStrategy: profile.locatorStrategy,
+      waitStrategy: profile.waitStrategy,
+      checks,
+      ready,
+      // Profile-level extras the UI can render as reminders even with no env vars.
+      reminders: (profile as any).aiPromptHints ? [] : [],
+    });
+  });
+
+  // ========================================
+  // JDE OBJECT REPOSITORY â€” persisted discovered locators (Phases 14/15)
+  // ========================================
+
+  // List stored objects, optionally filtered by application/form.
+  app.get("/api/jde-objects", (req: Request, res: Response) => {
+    try {
+      const application = (req.query.application as string) || undefined;
+      const form = (req.query.form as string) || undefined;
+      const objects = jdeObjectStore.list(
+        application || form ? { application, form } : undefined
+      );
+      res.json({ objects, count: objects.length });
+    } catch (error: any) {
+      console.error("[jde-objects:list]", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Aggregate stats for the Object Repository dashboard.
+  app.get("/api/jde-objects/stats", (req: Request, res: Response) => {
+    try {
+      const application = (req.query.application as string) || undefined;
+      res.json(jdeObjectStore.stats(application));
+    } catch (error: any) {
+      console.error("[jde-objects:stats]", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Fetch a single object by id.
+  app.get("/api/jde-objects/:id", (req: Request, res: Response) => {
+    try {
+      const obj = jdeObjectStore.getById(req.params.id);
+      if (!obj) return res.status(404).json({ error: "Object not found" });
+      res.json(obj);
+    } catch (error: any) {
+      console.error("[jde-objects:get]", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Delete one object.
+  app.delete("/api/jde-objects/:id", (req: Request, res: Response) => {
+    try {
+      const ok = jdeObjectStore.deleteById(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Object not found" });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[jde-objects:delete]", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Clear the whole repository (or one application).
+  app.delete("/api/jde-objects", (req: Request, res: Response) => {
+    try {
+      const application = (req.query.application as string) || undefined;
+      const removed = jdeObjectStore.clear(application);
+      res.json({ success: true, removed });
+    } catch (error: any) {
+      console.error("[jde-objects:clear]", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Live "Scan Screen" — run the JDE discovery harness against the active browser
+  // of the shared executor and persist whatever it finds. Used by the executions
+  // page to seed the repository on demand (Phases 1â€“4, 9â€“11).
+  app.post("/api/executions/scan-screen", async (_req: Request, res: Response) => {
+    try {
+      const result = await aiTestExecutor.scanCurrentScreen({ persist: true });
+      if (!result) {
+        return res.status(409).json({
+          error: "No active browser. Start an execution first, then scan the live screen.",
+        });
+      }
+      res.json({
+        success: true,
+        application: result.application,
+        form: result.form,
+        objectsDiscovered: result.objects.length,
+        gridHeaders: result.gridHeaders,
+        virtualGrid: result.virtualGrid,
+        warnings: result.warnings,
+      });
+    } catch (error: any) {
+      console.error("[executions:scan-screen]", error.message);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // ========================================

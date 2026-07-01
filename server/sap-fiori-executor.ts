@@ -9,6 +9,7 @@ import { getAiClient } from "./ai-client";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 import { sendExecutionNotifications } from "./notifications";
+import { observeAppSteps } from "./learning/observe";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -377,10 +378,14 @@ export class SAPFioriExecutor {
           await this.executeCommand(cmd, config, logs);
         }
         logs.push(`  ✓ Step ${i + 1} passed`);
+        // Learning feed (best-effort) — record per-step success for SAP.
+        observeAppSteps("SAP", [{ step: processedStep, passed: true }], { sessionId: testCase.id });
       } catch (error: any) {
         logs.push(`  ✗ Step ${i + 1} failed: ${error.message}`);
         passed = false;
         errorMessage = `Step ${i + 1}: ${error.message}`;
+        // Learning feed (best-effort) — record the failing step for SAP.
+        observeAppSteps("SAP", [{ step: processedStep, passed: false }], { sessionId: testCase.id });
         try { screenshot = (await this.page!.screenshot()).toString("base64"); } catch {}
         break;
       }
@@ -469,7 +474,8 @@ export class SAPFioriExecutor {
           await this.page.locator(selector).first().fill(value, { timeout: 15000 });
         } catch {
           if (cmd.ui5Id) {
-            await this.page.evaluate(([id, val]: [string, string]) => {
+            await this.page.evaluate((args: string[]) => {
+              const [id, val] = args;
               const ctrl = (window as any).sap?.ui?.getCore()?.byId(id);
               if (ctrl && ctrl.setValue) ctrl.setValue(val);
             }, [cmd.ui5Id, value]);
@@ -489,7 +495,8 @@ export class SAPFioriExecutor {
         } catch {
           // Try UI5 ComboBox
           if (cmd.ui5Id) {
-            await this.page.evaluate(([id, val]: [string, string]) => {
+            await this.page.evaluate((args: string[]) => {
+              const [id, val] = args;
               const ctrl = (window as any).sap?.ui?.getCore()?.byId(id);
               if (ctrl && ctrl.setSelectedKey) ctrl.setSelectedKey(val);
               else if (ctrl && ctrl.setValue) ctrl.setValue(val);
@@ -542,7 +549,8 @@ export class SAPFioriExecutor {
 
       case "ui5_action": {
         if (cmd.ui5Id && cmd.value) {
-          await this.page.evaluate(([id, action]: [string, string]) => {
+          await this.page.evaluate((args: string[]) => {
+            const [id, action] = args;
             const ctrl = (window as any).sap?.ui?.getCore()?.byId(id);
             if (ctrl && (ctrl as any)[action]) (ctrl as any)[action]();
           }, [cmd.ui5Id, cmd.value]);

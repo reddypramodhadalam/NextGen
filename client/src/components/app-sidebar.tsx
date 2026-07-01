@@ -79,6 +79,13 @@ const mainNavItems = [
     badge: "NEW",
   },
   {
+    title: "Learning & Analytics",
+    url: "/learning",
+    icon: Brain,
+    description: "Self-improving locator intelligence",
+    badge: "AI",
+  },
+  {
     title: "Test Repository",
     url: "/repository",
     icon: FolderOpen,

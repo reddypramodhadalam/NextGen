@@ -22,6 +22,8 @@ export interface IKnowledgeStorage {
   getKnowledgeSourcesByModule(module: string): Promise<KnowledgeSource[]>;
   updateKnowledgeSource(id: string, updates: Partial<KnowledgeSource>): Promise<KnowledgeSource | null>;
   deleteKnowledgeSource(id: string): Promise<void>;
+  /** Find an existing source for idempotent ingestion (by URL, or app+module+name). */
+  findExistingSource(query: { sourceUrl?: string; application?: string; moduleTag?: string; name?: string }): Promise<KnowledgeSource | null>;
   
   // Raw Documents
   createRawDocument(doc: Omit<RawDocument, 'id' | 'createdAt'>): Promise<RawDocument>;
@@ -93,10 +95,24 @@ export class SQLiteKnowledgeStorage implements IKnowledgeStorage {
         last_ingested TEXT,
         document_count INTEGER DEFAULT 0,
         error_message TEXT,
+        checksum TEXT,
+        content_size INTEGER,
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       )
     `);
+
+    // Safe migration for pre-existing DBs that lack the idempotency columns.
+    for (const [col, ddl] of [
+      ["checksum", "ALTER TABLE knowledge_sources ADD COLUMN checksum TEXT"],
+      ["content_size", "ALTER TABLE knowledge_sources ADD COLUMN content_size INTEGER"],
+    ] as const) {
+      const has = (this.db.prepare(`PRAGMA table_info(knowledge_sources)`).all() as any[])
+        .some((c) => c.name === col);
+      if (!has) {
+        try { this.db.exec(ddl); console.log(`[KnowledgeStorage] Migrated: added ${col} column`); } catch {}
+      }
+    }
     
     // Raw Documents
     this.db.exec(`
@@ -323,8 +339,8 @@ export class SQLiteKnowledgeStorage implements IKnowledgeStorage {
     
     this.db.prepare(`
       INSERT INTO knowledge_sources (id, name, source_type, source_url, module_tag, application, 
-        auth_type, auth_credentials, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        auth_type, auth_credentials, status, checksum, content_size, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       source.name,
@@ -335,6 +351,8 @@ export class SQLiteKnowledgeStorage implements IKnowledgeStorage {
       source.authType || "NONE",
       source.authCredentials ? JSON.stringify(source.authCredentials) : null,
       "PENDING",
+      (source as any).checksum ?? null,
+      (source as any).contentSize ?? null,
       now,
       now
     );
@@ -375,6 +393,8 @@ export class SQLiteKnowledgeStorage implements IKnowledgeStorage {
     if (updates.errorMessage !== undefined) { fields.push("error_message = ?"); values.push(updates.errorMessage); }
     if (updates.lastIngested !== undefined) { fields.push("last_ingested = ?"); values.push(updates.lastIngested?.toISOString()); }
     if (updates.documentCount !== undefined) { fields.push("document_count = ?"); values.push(updates.documentCount); }
+    if ((updates as any).checksum !== undefined) { fields.push("checksum = ?"); values.push((updates as any).checksum); }
+    if ((updates as any).contentSize !== undefined) { fields.push("content_size = ?"); values.push((updates as any).contentSize); }
     
     if (fields.length === 0) return existing;
     
@@ -388,6 +408,30 @@ export class SQLiteKnowledgeStorage implements IKnowledgeStorage {
   
   async deleteKnowledgeSource(id: string): Promise<void> {
     this.db.prepare("DELETE FROM knowledge_sources WHERE id = ?").run(id);
+  }
+
+  /**
+   * Find an existing source for idempotent ingestion.
+   * Priority 1: exact source_url match (SharePoint files / URLs are unique by URL).
+   * Priority 2: same application + module_tag + name (re-uploaded file).
+   * Returns the most recently updated match, or null.
+   */
+  async findExistingSource(query: { sourceUrl?: string; application?: string; moduleTag?: string; name?: string }): Promise<KnowledgeSource | null> {
+    if (query.sourceUrl) {
+      const row = this.db
+        .prepare("SELECT * FROM knowledge_sources WHERE source_url = ? ORDER BY updated_at DESC LIMIT 1")
+        .get(query.sourceUrl) as any;
+      if (row) return this.mapKnowledgeSource(row);
+    }
+    if (query.name && query.application && query.moduleTag) {
+      const row = this.db
+        .prepare(
+          "SELECT * FROM knowledge_sources WHERE name = ? AND application = ? AND module_tag = ? ORDER BY updated_at DESC LIMIT 1"
+        )
+        .get(query.name, query.application, query.moduleTag) as any;
+      if (row) return this.mapKnowledgeSource(row);
+    }
+    return null;
   }
   
   private mapKnowledgeSource(row: any): KnowledgeSource {
@@ -404,6 +448,8 @@ export class SQLiteKnowledgeStorage implements IKnowledgeStorage {
       lastIngested: row.last_ingested ? new Date(row.last_ingested) : undefined,
       documentCount: row.document_count || 0,
       errorMessage: row.error_message,
+      checksum: row.checksum || undefined,
+      contentSize: row.content_size ?? undefined,
       createdAt: new Date(row.created_at),
       updatedAt: new Date(row.updated_at),
     };

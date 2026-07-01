@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { CodeBlock } from "@/components/code-block";
 import { EmptyState } from "@/components/empty-state";
+import { AppReadinessHint } from "@/components/app-readiness-hint";
 import {
   Select,
   SelectContent,
@@ -40,11 +41,27 @@ const languages = [
   { value: "csharp", label: "C#" },
 ];
 
+// Application type drives app-aware code generation (e.g. JDE → iframe switch,
+// processing-spinner waits, DD-item fields, hc_* toolbar ids, header-based grids).
+const appTypes = [
+  { value: "web", label: "Web Application" },
+  { value: "jde", label: "JD Edwards (Oracle)" },
+  { value: "salesforce", label: "Salesforce" },
+  { value: "sap_fiori", label: "SAP Fiori / Web GUI" },
+  { value: "sap_gui", label: "SAP GUI (Desktop)" },
+  { value: "dotnet_desktop", label: ".NET Desktop" },
+  { value: "java_desktop", label: "Java Desktop" },
+  { value: "mobile_android", label: "Android Mobile" },
+  { value: "mobile_ios", label: "iOS Mobile" },
+  { value: "api_rest", label: "REST API" },
+];
+
 export default function Scripts() {
   const { toast } = useToast();
   const [selectedTestCase, setSelectedTestCase] = useState<string>("");
   const [selectedFramework, setSelectedFramework] = useState<string>("playwright");
   const [selectedLanguage, setSelectedLanguage] = useState<string>("typescript");
+  const [selectedAppType, setSelectedAppType] = useState<string>("web");
   const [generatedCode, setGeneratedCode] = useState<string>("");
   const [usedFallback, setUsedFallback] = useState(false);
 
@@ -57,7 +74,7 @@ export default function Scripts() {
   });
 
   const generateMutation = useMutation({
-    mutationFn: async (data: { testCaseId: string; framework: string; language: string }) => {
+    mutationFn: async (data: { testCaseId: string; framework: string; language: string; appType: string }) => {
       const res = await apiRequest("POST", "/api/generate-script", data);
       return res.json();
     },
@@ -95,6 +112,7 @@ export default function Scripts() {
       testCaseId: selectedTestCase,
       framework: selectedFramework,
       language: selectedLanguage,
+      appType: selectedAppType,
     });
   };
 
@@ -155,6 +173,27 @@ export default function Scripts() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="app-type">Application Type</Label>
+              <Select value={selectedAppType} onValueChange={setSelectedAppType}>
+                <SelectTrigger id="app-type" data-testid="select-app-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {appTypes.map((a) => (
+                    <SelectItem key={a.value} value={a.value}>
+                      {a.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                JD Edwards emits iframe switching, processing-spinner waits, DD-item
+                fields and <code>hc_*</code> toolbar ids.
+              </p>
+              <AppReadinessHint appType={selectedAppType} />
             </div>
 
             <div className="space-y-2">

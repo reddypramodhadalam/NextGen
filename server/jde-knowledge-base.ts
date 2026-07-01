@@ -1226,7 +1226,11 @@ OUTPUT FORMAT (JSON):
 }
 
 IMPORTANT: 
-- Generate 20-40 test cases for comprehensive coverage
+- Generate as many test cases as the specification requires for COMPLETE coverage.
+  Produce AT LEAST ONE test case for every enumerated requirement/rule ID
+  (e.g. RR-001, RC-014, EX-007) and one per field-mapping table row. Never stop
+  at an arbitrary number — honour any explicit test-count target in the user
+  message, and treat it as a FLOOR, not a ceiling.
 - Each step must be atomic and executable
 - Do NOT use placeholders like "..." or "etc"
 - Return ONLY valid JSON`;

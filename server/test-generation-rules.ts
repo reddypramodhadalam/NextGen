@@ -4,13 +4,35 @@
 // Step format: { action, target, expected } to pass validator
 // ============================================================================
 
-function generateStepsForType(testType: string, title: string, description: string, appType: string): any[] {
+import {
+  buildJdeHelperPreamble,
+  type GenFramework,
+  type GenLanguage,
+} from "./jde-locator-intelligence";
+import { normalizeAppType } from "./app-profiles";
+
+function generateStepsForType(testType: string, title: string, description: string, appType: string, appName?: string): any[] {
   const steps: any[] = [];
   const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase();
+  // Human-readable system name so steps read "Log in to Model N" instead of a
+  // generic "your-app.com". Falls back to a neutral noun when unknown.
+  const systemName = (appName && appName.trim()) ? appName.trim() : "the application";
+
+  // EVERY test case must begin with an explicit authentication step so the
+  // reader sees "1. Log in to <System>" before any feature step. API-only tests
+  // authenticate via token rather than a UI login, so they are excluded.
+  if (testType !== "api") {
+    steps.push({
+      action: "login",
+      target: systemName,
+      step: `Log in to ${systemName}`,
+      expected: `User logs in to ${systemName} successfully and the landing page / home dashboard is displayed`,
+    });
+  }
   
   if (testType === "functional") {
     steps.push(
-      { action: "navigate", target: "https://your-app.com/", expected: "Homepage loads successfully with all elements visible and no console errors" },
+      { action: "navigate", target: "https://your-app.com/", expected: `${systemName} homepage loads successfully with all elements visible and no console errors` },
       { action: "click", target: `[data-testid='nav-${safeTitle}'], a[href*='${safeTitle}']`, expected: `Navigation menu item for ${title} is clicked and feature module begins loading` },
       { action: "verify", target: `[data-testid='${safeTitle}-container'], .${safeTitle}-page`, expected: "All main UI components are rendered correctly without layout issues" },
       { action: "click", target: "button[data-testid='primary-action'], button.btn-primary", expected: "Primary action button is clicked and loading indicator appears" },
@@ -25,11 +47,6 @@ function generateStepsForType(testType: string, title: string, description: stri
     );
   } else if (testType === "regression") {
     steps.push(
-      { action: "navigate", target: "https://your-app.com/login", expected: "Login page loads successfully with username and password fields visible" },
-      { action: "fillInput", target: "input[name='username'], input[data-testid='username']", expected: "Username field accepts 'testuser@example.com' input without errors" },
-      { action: "fillInput", target: "input[name='password'], input[type='password']", expected: "Password field accepts secure input and masks the characters" },
-      { action: "click", target: "button[type='submit'], button[data-testid='login-btn']", expected: "Login button is clicked and authentication request is sent" },
-      { action: "verify", target: "[data-testid='dashboard'], .dashboard-container", expected: "User dashboard loads successfully indicating session is established" },
       { action: "navigate", target: `https://your-app.com/${safeTitle}`, expected: `${title} section loads without any new errors or regressions` },
       { action: "verify", target: "[data-testid='feature-list'], .feature-container", expected: "All previously working features are still accessible and visible" },
       { action: "click", target: "[data-testid='edit-btn'], button.edit-action", expected: "Edit action on existing data triggers edit form without errors" },
@@ -130,7 +147,8 @@ function generateStepsForType(testType: string, title: string, description: stri
 export function generateRuleBasedTests(
   title: string,
   description: string,
-  appType: string
+  appType: string,
+  appName?: string
 ): { testCases: any[]; generatedBy: string; coverageSummary: any } {
   const testCases: any[] = [];
   
@@ -142,7 +160,7 @@ export function generateRuleBasedTests(
     const caseNum = i + 1;
     
     // Generate detailed atomic steps (10-15 steps each) based on test type
-    let steps: any[] = generateStepsForType(testType, title, description, appType);
+    let steps: any[] = generateStepsForType(testType, title, description, appType, appName);
     
     // Assign priority
     let priority = "high";
@@ -280,7 +298,7 @@ function stepToCodeFromAction(step: { action: string; target: string; expected: 
   return `        ${comment}\n        // TODO: implement ${action}`;
 }
 
-export function generateRuleBasedScript(testCase: any, framework: string, language: string): string {
+function generateRuleBasedScriptInner(testCase: any, framework: string, language: string): string {
   const title   = (testCase.title || "Test Case").trim();
   const steps: Array<{ action: string; target: string; expected: string }> = testCase.steps || [];
   const className = title.replace(/[^a-zA-Z0-9]/g, "_").replace(/^_+|_+$/g, "") || "TestCase";
@@ -663,6 +681,51 @@ export function generateRuleBasedScript(testCase: any, framework: string, langua
     `  });`,
     `});`,
   ].join("\n");
+}
+
+/**
+ * PUBLIC EXPORT — generate a rule-based script for ONE test case.
+ *
+ * App-aware: when `appType` resolves to JDE, a reusable JDE helper library
+ * (frame switch, processing-spinner waits, DD-item field setters, toolbar
+ * clicks, header-based grid cells) is injected so the generated script is
+ * JDE-correct instead of using naive web selectors. Other app types fall
+ * through to the standard generic generator.
+ */
+export function generateRuleBasedScript(
+  testCase: any,
+  framework: string,
+  language: string,
+  appType?: string
+): string {
+  const baseCode = generateRuleBasedScriptInner(testCase, framework, language);
+  const resolvedApp =
+    normalizeAppType(appType) || normalizeAppType((testCase as any).appType);
+  if (resolvedApp !== "jde") return baseCode;
+
+  const preamble = buildJdeHelperPreamble(framework as GenFramework, language as GenLanguage);
+  if (!preamble) return baseCode;
+  return injectPreamble(baseCode, preamble, language);
+}
+
+/**
+ * Insert a helper preamble at the right place for each language: after the
+ * import/using block but before the first class/describe/def, so the helpers
+ * are in scope for the generated steps.
+ */
+function injectPreamble(code: string, preamble: string, language: string): string {
+  const lines = code.split("\n");
+  // Find a sensible insertion point: the first line that starts a test body.
+  const anchorRegex = /^(test\.describe|describe|class |def test_|namespace |public class )/;
+  let idx = lines.findIndex((l) => anchorRegex.test(l.trim()));
+  if (idx < 0) {
+    // No anchor → just prepend.
+    return `${preamble}\n\n${code}`;
+  }
+  // Insert a blank line + preamble just before the anchor line.
+  const before = lines.slice(0, idx).join("\n");
+  const after = lines.slice(idx).join("\n");
+  return `${before}\n\n${preamble}\n${after}`;
 }
 
 // ============================================================================
@@ -1077,19 +1140,34 @@ function buildTSJSExecutor(testCases: any[], framework: string, isTS: boolean): 
 /**
  * PUBLIC EXPORT — generate ONE combined script for ALL test cases.
  * Called by /api/generate-combined-script when AI is unavailable.
+ *
+ * App-aware: when `appType` resolves to JDE, the JDE helper library is injected
+ * once at the top so every combined test can call the shared JDE helpers.
  */
 export function generateCombinedRuleBasedScript(
   testCases: any[],
   framework: string,
-  language: string
+  language: string,
+  appType?: string
 ): string {
-  if (language === "java") return buildJavaExecutor(testCases);
-  if (language === "python") return buildPythonExecutor(testCases, framework);
-  if (language === "csharp") {
+  let code: string;
+  if (language === "java") code = buildJavaExecutor(testCases);
+  else if (language === "python") code = buildPythonExecutor(testCases, framework);
+  else if (language === "csharp") {
     // C# combined — reuse Java structure but C#-style
-    return buildCSharpExecutor(testCases);
+    code = buildCSharpExecutor(testCases);
+  } else {
+    code = buildTSJSExecutor(testCases, framework, language === "typescript");
   }
-  return buildTSJSExecutor(testCases, framework, language === "typescript");
+
+  const resolvedApp =
+    normalizeAppType(appType) ||
+    normalizeAppType((testCases[0] as any)?.appType);
+  if (resolvedApp === "jde") {
+    const preamble = buildJdeHelperPreamble(framework as GenFramework, language as GenLanguage);
+    if (preamble) code = injectPreamble(code, preamble, language);
+  }
+  return code;
 }
 
 /** Combined C# NUnit executor */

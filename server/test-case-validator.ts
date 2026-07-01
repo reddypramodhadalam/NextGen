@@ -151,6 +151,7 @@ export class TestCaseValidator {
             "switchWindow",
             "acceptAlert",
             "fillForm",
+            "login",
             "logout",
           ];
 
@@ -163,7 +164,7 @@ export class TestCaseValidator {
 
           // ===== SELECTOR VALIDATION =====
           // Actions that don't require a target selector
-          const noTargetActions = ["logout", "screenshot", "acceptAlert", "switchWindow", "wait"];
+          const noTargetActions = ["login", "logout", "screenshot", "acceptAlert", "switchWindow", "wait"];
 
           if (!step.target && !noTargetActions.includes(step.action)) {
             errors.push(`Test case ${i + 1}, Step ${j + 1}: missing target (selector or URL)`);
@@ -171,7 +172,7 @@ export class TestCaseValidator {
             score -= 15;
           }
 
-          if (step.target) {
+          if (step.target && !noTargetActions.includes(step.action)) {
             const selectorValidation = this.validateSelector(step.target);
             if (!selectorValidation.isValid) {
               errors.push(

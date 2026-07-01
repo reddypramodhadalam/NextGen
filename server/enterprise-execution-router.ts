@@ -29,6 +29,7 @@ import {
   AgentCapabilities
 } from "./enterprise-agent-manager";
 import { aiTestExecutor } from "./ai-test-executor";
+import { jdeExecutor, type JDEConfig } from "./jde-executor";
 import { storage } from "./storage";
 import type { TestCase, TestDataParam } from "@shared/schema";
 
@@ -379,11 +380,23 @@ export class EnterpriseExecutionRouter {
 
     // Step 5: Fallback to local execution
     console.log("[EnterpriseRouter] Falling back to local executor (no Enterprise Agent available)");
+    // Report the executor we will ACTUALLY run. For JDE without form-login creds (SSO),
+    // executeLocally() drives via aiTestExecutor, so don't mislabel it as jdeExecutor.
+    const jdeFormLoginAvailable =
+      detection.capabilities.includes("JDE") && this.buildJdeConfigFromEnv(targetUrl) !== null;
+    const localExecutorType = jdeFormLoginAvailable
+      ? this.getExecutorTypeForCapabilities(detection.capabilities)
+      : detection.capabilities.includes("JDE")
+        ? "aiTestExecutor"
+        : this.getExecutorTypeForCapabilities(detection.capabilities);
+    const localReason = detection.capabilities.includes("JDE") && !jdeFormLoginAvailable
+      ? "JDE via SSO/DOM (persistent Chrome profile) - local AI executor"
+      : "Enterprise Agent not available - using local executor";
     return {
       routedTo: "LOCAL_EXECUTOR",
-      executorType: this.getExecutorTypeForCapabilities(detection.capabilities),
+      executorType: localExecutorType,
       capabilities: detection.capabilities,
-      reason: "Enterprise Agent not available - using local executor"
+      reason: localReason
     };
   }
 
@@ -443,11 +456,25 @@ export class EnterpriseExecutionRouter {
 
     // Execute using appropriate executor based on capabilities
     const executor = this.getExecutorForCapabilities(routeResult.capabilities);
-    
+
     console.log(`[EnterpriseRouter] Executing via Enterprise Agent using ${executor} executor`);
 
-    // For now, all executions go through aiTestExecutor
-    // In production, this would dispatch to JDE/SAP/API executors
+    // Dispatch JDE to the dedicated executor when classic form-login creds exist;
+    // otherwise (SSO) fall through to the AI/DOM executor — see executeLocally() for rationale.
+    const isJde = routeResult.capabilities.includes("JDE");
+    const jdeConfig = isJde ? this.buildJdeConfigFromEnv(targetUrl) : null;
+    if (isJde && jdeConfig) {
+      console.log(`[EnterpriseRouter] Dispatching to jdeExecutor (JDE form-login + AIS)`);
+      await jdeExecutor.runExecution(executionId, testCases, jdeConfig, testData);
+      return;
+    }
+    if (isJde) {
+      console.log(
+        `[EnterpriseRouter] JDE SSO/DOM mode — no JDE_USERNAME/JDE_PASSWORD set, ` +
+        `driving via aiTestExecutor with the persistent Chrome profile`
+      );
+    }
+
     await aiTestExecutor.runExecution(
       executionId,
       testCases,
@@ -456,7 +483,8 @@ export class EnterpriseExecutionRouter {
       testData,
       selfHealing ?? true,
       maxRetries ?? 3,
-      routeResult.capabilities.map(c => c.toLowerCase())
+      routeResult.capabilities.map(c => c.toLowerCase()),
+      isJde ? "jde" : undefined
     );
   }
 
@@ -488,6 +516,14 @@ export class EnterpriseExecutionRouter {
 
   /**
    * Execute locally (fallback)
+   *
+   * IMPORTANT: For JDE we have TWO valid local paths:
+   *  1. Dedicated jdeExecutor — only when JDE form-login credentials (username/password)
+   *     are configured. It performs classic JDE password login + AIS REST.
+   *  2. aiTestExecutor in "SSO/DOM mode" — when JDE is fronted by SSO (Entra/Okta) there is
+   *     NO password field, so jdeExecutor.login() would hang. The AI executor reuses the
+   *     persistent Chrome profile (REUSE_BROWSER_PROFILE) and drives JDE via the DOM.
+   * We pick the path honestly and log exactly what runs (no more "says jde, runs ai" mismatch).
    */
   private async executeLocally(
     request: ExecutionRequest,
@@ -495,7 +531,26 @@ export class EnterpriseExecutionRouter {
   ): Promise<void> {
     const { testCases, targetUrl, framework, testData, selfHealing, maxRetries, executionId } = request;
 
-    console.log(`[EnterpriseRouter] Executing locally with aiTestExecutor`);
+    const isJde = routeResult.capabilities.includes("JDE");
+    const jdeConfig = isJde ? this.buildJdeConfigFromEnv(targetUrl) : null;
+
+    if (isJde && jdeConfig) {
+      // Path 1: dedicated JDE executor (password form-login + AIS)
+      console.log(`[EnterpriseRouter] Executing locally with jdeExecutor (JDE form-login + AIS)`);
+      await jdeExecutor.runExecution(executionId, testCases, jdeConfig, testData);
+      return;
+    }
+
+    if (isJde) {
+      // Path 2: JDE behind SSO — no credentials means form-login is impossible.
+      // Drive JDE through the AI/DOM executor which reuses the persistent SSO profile.
+      console.log(
+        `[EnterpriseRouter] Executing locally with aiTestExecutor (JDE SSO/DOM mode — ` +
+        `no JDE_USERNAME/JDE_PASSWORD set, using persistent Chrome profile for SSO)`
+      );
+    } else {
+      console.log(`[EnterpriseRouter] Executing locally with aiTestExecutor`);
+    }
 
     await aiTestExecutor.runExecution(
       executionId,
@@ -505,8 +560,31 @@ export class EnterpriseExecutionRouter {
       testData,
       selfHealing ?? true,
       maxRetries ?? 3,
-      routeResult.capabilities.map(c => c.toLowerCase())
+      routeResult.capabilities.map(c => c.toLowerCase()),
+      isJde ? "jde" : undefined
     );
+  }
+
+  /**
+   * Build a JDEConfig from environment variables for classic (non-SSO) JDE form login.
+   * Returns null when username/password are not BOTH present — in that case the caller
+   * must fall back to SSO/DOM execution via aiTestExecutor (jdeExecutor.login would hang
+   * waiting for a password field that SSO never renders).
+   */
+  private buildJdeConfigFromEnv(targetUrl: string): JDEConfig | null {
+    const username = process.env.JDE_USERNAME?.trim();
+    const password = process.env.JDE_PASSWORD?.trim();
+    if (!username || !password) return null; // SSO or unconfigured → use aiTestExecutor
+
+    return {
+      baseUrl: process.env.JDE_BASE_URL?.trim() || targetUrl,
+      aisUrl: process.env.JDE_AIS_URL?.trim() || undefined,
+      username,
+      password,
+      environment: process.env.JDE_ENVIRONMENT?.trim() || undefined,
+      role: process.env.JDE_ROLE?.trim() || undefined,
+      apiVersion: process.env.JDE_API_VERSION?.trim() || undefined,
+    };
   }
 
   // ─── HELPER METHODS ──────────────────────────────────────────────────────

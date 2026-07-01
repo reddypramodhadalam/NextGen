@@ -223,6 +223,12 @@ export default function Generator() {
   const [selectedAppType, setSelectedAppType] = useState("web");
   const [includeE2E, setIncludeE2E] = useState(false);
   const [testDepth, setTestDepth] = useState<"standard"|"comprehensive"|"exhaustive">("comprehensive");
+  // Knowledge Hub gate. OFF (default) = ground generation ONLY in the uploaded
+  // spec + requirement/context, with ZERO Knowledge Base retrieval — so a fresh
+  // functional spec (e.g. Model N) can never inherit unrelated pre-seeded
+  // JDE/Salesforce/SAP samples. ON = enrich generation with curated AI
+  // Knowledge Hub data (RAG) for the target application.
+  const [useKnowledgeHub, setUseKnowledgeHub] = useState(false);
 
   // Architect context fields
   const [showContext, setShowContext] = useState(false);
@@ -302,6 +308,7 @@ export default function Generator() {
         appHints:                 selectedProfile?.aiPromptHints || "", // ADD
         testDepth,                                                    // was numberOfTestCases — FIXED
         includeE2E,                                                   // ADD
+        useKnowledgeHub,          // gate AI Knowledge Hub (RAG) enrichment on/off
         // Architect context — all as separate fields (server schema supports all)
         appName,
         moduleName,
@@ -326,6 +333,13 @@ export default function Generator() {
           hasStructuredDocument: !!payload.structuredDocument,
           jdeObjects: payload.jdeObjects || []
         });
+      } else if (specResult?.text) {
+        // For every OTHER app type (Model N, generic web, etc.) still send the
+        // uploaded document so generation is grounded in YOUR spec — not in
+        // unrelated pre-seeded Knowledge Base samples. The server folds this
+        // into the requirement context and the rule-based fallback uses it.
+        payload.specText = specResult.text;
+        console.log("[Generator] Spec text included for appType:", selectedAppType, "chars:", specResult.text.length);
       }
       
       // Use JDE-specific endpoint for Oracle JDE to get accurate JDE test cases
@@ -858,6 +872,36 @@ export default function Generator() {
                 <button onClick={() => setIncludeE2E(!includeE2E)}
                   className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition-colors", includeE2E ? "bg-primary" : "bg-muted")}>
                   <span className={cn("inline-block h-3 w-3 rounded-full bg-white transition-transform", includeE2E ? "translate-x-5" : "translate-x-1")} />
+                </button>
+              </div>
+              {/* AI Knowledge Hub toggle */}
+              <div className={cn(
+                "flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 transition-colors",
+                useKnowledgeHub ? "border-violet-500/40 bg-violet-500/5" : "border-border/60"
+              )}>
+                <div className="flex items-start gap-2 min-w-0">
+                  <BookOpen className={cn("h-4 w-4 mt-0.5 shrink-0", useKnowledgeHub ? "text-violet-500" : "text-muted-foreground")} />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium flex items-center gap-1.5">
+                      AI Knowledge Hub
+                      <Badge variant="secondary" className={cn(
+                        "text-[9px] px-1.5 py-0 font-semibold",
+                        useKnowledgeHub ? "bg-violet-500/15 text-violet-600 dark:text-violet-400" : ""
+                      )}>
+                        {useKnowledgeHub ? "ENABLED" : "DISABLED"}
+                      </Badge>
+                    </p>
+                    <p className="text-[10px] text-muted-foreground leading-snug">
+                      {useKnowledgeHub
+                        ? "Enriching with curated Knowledge Hub data for this application."
+                        : "Grounded only in your uploaded spec & requirement — no Knowledge Hub data."}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setUseKnowledgeHub(!useKnowledgeHub)}
+                  data-testid="toggle-knowledge-hub"
+                  className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0", useKnowledgeHub ? "bg-violet-600" : "bg-muted")}>
+                  <span className={cn("inline-block h-3 w-3 rounded-full bg-white transition-transform", useKnowledgeHub ? "translate-x-5" : "translate-x-1")} />
                 </button>
               </div>
             </CardContent>

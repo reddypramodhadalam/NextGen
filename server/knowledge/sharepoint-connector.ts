@@ -31,6 +31,7 @@
 import nodePath from "path";
 import { ingestionEngine } from "./ingestion-engine";
 import { knowledgeStorage } from "../knowledge-storage";
+import { resolveIngestionTarget, sha256, recordSourceFingerprint, purgeSourceKnowledge } from "./idempotent-ingest";
 
 export interface SharePointConfig {
   /** e.g. https://contoso.sharepoint.com/sites/JDEDocs */
@@ -270,6 +271,7 @@ export class SharePointConnector {
     let filesFound = 0;
     let filesIngested = 0;
     let filesSkipped = 0;
+    let alreadyReady = 0;
     const maxFiles = config.maxFiles ?? 100;
     const maxDepth = config.maxDepth ?? 5;
 
@@ -301,33 +303,64 @@ export class SharePointConnector {
         }
 
         try {
+          const fileUrl = file.webUrl || `sharepoint://${file.id}`;
+          const appForFile = config.application || (config.applicationScope?.[0] ?? "CUSTOM");
+
+          // ── Cheap pre-check (no download): if this exact file is already READY
+          //    and the byte size matches, skip it. This is what makes an
+          //    interrupted crawl RESUMABLE — ready files cost nothing on re-run.
+          const pre = await resolveIngestionTarget({ sourceUrl: fileUrl }, undefined, file.size);
+          if (pre.action === "skip") {
+            alreadyReady++;
+            console.log(`[SharePoint] ⏭  Skip (already ready): ${file.name} — ${pre.reason}`);
+            continue;
+          }
+
           console.log(`[SharePoint] Downloading: ${file.parentPath} (${file.size} bytes)`);
           const buffer = await this.downloadFile(file.downloadUrl);
+          const checksum = sha256(buffer);
 
-          // Create a child source record for this file
-          const childSource = await knowledgeStorage.createKnowledgeSource({
-            name: `${file.name} (from SharePoint)`,
-            sourceType: "SHAREPOINT",
-            sourceUrl: file.webUrl || `sharepoint://${file.id}`,
-            moduleTag: config.moduleTag,
-            application: config.application || (config.applicationScope?.[0] ?? "CUSTOM"),
-            authType: "OAUTH",
-            status: "PENDING",
-            documentCount: 0,
-          } as any);
+          // ── Authoritative decision now that we have the real content hash.
+          const decision = await resolveIngestionTarget({ sourceUrl: fileUrl }, checksum, buffer.length);
+          if (decision.action === "skip") {
+            alreadyReady++;
+            console.log(`[SharePoint] ⏭  Skip (identical content): ${file.name} — ${decision.reason}`);
+            continue;
+          }
 
-          if (!childSource.id) {
-            throw new Error("Failed to create child source row");
+          // Resolve the target source row: reuse on update/resume, create otherwise.
+          let sourceId: string;
+          if (decision.action === "create") {
+            const childSource = await knowledgeStorage.createKnowledgeSource({
+              name: `${file.name} (from SharePoint)`,
+              sourceType: "SHAREPOINT",
+              sourceUrl: fileUrl,
+              moduleTag: config.moduleTag,
+              application: appForFile,
+              authType: "OAUTH",
+              status: "PENDING",
+              documentCount: 0,
+              checksum,
+              contentSize: buffer.length,
+            } as any);
+            if (!childSource.id) throw new Error("Failed to create child source row");
+            sourceId = childSource.id;
+          } else {
+            // update / resume → reuse the existing record (knowledge already purged
+            // inside resolveIngestionTarget). Reset status so the pipeline re-runs.
+            sourceId = decision.source.id!;
+            await knowledgeStorage.updateIngestionStatus(sourceId, "PENDING");
+            console.log(`[SharePoint] ♻  ${decision.action === "update" ? "Updating" : "Resuming"}: ${file.name} — ${decision.reason}`);
           }
 
           // Run the standard ingestion pipeline on this file
           const result = await ingestionEngine.ingest({
-            sourceId: childSource.id,
+            sourceId,
             sourceName: file.name,
             buffer,
             mimeType: file.mimeType,
             extension: nodePath.extname(file.name).toLowerCase(),
-            application: config.application || (config.applicationScope?.[0] ?? "CUSTOM"),
+            application: appForFile,
             module: config.moduleTag
               ? config.moduleTag.replace(/^[A-Z]+_/, "").replace(/_/g, " ")
               : undefined,
@@ -336,6 +369,7 @@ export class SharePointConnector {
 
           if (result.success) {
             filesIngested++;
+            await recordSourceFingerprint(sourceId, checksum, buffer.length);
             console.log(`[SharePoint] ✓ Ingested ${file.name} - ${result.storage?.itemsStored ?? 0} items`);
           } else {
             errors.push(`${file.name}: ${result.errorMessage}`);
@@ -351,7 +385,7 @@ export class SharePointConnector {
       await knowledgeStorage.incrementDocumentCount(parentSourceId, filesIngested);
 
       console.log(
-        `[SharePoint] ═══ Crawl complete: ${filesIngested}/${filesFound} files ingested, ${filesSkipped} skipped, ${errors.length} errors ═══`
+        `[SharePoint] ═══ Crawl complete: ${filesIngested}/${filesFound} files ingested, ${alreadyReady} already-ready skipped, ${filesSkipped} out-of-scope, ${errors.length} errors ═══`
       );
 
       return {
